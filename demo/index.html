@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ebook-js Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        header {
+            background: #fff;
+            border-bottom: 1px solid #ddd;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            z-index: 10;
+        }
+
+        header h1 {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        header .controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+        }
+
+        button {
+            padding: 8px 16px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background: #fff;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #f0f0f0;
+        }
+
+        button:active {
+            background: #e0e0e0;
+        }
+
+        button.primary {
+            background: #007bff;
+            color: #fff;
+            border-color: #007bff;
+        }
+
+        button.primary:hover {
+            background: #0069d9;
+        }
+
+        select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        /* Main content */
+        main {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Sidebar (TOC) */
+        .sidebar {
+            width: 280px;
+            background: #fff;
+            border-right: 1px solid #ddd;
+            overflow-y: auto;
+            padding: 16px;
+            transition: transform 0.3s ease;
+        }
+
+        .sidebar.hidden {
+            transform: translateX(-100%);
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            z-index: 5;
+        }
+
+        .sidebar h2 {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #888;
+            margin-bottom: 12px;
+        }
+
+        .toc-item {
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #333;
+            text-decoration: none;
+            display: block;
+            transition: background 0.2s;
+        }
+
+        .toc-item:hover {
+            background: #f0f0f0;
+        }
+
+        .toc-item.active {
+            background: #e3f2fd;
+            color: #007bff;
+        }
+
+        .toc-item .subitems {
+            padding-left: 16px;
+        }
+
+        /* Viewer */
+        #viewer-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #viewer {
+            flex: 1;
+            background: #fff;
+            margin: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        /* Navigation buttons */
+        .nav-buttons {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            gap: 8px;
+        }
+
+        .nav-buttons.left {
+            left: 30px;
+        }
+
+        .nav-buttons.right {
+            right: 30px;
+        }
+
+        .nav-btn {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            padding: 0;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        }
+
+        /* Footer / Progress bar */
+        footer {
+            background: #fff;
+            border-top: 1px solid #ddd;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .progress-bar {
+            flex: 1;
+            height: 4px;
+            background: #e0e0e0;
+            border-radius: 2px;
+            overflow: hidden;
+            cursor: pointer;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #007bff;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            font-size: 13px;
+            color: #666;
+            min-width: 80px;
+            text-align: right;
+        }
+
+        /* Drop target */
+        .drop-target {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.95);
+            z-index: 20;
+            transition: opacity 0.3s;
+        }
+
+        .drop-target.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .drop-box {
+            border: 3px dashed #ccc;
+            border-radius: 16px;
+            padding: 60px;
+            text-align: center;
+        }
+
+        .drop-box h2 {
+            font-size: 24px;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .drop-box p {
+            color: #888;
+            margin-bottom: 20px;
+        }
+
+        .drop-target.dragover .drop-box {
+            border-color: #007bff;
+            background: #f0f7ff;
+        }
+
+        /* Settings panel */
+        .settings-panel {
+            position: absolute;
+            top: 60px;
+            right: 20px;
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 15;
+            min-width: 220px;
+            display: none;
+        }
+
+        .settings-panel.show {
+            display: block;
+        }
+
+        .settings-panel h3 {
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+
+        .setting-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+
+        .setting-row label {
+            font-size: 13px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header>
+        <button id="btn-sidebar" title="Toggle sidebar">☰</button>
+        <h1 id="book-title">ebook-js Demo</h1>
+        <div class="controls">
+            <select id="layout-select">
+                <option value="paginated">Paginated</option>
+                <option value="scrolled">Scrolled</option>
+            </select>
+            <select id="font-size-select">
+                <option value="14px">Small</option>
+                <option value="16px" selected>Medium</option>
+                <option value="18px">Large</option>
+                <option value="20px">X-Large</option>
+            </select>
+            <button id="btn-settings">⚙</button>
+            <button id="btn-open" class="primary">Open File</button>
+            <input type="file" id="file-input" accept=".epub,.mobi,.azw,.azw3,.fb2,.cbz,.pdf" hidden>
+        </div>
+    </header>
+
+    <!-- Settings panel -->
+    <div class="settings-panel" id="settings-panel">
+        <h3>Settings</h3>
+        <div class="setting-row">
+            <label>Theme</label>
+            <select id="theme-select">
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+                <option value="sepia">Sepia</option>
+            </select>
+        </div>
+        <div class="setting-row">
+            <label>Hyphenate</label>
+            <input type="checkbox" id="hyphenate-check" checked>
+        </div>
+    </div>
+
+    <!-- Main -->
+    <main>
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <h2>Table of Contents</h2>
+            <div id="toc-list"></div>
+        </aside>
+
+        <!-- Viewer -->
+        <div id="viewer-container">
+            <div id="viewer"></div>
+
+            <!-- Navigation -->
+            <div class="nav-buttons left">
+                <button class="nav-btn" id="btn-prev" title="Previous">‹</button>
+            </div>
+            <div class="nav-buttons right">
+                <button class="nav-btn" id="btn-next" title="Next">›</button>
+            </div>
+        </div>
+
+        <!-- Drop target -->
+        <div class="drop-target" id="drop-target">
+            <div class="drop-box">
+                <h2>Drop an e-book here</h2>
+                <p>or click "Open File" to browse</p>
+                <p style="color: #aaa; font-size: 13px">Supports: EPUB, MOBI, FB2, CBZ</p>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer>
+        <div class="progress-bar" id="progress-bar">
+            <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+        </div>
+        <span class="progress-text" id="progress-text">0%</span>
+    </footer>
+
+    <!-- Script -->
+    <script type="module">
+        // Import from source directly for development
+        import { registry, createReader } from 'ebook-js'
+        import { epub } from 'ebook-js/parsers/epub'
+
+        // Register parsers
+        registry.register('epub', epub)
+
+        // DOM elements
+        const viewer = document.getElementById('viewer')
+        const dropTarget = document.getElementById('drop-target')
+        const fileInput = document.getElementById('file-input')
+        const btnOpen = document.getElementById('btn-open')
+        const btnPrev = document.getElementById('btn-prev')
+        const btnNext = document.getElementById('btn-next')
+        const btnSidebar = document.getElementById('btn-sidebar')
+        const btnSettings = document.getElementById('btn-settings')
+        const sidebar = document.getElementById('sidebar')
+        const tocList = document.getElementById('toc-list')
+        const bookTitle = document.getElementById('book-title')
+        const layoutSelect = document.getElementById('layout-select')
+        const fontSizeSelect = document.getElementById('font-size-select')
+        const settingsPanel = document.getElementById('settings-panel')
+        const themeSelect = document.getElementById('theme-select')
+        const hyphenateCheck = document.getElementById('hyphenate-check')
+        const progressBar = document.getElementById('progress-bar')
+        const progressFill = document.getElementById('progress-fill')
+        const progressText = document.getElementById('progress-text')
+
+        // Create reader
+        const reader = createReader({ container: viewer })
+
+        // Format helpers
+        const formatLanguageMap = x => {
+            if (!x) return ''
+            if (typeof x === 'string') return x
+            return x[Object.keys(x)[0]]
+        }
+
+        const formatContributor = x => {
+            if (!x) return ''
+            if (typeof x === 'string') return x
+            if (Array.isArray(x)) return x.map(formatContributor).join(', ')
+            return formatLanguageMap(x.name)
+        }
+
+        // Render TOC
+        const renderTOC = (items, container, depth = 0) => {
+            if (!items) return
+            for (const item of items) {
+                const a = document.createElement('a')
+                a.className = 'toc-item'
+                a.style.paddingLeft = `${12 + depth * 16}px`
+                a.textContent = item.label
+                a.href = '#'
+                a.addEventListener('click', (e) => {
+                    e.preventDefault()
+                    reader.goTo(item.href)
+                })
+                a.dataset.href = item.href
+                container.appendChild(a)
+                if (item.subitems?.length) {
+                    renderTOC(item.subitems, container, depth + 1)
+                }
+            }
+        }
+
+        // Open a file
+        const openFile = async (file) => {
+            try {
+                dropTarget.classList.add('hidden')
+                const book = await reader.open(file)
+
+                // Update UI
+                const title = formatLanguageMap(book.metadata?.title) || 'Untitled'
+                bookTitle.textContent = title
+                document.title = `${title} - ebook-js`
+
+                // Render TOC
+                tocList.innerHTML = ''
+                renderTOC(book.toc, tocList)
+
+                // Start reading
+                await reader.goTo(0)
+            } catch (e) {
+                console.error('Failed to open file:', e)
+                alert(`Failed to open file: ${e.message}`)
+                dropTarget.classList.remove('hidden')
+            }
+        }
+
+        // Event listeners
+        btnOpen.addEventListener('click', () => fileInput.click())
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files[0]) openFile(e.target.files[0])
+        })
+
+        btnPrev.addEventListener('click', () => reader.prev())
+        btnNext.addEventListener('click', () => reader.next())
+
+        btnSidebar.addEventListener('click', () => {
+            sidebar.classList.toggle('hidden')
+        })
+
+        btnSettings.addEventListener('click', () => {
+            settingsPanel.classList.toggle('show')
+        })
+
+        layoutSelect.addEventListener('change', (e) => {
+            reader.setLayout(e.target.value)
+        })
+
+        fontSizeSelect.addEventListener('change', (e) => {
+            reader.setStyles({ fontSize: e.target.value })
+        })
+
+        themeSelect.addEventListener('change', (e) => {
+            const themes = {
+                light: { color: '#000', background: '#fff' },
+                dark: { color: '#ddd', background: '#1a1a1a' },
+                sepia: { color: '#5b4636', background: '#f4ecd8' },
+            }
+            reader.setStyles(themes[e.target.value])
+        })
+
+        hyphenateCheck.addEventListener('change', (e) => {
+            reader.setStyles({ hyphenate: e.target.checked })
+        })
+
+        // Progress bar click
+        progressBar.addEventListener('click', (e) => {
+            const rect = progressBar.getBoundingClientRect()
+            const fraction = (e.clientX - rect.left) / rect.width
+            reader.goToFraction(fraction)
+        })
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft' || e.key === 'h') reader.goLeft()
+            else if (e.key === 'ArrowRight' || e.key === 'l') reader.goRight()
+        })
+
+        // Reader events
+        reader.on('relocate', (e) => {
+            const percent = Math.round((e.totalFraction ?? 0) * 100)
+            progressFill.style.width = `${percent}%`
+            progressText.textContent = `${percent}%`
+
+            // Highlight current TOC item
+            // (simplified - could be improved)
+        })
+
+        reader.on('link', (e) => {
+            if (e.external) {
+                window.open(e.href, '_blank')
+            }
+        })
+
+        // Drag and drop
+        dropTarget.addEventListener('dragover', (e) => {
+            e.preventDefault()
+            dropTarget.classList.add('dragover')
+        })
+
+        dropTarget.addEventListener('dragleave', () => {
+            dropTarget.classList.remove('dragover')
+        })
+
+        dropTarget.addEventListener('drop', (e) => {
+            e.preventDefault()
+            dropTarget.classList.remove('dragover')
+            const file = Array.from(e.dataTransfer.files).find(f => f)
+            if (file) openFile(file)
+        })
+
+        // Also allow drop on the whole page when book is open
+        document.body.addEventListener('dragover', (e) => e.preventDefault())
+        document.body.addEventListener('drop', (e) => {
+            e.preventDefault()
+            const file = Array.from(e.dataTransfer.files).find(f => f)
+            if (file) openFile(file)
+        })
+    </script>
+</body>
+</html>
