@@ -1,7 +1,7 @@
 /**
  * URL Factory interface.
  *
- * Abstracts blob URL creation and revocation, allowing the EPUB parser
+ * Abstracts blob URL creation and revocation, allowing parsers
  * to run in any environment.
  *
  * Implementations:
@@ -15,11 +15,11 @@
 export interface URLFactory {
   /**
    * Create a URL for the given data.
-   * @param data - The content (string or ArrayBuffer)
-   * @param mimeType - The MIME type
+   * @param data - The content (string, ArrayBuffer, or Blob)
+   * @param mimeType - The MIME type (required for string/ArrayBuffer, optional for Blob)
    * @returns A URL string (e.g., blob: URL in browser, data: URI in tests)
    */
-  createURL(data: string | ArrayBuffer, mimeType: string): string
+  createURL(data: string | ArrayBuffer | Blob, mimeType?: string): string
 
   /**
    * Revoke a previously created URL to free resources.

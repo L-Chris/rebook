@@ -13,6 +13,8 @@ import type { Parser, ParserInput, ParserOptions } from '../core/parser'
 import type { DOMAdapter, XMLDocument, XMLElement } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
 import { createZipLoader, isZipFile } from '../loaders/zip-loader'
+import { normalizeWhitespace, getElementText } from '../core/utils'
+import { AdapterRequiredError, UnsupportedInputError, ParseError } from '../core/errors'
 
 // ============================================================================
 // Constants
@@ -25,16 +27,6 @@ const MIME_XHTML = 'application/xhtml+xml'
 // ============================================================================
 // Utility functions
 // ============================================================================
-
-const normalizeWhitespace = (str: string | null): string => {
-    if (!str) return ''
-    return str.replace(/[\t\n\f\r ]+/g, ' ').trim()
-}
-
-const getElementText = (el: XMLElement | null): string => {
-    if (!el) return ''
-    return normalizeWhitespace(el.textContent)
-}
 
 /**
  * Find first descendant element by tag name.
@@ -326,6 +318,8 @@ class FB2Converter {
 // ============================================================================
 
 export class FB2Parser implements Parser {
+    readonly priority = 5
+
     async canParse(input: ParserInput): Promise<boolean> {
         // Check file extension
         if (typeof input === 'string') {
@@ -364,11 +358,11 @@ export class FB2Parser implements Parser {
         const domAdapter = options?.domAdapter
         const urlFactory = options?.urlFactory
         if (!domAdapter || !urlFactory) {
-            throw new Error('FB2Parser requires domAdapter and urlFactory')
+            throw new AdapterRequiredError('domAdapter and urlFactory')
         }
 
         if (typeof input === 'string') {
-            throw new Error('FB2 parser cannot parse URL strings; provide a File, Blob, or ArrayBuffer')
+            throw new UnsupportedInputError('FB2 parser cannot parse URL strings; provide a File, Blob, or ArrayBuffer')
         }
 
         // Load FB2 XML content
@@ -379,9 +373,9 @@ export class FB2Parser implements Parser {
             // Zipped FB2 — find and load the .fb2 file
             const loader = await createZipLoader(input)
             const fb2Entry = loader.entries.find(e => e.filename.toLowerCase().endsWith('.fb2'))
-            if (!fb2Entry) throw new Error('No .fb2 file found in archive')
+            if (!fb2Entry) throw new ParseError('No .fb2 file found in archive', 'fb2')
             const text = await loader.loadText(fb2Entry.filename)
-            if (!text) throw new Error('Failed to load FB2 content')
+            if (!text) throw new ParseError('Failed to load FB2 content', 'fb2')
             xmlContent = text
         } else if (input instanceof ArrayBuffer) {
             xmlContent = new TextDecoder().decode(input)
@@ -399,7 +393,7 @@ export class FB2Parser implements Parser {
         // Check for parse errors
         const parseError = doc.querySelector('parsererror')
         if (parseError) {
-            throw new Error('Failed to parse FB2 XML')
+            throw new ParseError('Failed to parse FB2 XML', 'fb2')
         }
 
         // Create converter

@@ -371,11 +371,30 @@
     <!-- Script -->
     <script type="module">
         // Import from source directly for development
-        import { registry, createReader } from 'ebook-js'
-        import { epub } from 'ebook-js/parsers/epub'
+        import {
+            registry,
+            createReader,
+            BrowserDOMAdapter,
+            BrowserURLFactory,
+            EBookError,
+            UnsupportedFormatError,
+            AdapterRequiredError,
+        } from '../src/index.ts'
+        import { epub } from '../src/parsers/epub.ts'
+        import { cbz } from '../src/parsers/cbz.ts'
+        import { fb2 } from '../src/parsers/fb2.ts'
+        import { mobi } from '../src/parsers/mobi.ts'
 
-        // Register parsers
-        registry.register('epub', epub)
+        // Create shared adapters for all parsers
+        const domAdapter = new BrowserDOMAdapter()
+        const urlFactory = new BrowserURLFactory()
+        const parserOptions = { domAdapter, urlFactory }
+
+        // Register all parsers with priorities
+        registry.register('epub', epub)      // priority 10 (from parser)
+        registry.register('mobi', mobi)      // priority 5 (from parser)
+        registry.register('fb2', fb2)        // priority 5 (from parser)
+        registry.register('cbz', cbz)        // priority 0 (from parser)
 
         // DOM elements
         const viewer = document.getElementById('viewer')
@@ -398,8 +417,8 @@
         const progressFill = document.getElementById('progress-fill')
         const progressText = document.getElementById('progress-text')
 
-        // Create reader
-        const reader = createReader({ container: viewer })
+        // Create reader with adapter options
+        const reader = createReader({ container: viewer, ...parserOptions })
 
         // Format helpers
         const formatLanguageMap = x => {
@@ -455,7 +474,13 @@
                 await reader.goTo(0)
             } catch (e) {
                 console.error('Failed to open file:', e)
-                alert(`Failed to open file: ${e.message}`)
+                let message = e.message
+                if (e instanceof UnsupportedFormatError) {
+                    message = 'Unsupported file format. Please open an EPUB, MOBI, FB2, or CBZ file.'
+                } else if (e instanceof EBookError) {
+                    message = `Error (${e.code}): ${e.message}`
+                }
+                alert(`Failed to open file: ${message}`)
                 dropTarget.classList.remove('hidden')
             }
         }

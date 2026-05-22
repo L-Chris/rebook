@@ -15,6 +15,8 @@ import type { DOMAdapter, XMLDocument, XMLElement } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
 import type { Loader } from '../core/loader'
 import { createZipLoader, isZipFile } from '../loaders/zip-loader'
+import { normalizeWhitespace, getElementText, cssEscape, replaceSeries, regexEscape } from '../core/utils'
+import { UnsupportedInputError, AdapterRequiredError, ParseError, CorruptedFileError } from '../core/errors'
 
 // ============================================================================
 // Constants
@@ -57,18 +59,6 @@ const RELATORS: Record<string, string> = {
 /** Convert hyphenated/colon-separated names to camelCase */
 const camel = (x: string): string =>
     x.toLowerCase().replace(/[-:](.)/g, (_, g: string) => g.toUpperCase())
-
-/** Strip and collapse ASCII whitespace */
-const normalizeWhitespace = (str: string | null | undefined): string =>
-    str ? str.replace(/[\t\n\f\r ]+/g, ' ').trim() : ''
-
-/** Get text content of an element, normalized */
-const getElementText = (el: XMLElement | null | undefined): string =>
-    normalizeWhitespace(el?.textContent)
-
-/** CSS.escape polyfill (simplified for ID selectors) */
-const cssEscape = (str: string): string =>
-    str.replace(/([^\w-])/g, '\\$1')
 
 /** Create child element getters that handle namespace */
 const childGetter = (doc: XMLDocument, ns: string) => {
@@ -123,22 +113,6 @@ const pathRelative = (from: string, to: string): string => {
     const i = (as.length > bs.length ? as : bs).findIndex((_, i) => as[i] !== bs[i])
     return i < 0 ? '' : Array(as.length - i).fill('..').concat(bs.slice(i)).join('/')
 }
-
-/** Replace asynchronously and sequentially */
-const replaceSeries = async (
-    str: string,
-    regex: RegExp,
-    f: (...args: string[]) => Promise<string>,
-): Promise<string> => {
-    const matches: string[][] = []
-    str.replace(regex, (...args: string[]) => (matches.push(args), null as unknown as string))
-    const results: string[] = []
-    for (const args of matches) results.push(await f(...args))
-    return str.replace(regex, () => results.shift()!)
-}
-
-const regexEscape = (str: string): string =>
-    str.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')
 
 /** Duck-type check for Blob-like objects */
 const isBlobLike = (obj: unknown): obj is { arrayBuffer(): Promise<ArrayBuffer> } =>
@@ -635,6 +609,8 @@ class ResourceLoader {
 // ============================================================================
 
 export class EPUBParser implements Parser {
+    readonly priority = 10
+
     async canParse(input: ParserInput): Promise<boolean> {
         if (typeof input === 'string') return input.endsWith('.epub')
         if (isBlobLike(input) || input instanceof ArrayBuffer) {
@@ -663,11 +639,11 @@ export class EPUBParser implements Parser {
             const buffer = await res.arrayBuffer()
             loader = await createZipLoader(buffer)
         } else {
-            throw new Error('Unsupported input type for EPUB parser')
+            throw new UnsupportedInputError('Unsupported input type for EPUB parser')
         }
 
         if (!options?.domAdapter || !options?.urlFactory) {
-            throw new Error('EPUB parser requires domAdapter and urlFactory in options')
+            throw new AdapterRequiredError('domAdapter and urlFactory')
         }
 
         const epub = new EPUBBook(loader, options.domAdapter, options.urlFactory)
@@ -708,7 +684,7 @@ class EPUBBook implements Book {
         if (!str) return null
         const doc = this.domAdapter.parseXML(str)
         if (doc.querySelector('parsererror')) {
-            throw new Error(`XML parsing error in ${uri}: ${doc.querySelector('parsererror')?.textContent}`)
+            throw new ParseError(`XML parsing error in ${uri}: ${doc.querySelector('parsererror')?.textContent}`, 'epub')
         }
         return doc
     }
@@ -716,7 +692,7 @@ class EPUBBook implements Book {
     async init(): Promise<this> {
         // 1. Load container.xml to find OPF
         const $container = await this.loadXML('META-INF/container.xml')
-        if (!$container) throw new Error('Failed to load container.xml')
+        if (!$container) throw new CorruptedFileError('Failed to load container.xml', 'epub')
 
         const rootfiles = Array.from(
             $container.getElementsByTagNameNS(NS.CONTAINER, 'rootfile')
@@ -726,12 +702,12 @@ class EPUBBook implements Book {
         }))
 
         const opfFile = rootfiles.find(f => f.mediaType === 'application/oebps-package+xml')
-        if (!opfFile?.fullPath) throw new Error('No package document found')
+        if (!opfFile?.fullPath) throw new CorruptedFileError('No package document found', 'epub')
         this.opfPath = opfFile.fullPath
 
         // 2. Load OPF
         const opf = await this.loadXML(this.opfPath)
-        if (!opf) throw new Error('Failed to load OPF')
+        if (!opf) throw new CorruptedFileError('Failed to load OPF', 'epub')
 
         // 3. Parse manifest and spine
         const { $, $$ } = childGetter(opf, NS.OPF)

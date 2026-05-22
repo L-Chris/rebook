@@ -5,13 +5,21 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { CBZParser, cbz } from '../../src/parsers/cbz'
 import { createTestCBZ, createTestCBZWithoutMetadata } from '../fixtures/cbz-fixture'
+import { TestDOMAdapter, TestURLFactory } from '../../src/adapters/test'
+import { AdapterRequiredError, UnsupportedInputError, ParseError } from '../../src/core/errors'
 
 describe('CBZParser', () => {
     let parser: CBZParser
+    let domAdapter: TestDOMAdapter
+    let urlFactory: TestURLFactory
 
     beforeAll(() => {
         parser = new CBZParser()
+        domAdapter = new TestDOMAdapter()
+        urlFactory = new TestURLFactory()
     })
+
+    const options = () => ({ domAdapter, urlFactory: new TestURLFactory() })
 
     describe('canParse', () => {
         it('should return true for .cbz file extension', async () => {
@@ -54,7 +62,7 @@ describe('CBZParser', () => {
                 count: '10',
                 pages: 3,
             })
-            const book = await parser.parse(buffer)
+            const book = await parser.parse(buffer, options())
 
             expect(book).toBeDefined()
             expect(book.sections).toHaveLength(3)
@@ -67,7 +75,7 @@ describe('CBZParser', () => {
 
         it('should parse a CBZ without metadata', async () => {
             const buffer = await createTestCBZWithoutMetadata(2)
-            const book = await parser.parse(buffer)
+            const book = await parser.parse(buffer, options())
 
             expect(book).toBeDefined()
             expect(book.sections).toHaveLength(2)
@@ -77,14 +85,14 @@ describe('CBZParser', () => {
 
         it('should have pre-paginated rendition', async () => {
             const buffer = await createTestCBZ({ pages: 2 })
-            const book = await parser.parse(buffer)
+            const book = await parser.parse(buffer, options())
 
             expect(book.rendition?.layout).toBe('pre-paginated')
         })
 
         it('should have a flat TOC with all pages', async () => {
             const buffer = await createTestCBZ({ pages: 4 })
-            const book = await parser.parse(buffer)
+            const book = await parser.parse(buffer, options())
 
             expect(book.toc).toHaveLength(4)
             expect(book.toc![0].label).toBe('page001.jpg')
@@ -93,26 +101,27 @@ describe('CBZParser', () => {
 
         it('should sort image files alphabetically', async () => {
             const buffer = await createTestCBZ({ pages: 3 })
-            const book = await parser.parse(buffer)
+            const book = await parser.parse(buffer, options())
 
             const ids = book.sections.map(s => s.id)
             expect(ids).toEqual(['page001.jpg', 'page002.jpg', 'page003.jpg'])
         })
 
-        it('should load section content as blob URL', async () => {
+        it('should load section content as URL', async () => {
+            const opts = options()
             const buffer = await createTestCBZ({ pages: 1 })
-            const book = await parser.parse(buffer)
+            const book = await parser.parse(buffer, opts)
 
             const url = await book.sections[0].load()
             expect(url).toBeDefined()
             expect(typeof url).toBe('string')
-            // Should be a blob URL
-            expect(url.startsWith('blob:')).toBe(true)
+            // Should be a test URL
+            expect(url.startsWith('test://')).toBe(true)
         })
 
         it('should unload section and revoke URL', async () => {
             const buffer = await createTestCBZ({ pages: 1 })
-            const book = await parser.parse(buffer)
+            const book = await parser.parse(buffer, options())
 
             const url = await book.sections[0].load()
             expect(url).toBeDefined()
@@ -125,7 +134,7 @@ describe('CBZParser', () => {
 
         it('should return cover as first image blob', async () => {
             const buffer = await createTestCBZ({ pages: 2 })
-            const book = await parser.parse(buffer)
+            const book = await parser.parse(buffer, options())
 
             const cover = await book.getCover?.()
             expect(cover).toBeInstanceOf(Blob)
@@ -133,7 +142,7 @@ describe('CBZParser', () => {
 
         it('should resolve href to section index', async () => {
             const buffer = await createTestCBZ({ pages: 3 })
-            const book = await parser.parse(buffer)
+            const book = await parser.parse(buffer, options())
 
             const result = book.resolveHref?.('page002.jpg')
             expect(result?.index).toBe(1)
@@ -141,7 +150,7 @@ describe('CBZParser', () => {
 
         it('should return null for unknown href', async () => {
             const buffer = await createTestCBZ({ pages: 2 })
-            const book = await parser.parse(buffer)
+            const book = await parser.parse(buffer, options())
 
             const result = book.resolveHref?.('nonexistent.jpg')
             expect(result).toBeNull()
@@ -149,7 +158,7 @@ describe('CBZParser', () => {
 
         it('should cleanup URLs on destroy', async () => {
             const buffer = await createTestCBZ({ pages: 2 })
-            const book = await parser.parse(buffer)
+            const book = await parser.parse(buffer, options())
 
             await book.sections[0].load()
             await book.sections[1].load()
@@ -158,7 +167,7 @@ describe('CBZParser', () => {
             book.destroy?.()
         })
 
-        it('should throw if no images found', async () => {
+        it('should throw ParseError if no images found', async () => {
             const { configure, ZipWriter, BlobWriter, TextReader } = await import('@zip.js/zip.js')
             configure({ useWebWorkers: false })
             const blobWriter = new BlobWriter()
@@ -168,7 +177,20 @@ describe('CBZParser', () => {
             const blob = await blobWriter.getData()
             const buffer = await blob.arrayBuffer()
 
-            await expect(parser.parse(buffer)).rejects.toThrow('No image files found')
+            await expect(parser.parse(buffer, options())).rejects.toThrow(ParseError)
+            await expect(parser.parse(buffer, options())).rejects.toThrow('No image files found')
+        })
+
+        it('should throw UnsupportedInputError for string input', async () => {
+            await expect(parser.parse('http://example.com/comic.cbz', options())).rejects.toThrow(UnsupportedInputError)
+        })
+
+        it('should throw AdapterRequiredError when adapters not provided', async () => {
+            const buffer = await createTestCBZ({ pages: 1 })
+            await expect(parser.parse(buffer)).rejects.toThrow(AdapterRequiredError)
+            await expect(parser.parse(buffer, {})).rejects.toThrow(AdapterRequiredError)
+            await expect(parser.parse(buffer, { domAdapter })).rejects.toThrow(AdapterRequiredError)
+            await expect(parser.parse(buffer, { urlFactory: new TestURLFactory() })).rejects.toThrow(AdapterRequiredError)
         })
     })
 

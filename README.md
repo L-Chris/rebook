@@ -34,30 +34,44 @@ npm install ebook-js
 ## Quick Start
 
 ```typescript
-import { registry, createReader } from 'ebook-js'
+import {
+    registry,
+    createReader,
+    BrowserDOMAdapter,
+    BrowserURLFactory,
+    UnsupportedFormatError,
+} from 'ebook-js'
 import { epub } from 'ebook-js/parsers/epub'
 import { mobi } from 'ebook-js/parsers/mobi'
 import { fb2 } from 'ebook-js/parsers/fb2'
 import { cbz } from 'ebook-js/parsers/cbz'
 
-// 1. Register parsers for auto-detection
+// 1. Register parsers for auto-detection (priorities are automatic)
 registry.register('epub', epub)
 registry.register('mobi', mobi)
 registry.register('fb2', fb2)
 registry.register('cbz', cbz)
 
-// 2. Create reader
+// 2. Create reader (adapters are auto-injected in browser)
 const reader = createReader({
     container: document.getElementById('viewer')!,
 })
 
 // 3. Open a book (auto-detects format)
-const book = await reader.open(file)
+try {
+    const book = await reader.open(file)
 
-// 4. Navigate
-await reader.next()
-await reader.prev()
-await reader.goTo('/path/to/chapter.xhtml#section')
+    // 4. Navigate
+    await reader.next()
+    await reader.prev()
+    await reader.goTo('/path/to/chapter.xhtml#section')
+} catch (e) {
+    if (e instanceof UnsupportedFormatError) {
+        alert('Unsupported file format')
+    } else {
+        throw e
+    }
+}
 ```
 
 ## Architecture
@@ -126,11 +140,12 @@ interface Section {
 interface Parser {
     parse(input, options?): Promise<Book>
     canParse(input): Promise<boolean>
+    priority?: number    // Detection priority (higher = checked first, default 0)
 }
 
 interface ParserOptions {
-    domAdapter?: DOMAdapter    // Injected DOM parser (required for EPUB)
-    urlFactory?: URLFactory    // Injected URL factory (required for EPUB)
+    domAdapter?: DOMAdapter    // Injected DOM parser (required for all parsers)
+    urlFactory?: URLFactory    // Injected URL factory (required for all parsers)
     sha1?: (data: ArrayBuffer) => Promise<ArrayBuffer>
     onProgress?: (progress: number, message?: string) => void
 }
@@ -170,7 +185,7 @@ Abstracts blob URL creation:
 
 ```typescript
 interface URLFactory {
-    createURL(data: string | ArrayBuffer, mimeType: string): string
+    createURL(data: string | ArrayBuffer | Blob, mimeType?: string): string
     revokeURL(url: string): void
 }
 ```
@@ -213,6 +228,64 @@ const domAdapter = new TestDOMAdapter()
 const urlFactory = new TestURLFactory()
 
 const book = await registry.open(arrayBuffer, { domAdapter, urlFactory })
+```
+
+## Error Handling
+
+ebook-js provides a hierarchy of typed errors for better error handling:
+
+```typescript
+import {
+    EBookError,            // Base class for all ebook-js errors
+    ParseError,            // Parsing failed (malformed content)
+    UnsupportedFormatError, // Format not recognized
+    CorruptedFileError,    // File is severely corrupted
+    AdapterRequiredError,  // Required adapter not provided
+    UnsupportedInputError, // Input type not supported
+} from 'ebook-js'
+
+try {
+    const book = await registry.open(file, { domAdapter, urlFactory })
+} catch (e) {
+    if (e instanceof UnsupportedFormatError) {
+        console.error('Please open an EPUB, MOBI, FB2, or CBZ file.')
+    } else if (e instanceof AdapterRequiredError) {
+        console.error('Please provide domAdapter and urlFactory in options.')
+    } else if (e instanceof ParseError) {
+        console.error(`Parse error (${e.format}): ${e.message}`)
+    } else if (e instanceof CorruptedFileError) {
+        console.error(`Corrupted file (${e.format}): ${e.message}`)
+    } else if (e instanceof EBookError) {
+        console.error(`Error [${e.code}]: ${e.message}`)
+    } else {
+        throw e // Re-throw unexpected errors
+    }
+}
+```
+
+All errors have:
+- `message`: Human-readable error description
+- `code`: Machine-readable error code (e.g., `'PARSE_ERROR'`)
+- `name`: Error class name
+
+Format-specific errors also have a `format` property (e.g., `'epub'`, `'mobi'`).
+
+## Parser Detection Priority
+
+When using auto-detection (`registry.open()` or `registry.detect()`), parsers are checked in priority order (highest first). Each parser has a default priority:
+
+| Parser | Priority | Notes |
+|--------|----------|-------|
+| EPUB | 10 | Checked first — most specific format detection |
+| MOBI | 5 | Checks BOOKMOBI magic bytes |
+| FB2 | 5 | Checks FictionBook XML or .fb2 in zip |
+| CBZ | 0 | Checked last — generic zip with images |
+
+You can override priority when registering:
+
+```typescript
+// Give CBZ higher priority for your use case
+registry.register('cbz', cbz, 20)
 ```
 
 ## Malformed EPUB Handling

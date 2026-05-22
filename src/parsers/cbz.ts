@@ -9,7 +9,10 @@
 import type { Book, BookMetadata, Section, TOCItem } from '../core/types'
 import type { Parser, ParserInput, ParserOptions } from '../core/parser'
 import type { Loader } from '../core/loader'
+import type { URLFactory } from '../core/url-factory'
+import type { DOMAdapter } from '../core/dom-adapter'
 import { createZipLoader, isZipFile } from '../loaders/zip-loader'
+import { UnsupportedInputError, ParseError, AdapterRequiredError } from '../core/errors'
 
 // ============================================================================
 // Image extensions
@@ -22,6 +25,22 @@ const IMAGE_EXTENSIONS = [
 const isImageFile = (filename: string): boolean => {
     const lower = filename.toLowerCase()
     return IMAGE_EXTENSIONS.some(ext => lower.endsWith(ext))
+}
+
+// ============================================================================
+// MIME type detection for images
+// ============================================================================
+
+const getMimeType = (filename: string): string => {
+    const lower = filename.toLowerCase()
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+    if (lower.endsWith('.png')) return 'image/png'
+    if (lower.endsWith('.gif')) return 'image/gif'
+    if (lower.endsWith('.bmp')) return 'image/bmp'
+    if (lower.endsWith('.webp')) return 'image/webp'
+    if (lower.endsWith('.svg')) return 'image/svg+xml'
+    if (lower.endsWith('.avif')) return 'image/avif'
+    return 'application/octet-stream'
 }
 
 // ============================================================================
@@ -41,16 +60,23 @@ interface ComicInfoMeta {
 /**
  * Read ComicInfo.xml from the archive (Anansi standard).
  */
-async function readComicInfoXML(loader: Loader): Promise<ComicInfoMeta | null> {
+async function readComicInfoXML(loader: Loader, domAdapter: DOMAdapter): Promise<ComicInfoMeta | null> {
     const entry = loader.entries.find(e => e.filename.toLowerCase() === 'comicinfo.xml')
     if (!entry) return null
     const text = await loader.loadText(entry.filename)
     if (!text) return null
 
-    // Parse XML manually (simple extraction, no DOMAdapter needed)
+    // Parse XML using DOMAdapter
+    const doc = domAdapter.parseXML(text)
+    const root = doc.documentElement
+
     const get = (tag: string): string | undefined => {
-        const match = text.match(new RegExp(`<${tag}[^>]*>([^<]*)</${tag}>`, 'i'))
-        return match?.[1]?.trim() || undefined
+        const els = root.getElementsByTagName(tag)
+        if (els.length > 0) {
+            const text = els[0].textContent?.trim()
+            return text || undefined
+        }
+        return undefined
     }
 
     return {
@@ -122,6 +148,8 @@ async function readComicBookInfo(loader: Loader): Promise<ComicInfoMeta | null> 
 // ============================================================================
 
 export class CBZParser implements Parser {
+    readonly priority = 0
+
     async canParse(input: ParserInput): Promise<boolean> {
         // Check file extension
         if (typeof input === 'string') {
@@ -146,8 +174,17 @@ export class CBZParser implements Parser {
 
     async parse(input: ParserInput, options?: ParserOptions): Promise<Book> {
         if (typeof input === 'string') {
-            throw new Error('CBZ parser cannot parse URL strings; provide a File, Blob, or ArrayBuffer')
+            throw new UnsupportedInputError('CBZ parser cannot parse URL strings; provide a File, Blob, or ArrayBuffer')
         }
+
+        // Require adapters
+        if (!options?.domAdapter || !options?.urlFactory) {
+            throw new AdapterRequiredError('domAdapter and urlFactory')
+        }
+
+        const domAdapter = options.domAdapter
+        const urlFactory = options.urlFactory
+
         // Load zip archive
         const loader = await createZipLoader(input)
 
@@ -158,12 +195,12 @@ export class CBZParser implements Parser {
             .sort()
 
         if (imageFiles.length === 0) {
-            throw new Error('No image files found in archive')
+            throw new ParseError('No image files found in archive', 'cbz')
         }
 
         // Read metadata (prefer ComicInfo.xml over ComicBookInfo)
         const [xmlMeta, cbiMeta] = await Promise.all([
-            readComicInfoXML(loader),
+            readComicInfoXML(loader, domAdapter),
             readComicBookInfo(loader),
         ])
         const merged = { ...(cbiMeta || {}), ...(xmlMeta || {}) }
@@ -196,15 +233,15 @@ export class CBZParser implements Parser {
                     return urlCache.get(filename)!
                 }
                 const blob = await loader.loadBlob(filename)
-                if (!blob) throw new Error(`Failed to load ${filename}`)
-                const url = URL.createObjectURL(blob)
+                if (!blob) throw new ParseError(`Failed to load ${filename}`, 'cbz')
+                const url = urlFactory.createURL(blob, getMimeType(filename))
                 urlCache.set(filename, url)
                 return url
             },
             unload: () => {
                 const url = urlCache.get(filename)
                 if (url) {
-                    URL.revokeObjectURL(url)
+                    urlFactory.revokeURL(url)
                     urlCache.delete(filename)
                 }
             },
@@ -232,7 +269,7 @@ export class CBZParser implements Parser {
             },
             destroy: () => {
                 for (const url of urlCache.values()) {
-                    URL.revokeObjectURL(url)
+                    urlFactory.revokeURL(url)
                 }
                 urlCache.clear()
             },

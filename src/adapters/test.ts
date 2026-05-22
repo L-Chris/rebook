@@ -369,11 +369,12 @@ export class TestDOMAdapter implements DOMAdapter {
  */
 export class TestURLFactory implements URLFactory {
   private counter = 0
-  private urls = new Map<string, { data: string | ArrayBuffer; mimeType: string }>()
+  private urls = new Map<string, { data: string | ArrayBuffer | Blob; mimeType: string }>()
 
-  createURL(data: string | ArrayBuffer, mimeType: string): string {
+  createURL(data: string | ArrayBuffer | Blob, mimeType?: string): string {
     const url = `test://resource-${this.counter++}`
-    this.urls.set(url, { data, mimeType })
+    const actualMimeType = data instanceof Blob ? (data.type || mimeType || 'application/octet-stream') : (mimeType || 'application/octet-stream')
+    this.urls.set(url, { data, mimeType: actualMimeType })
     return url
   }
 
@@ -382,7 +383,7 @@ export class TestURLFactory implements URLFactory {
   }
 
   // Test helper: get stored data for a URL
-  getData(url: string): { data: string | ArrayBuffer; mimeType: string } | undefined {
+  getData(url: string): { data: string | ArrayBuffer | Blob; mimeType: string } | undefined {
     return this.urls.get(url)
   }
 

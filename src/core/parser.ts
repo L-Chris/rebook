@@ -6,6 +6,7 @@
  */
 
 import type { Book } from './types'
+import { UnsupportedFormatError } from './errors'
 
 /**
  * Input types accepted by parsers.
@@ -55,6 +56,13 @@ export interface Parser {
      * Returns true if the format is recognized.
      */
     canParse(input: ParserInput): Promise<boolean> | boolean
+
+    /**
+     * Priority for auto-detection (higher = checked first).
+     * Default is 0. Use higher values for more specific formats.
+     * For example, EPUB (10) should be checked before generic ZIP-based formats like CBZ (0).
+     */
+    priority?: number
 }
 
 /**
@@ -67,13 +75,18 @@ export type ParserFactory = () => Parser
  * Registry of parsers for auto-detection.
  */
 class ParserRegistry {
-    private parsers: Map<string, ParserFactory> = new Map()
+    private parsers: Map<string, { factory: ParserFactory; priority: number }> = new Map()
 
     /**
      * Register a parser with a name.
+     * @param name - Parser name
+     * @param factory - Factory function to create parser instances
+     * @param priority - Detection priority (higher = checked first).
+     *                   If not provided, uses parser.priority or defaults to 0.
      */
-    register(name: string, factory: ParserFactory): void {
-        this.parsers.set(name, factory)
+    register(name: string, factory: ParserFactory, priority?: number): void {
+        const effectivePriority = priority ?? factory().priority ?? 0
+        this.parsers.set(name, { factory, priority: effectivePriority })
     }
 
     /**
@@ -87,15 +100,20 @@ class ParserRegistry {
      * Get a parser by name.
      */
     get(name: string): Parser | undefined {
-        const factory = this.parsers.get(name)
-        return factory?.()
+        const entry = this.parsers.get(name)
+        return entry?.factory()
     }
 
     /**
      * Auto-detect the format and return a suitable parser.
+     * Parsers are checked in priority order (highest first).
      */
     async detect(input: ParserInput): Promise<Parser | null> {
-        for (const [, factory] of this.parsers) {
+        // Sort by priority (highest first)
+        const sorted = Array.from(this.parsers.entries())
+            .sort(([, a], [, b]) => b.priority - a.priority)
+
+        for (const [, { factory }] of sorted) {
             const parser = factory()
             if (await parser.canParse(input)) {
                 return parser
@@ -110,7 +128,7 @@ class ParserRegistry {
     async open(input: ParserInput, options?: ParserOptions): Promise<Book> {
         const parser = await this.detect(input)
         if (!parser) {
-            throw new Error('Unsupported file format')
+            throw new UnsupportedFormatError()
         }
         return parser.parse(input, options)
     }

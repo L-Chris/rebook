@@ -79,6 +79,16 @@ export {
 // Parser registry
 export { registry } from './core/parser'
 
+// Error types
+export {
+    EBookError,
+    ParseError,
+    UnsupportedFormatError,
+    CorruptedFileError,
+    AdapterRequiredError,
+    UnsupportedInputError,
+} from './core/errors'
+
 // Parsers
 export { epub, EPUBParser } from './parsers/epub'
 export { cbz, CBZParser } from './parsers/cbz'

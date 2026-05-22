@@ -20,33 +20,56 @@
 npm install ebook-js
 ```
 
+## 支持格式
+
+| 格式 | 扩展名 | 解析器 | 说明 |
+|------|--------|--------|------|
+| EPUB 2/3 | `.epub` | `EPUBParser` | 完整支持：导航、书脊、字体解密、landmarks |
+| Mobipocket / Kindle | `.mobi`、`.azw`、`.azw3` | `MOBIParser` | MOBI6 + KF8、PalmDOC + HUFF/CDIC、EXTH 元数据、NCX |
+| FictionBook 2 | `.fb2`、`.fbz`、`.fb2.zip` | `FB2Parser` | FB2 XML 转 XHTML、FBZ 归档支持 |
+| Comic Book Zip | `.cbz` | `CBZParser` | 从 zip 归档中读取顺序图片 |
+
 ## 快速开始
 
 ```typescript
-import { registry, createReader } from 'ebook-js'
+import {
+    registry,
+    createReader,
+    BrowserDOMAdapter,
+    BrowserURLFactory,
+    UnsupportedFormatError,
+} from 'ebook-js'
 import { epub } from 'ebook-js/parsers/epub'
 import { mobi } from 'ebook-js/parsers/mobi'
 import { fb2 } from 'ebook-js/parsers/fb2'
 import { cbz } from 'ebook-js/parsers/cbz'
 
-// 1. 注册解析器（支持自动检测格式）
+// 1. 注册解析器（支持自动检测格式，优先级自动设置）
 registry.register('epub', epub)
 registry.register('mobi', mobi)
 registry.register('fb2', fb2)
 registry.register('cbz', cbz)
 
-// 2. 创建阅读器
+// 2. 创建阅读器（浏览器环境下适配器自动注入）
 const reader = createReader({
     container: document.getElementById('viewer')!,
 })
 
 // 3. 打开书籍（File、Blob 或 URL）
-const book = await reader.open(file)
+try {
+    const book = await reader.open(file)
 
-// 4. 导航
-await reader.next()
-await reader.prev()
-await reader.goTo('/path/to/chapter.xhtml#section')
+    // 4. 导航
+    await reader.next()
+    await reader.prev()
+    await reader.goTo('/path/to/chapter.xhtml#section')
+} catch (e) {
+    if (e instanceof UnsupportedFormatError) {
+        alert('不支持的文件格式')
+    } else {
+        throw e
+    }
+}
 ```
 
 ## 架构
@@ -112,11 +135,12 @@ interface Section {
 interface Parser {
     parse(input, options?): Promise<Book>
     canParse(input): Promise<boolean>
+    priority?: number    // 检测优先级（越高越优先，默认 0）
 }
 
 interface ParserOptions {
-    domAdapter?: DOMAdapter    // 注入的 DOM 适配器（EPUB 必需）
-    urlFactory?: URLFactory    // 注入的 URL 工厂（EPUB 必需）
+    domAdapter?: DOMAdapter    // 注入的 DOM 适配器（所有解析器必需）
+    urlFactory?: URLFactory    // 注入的 URL 工厂（所有解析器必需）
     sha1?: (data: ArrayBuffer) => Promise<ArrayBuffer>
     onProgress?: (progress: number, message?: string) => void
 }
@@ -156,7 +180,7 @@ interface DOMAdapter {
 
 ```typescript
 interface URLFactory {
-    createURL(data: string | ArrayBuffer, mimeType: string): string
+    createURL(data: string | ArrayBuffer | Blob, mimeType?: string): string
     revokeURL(url: string): void
 }
 ```
@@ -199,6 +223,64 @@ const domAdapter = new TestDOMAdapter()
 const urlFactory = new TestURLFactory()
 
 const book = await registry.open(arrayBuffer, { domAdapter, urlFactory })
+```
+
+## 错误处理
+
+ebook-js 提供了类型化的错误层次结构，便于更好的错误处理：
+
+```typescript
+import {
+    EBookError,            // 所有 ebook-js 错误的基类
+    ParseError,            // 解析失败（内容格式错误）
+    UnsupportedFormatError, // 格式无法识别
+    CorruptedFileError,    // 文件严重损坏
+    AdapterRequiredError,  // 未提供必需的适配器
+    UnsupportedInputError, // 不支持的输入类型
+} from 'ebook-js'
+
+try {
+    const book = await registry.open(file, { domAdapter, urlFactory })
+} catch (e) {
+    if (e instanceof UnsupportedFormatError) {
+        console.error('请打开 EPUB、MOBI、FB2 或 CBZ 文件。')
+    } else if (e instanceof AdapterRequiredError) {
+        console.error('请在选项中提供 domAdapter 和 urlFactory。')
+    } else if (e instanceof ParseError) {
+        console.error(`解析错误 (${e.format}): ${e.message}`)
+    } else if (e instanceof CorruptedFileError) {
+        console.error(`文件损坏 (${e.format}): ${e.message}`)
+    } else if (e instanceof EBookError) {
+        console.error(`错误 [${e.code}]: ${e.message}`)
+    } else {
+        throw e // 重新抛出非预期错误
+    }
+}
+```
+
+所有错误都有：
+- `message`：人类可读的错误描述
+- `code`：机器可读的错误代码（如 `'PARSE_ERROR'`）
+- `name`：错误类名
+
+格式相关的错误还有 `format` 属性（如 `'epub'`、`'mobi'`）。
+
+## 解析器检测优先级
+
+使用自动检测（`registry.open()` 或 `registry.detect()`）时，解析器按优先级顺序检查（从高到低）。每个解析器有默认优先级：
+
+| 解析器 | 优先级 | 说明 |
+|--------|--------|------|
+| EPUB | 10 | 最先检查——格式检测最具体 |
+| MOBI | 5 | 检查 BOOKMOBI 魔数 |
+| FB2 | 5 | 检查 FictionBook XML 或 zip 中的 .fb2 |
+| CBZ | 0 | 最后检查——带图片的通用 zip |
+
+可以在注册时覆盖优先级：
+
+```typescript
+// 为你的场景给 CBZ 更高优先级
+registry.register('cbz', cbz, 20)
 ```
 
 ## 畸形 EPUB 处理

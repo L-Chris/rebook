@@ -17,6 +17,8 @@ import type { Book, BookMetadata, Section, TOCItem, Landmark, Rendition } from '
 import type { Parser, ParserInput, ParserOptions } from '../core/parser'
 import type { DOMAdapter } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
+import { replaceSeries, unescapeHTML } from '../core/utils'
+import { UnsupportedInputError, ParseError, CorruptedFileError, AdapterRequiredError } from '../core/errors'
 
 // ============================================================================
 // Constants
@@ -283,22 +285,6 @@ const rawBytesToString = (uint8Array: Uint8Array): string => {
     return result
 }
 
-/**
- * Unescape HTML entities using regex (no DOM needed).
- */
-const unescapeHTML = (str: string | undefined): string => {
-    if (!str) return ''
-    return str
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
-        .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCharCode(parseInt(n, 16)))
-}
-
 // ============================================================================
 // Decompression
 // ============================================================================
@@ -349,7 +335,7 @@ const huffcdic = async (
 ): Promise<(byteArray: Uint8Array) => Uint8Array> => {
     const huffRecord = await loadRecord(mobi.huffcdic as number)
     const { magic, offset1, offset2 } = getStruct(HUFF_HEADER, huffRecord)
-    if (magic !== 'HUFF') throw new Error('Invalid HUFF record')
+    if (magic !== 'HUFF') throw new CorruptedFileError('Invalid HUFF record', 'mobi')
 
     const off1 = offset1 as number
     const off2 = offset2 as number
@@ -373,7 +359,7 @@ const huffcdic = async (
     for (let i = 1; i < numHuffcdic; i++) {
         const record = await loadRecord((mobi.huffcdic as number) + i)
         const cdic = getStruct(CDIC_HEADER, record)
-        if (cdic.magic !== 'CDIC') throw new Error('Invalid CDIC record')
+        if (cdic.magic !== 'CDIC') throw new CorruptedFileError('Invalid CDIC record', 'mobi')
         const n = Math.min(1 << (cdic.codeLength as number), (cdic.numEntries as number) - dictionary.length)
         const buffer = record.slice(cdic.length as number)
         for (let j = 0; j < n; j++) {
@@ -432,12 +418,12 @@ const getIndexData = async (
 ): Promise<IndexData> => {
     const indxRecord = await loadRecord(indxIndex)
     const indx = getStruct(INDX_HEADER, indxRecord)
-    if (indx.magic !== 'INDX') throw new Error('Invalid INDX record')
+    if (indx.magic !== 'INDX') throw new CorruptedFileError('Invalid INDX record', 'mobi')
     const decoder = getDecoder(indx.encoding)
 
     const tagxBuffer = indxRecord.slice(indx.length as number)
     const tagx = getStruct(TAGX_HEADER, tagxBuffer)
-    if (tagx.magic !== 'TAGX') throw new Error('Invalid TAGX section')
+    if (tagx.magic !== 'TAGX') throw new CorruptedFileError('Invalid TAGX section', 'mobi')
     const numTags = ((tagx.length as number) - 12) / 4
     const tagTable = Array.from({ length: numTags }, (_, i) =>
         new Uint8Array(tagxBuffer.slice(12 + i * 4, 12 + i * 4 + 4)))
@@ -465,7 +451,7 @@ const getIndexData = async (
         const record = await loadRecord(indxIndex + 1 + i)
         const array = new Uint8Array(record)
         const subIndx = getStruct(INDX_HEADER, record)
-        if (subIndx.magic !== 'INDX') throw new Error('Invalid INDX record')
+        if (subIndx.magic !== 'INDX') throw new CorruptedFileError('Invalid INDX record', 'mobi')
         const subNumRecords = subIndx.numRecords as number
         for (let j = 0; j < subNumRecords; j++) {
             const offsetOffset = (subIndx.idxt as number) + 4 + 2 * j
@@ -563,7 +549,7 @@ interface EXTHData {
 
 const getEXTH = (buf: ArrayBuffer, encoding: number | string | undefined): EXTHData => {
     const { magic, count } = getStruct(EXTH_HEADER, buf)
-    if (magic !== 'EXTH') throw new Error('Invalid EXTH header')
+    if (magic !== 'EXTH') throw new CorruptedFileError('Invalid EXTH header', 'mobi')
     const decoder = getDecoder(encoding)
     const results: EXTHData = {}
     let offset = 12
@@ -700,7 +686,7 @@ class MOBI {
     #getHeaders(buf: ArrayBuffer): MOBIHeaders {
         const palmdoc = getStruct(PALMDOC_HEADER, buf)
         const mobi = getStruct(MOBI_HEADER, buf)
-        if (mobi.magic !== 'MOBI') throw new Error('Missing MOBI header')
+        if (mobi.magic !== 'MOBI') throw new CorruptedFileError('Missing MOBI header', 'mobi')
 
         const titleOffset = mobi.titleOffset as number
         const titleLength = mobi.titleLength as number
@@ -729,7 +715,7 @@ class MOBI {
                 this.loadRecord.bind(this),
             )
         } else {
-            throw new Error(`Unknown compression type: ${compression}`)
+            throw new ParseError(`Unknown compression type: ${compression}`, 'mobi')
         }
 
         const trailingFlags = mobi.trailingFlags as number
@@ -1153,14 +1139,6 @@ const getFragmentSelector = (str: string): string | undefined => {
     return `[${attr}="${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"]`
 }
 
-const replaceSeries = async (str: string, regex: RegExp, f: (...args: string[]) => Promise<string>): Promise<string> => {
-    const matches: string[][] = []
-    str.replace(regex, (...args) => (matches.push(args as string[]), '' as string))
-    const results: string[] = []
-    for (const args of matches) results.push(await f(...args))
-    return str.replace(regex, () => results.shift()!)
-}
-
 const getPageSpread = (properties: string[]): 'left' | 'right' | 'center' | undefined => {
     for (const p of properties) {
         if (p === 'page-spread-left' || p === 'rendition:page-spread-left') return 'left'
@@ -1236,7 +1214,7 @@ class KF8 {
         try {
             const fdstBuffer = await loadRecord(kf8!.fdst as number)
             const fdst = getStruct(FDST_HEADER, fdstBuffer)
-            if (fdst.magic !== 'FDST') throw new Error('Missing FDST record')
+            if (fdst.magic !== 'FDST') throw new CorruptedFileError('Missing FDST record', 'mobi')
             const fdstTable = Array.from({ length: fdst.numEntries as number },
                 (_, i) => 12 + i * 8)
                 .map(offset => [
@@ -1576,6 +1554,8 @@ export const isMOBI = async (file: Blob | ArrayBuffer): Promise<boolean> => {
 }
 
 export class MOBIParser implements Parser {
+    readonly priority = 5
+
     async canParse(input: ParserInput): Promise<boolean> {
         // Check file extension
         if (typeof input === 'string') {
@@ -1596,10 +1576,15 @@ export class MOBIParser implements Parser {
     }
 
     async parse(input: ParserInput, options?: ParserOptions): Promise<Book> {
+        // Require adapters
+        if (!options?.domAdapter || !options?.urlFactory) {
+            throw new AdapterRequiredError('domAdapter and urlFactory')
+        }
+
         // Convert input to Blob
         let blob: Blob
         if (typeof input === 'string') {
-            throw new Error('MOBI parser cannot parse URL strings; provide a File, Blob, or ArrayBuffer')
+            throw new UnsupportedInputError('MOBI parser cannot parse URL strings; provide a File, Blob, or ArrayBuffer')
         }
         if (input instanceof File || input instanceof Blob) {
             blob = input
@@ -1618,8 +1603,8 @@ export class MOBIParser implements Parser {
 
         const mobi = new MOBI({ unzlib })
         const book = await mobi.open(blob, {
-            domAdapter: options?.domAdapter,
-            urlFactory: options?.urlFactory,
+            domAdapter: options.domAdapter,
+            urlFactory: options.urlFactory,
         })
 
         return book
