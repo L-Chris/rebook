@@ -341,7 +341,7 @@ export class BrowserRenderer implements Renderer {
     private wrapper: HTMLElement
     private view: View | null = null
     private book: Book | null = null
-    private sections: Section[] = []
+    private sections: readonly Section[] = []
     private currentIndex = -1
     private currentFraction = 0
     private pageWidth = 0

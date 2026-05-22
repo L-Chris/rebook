@@ -18,6 +18,7 @@
  */
 
 import type { Loader, LoaderEntry } from '../core/loader'
+import { CorruptedFileError, AdapterRequiredError } from '../core/errors'
 
 /** Internal zip entry shape */
 interface ZipFileEntry {
@@ -247,7 +248,7 @@ export async function extractDirectly(
     const header = new DataView(headerBuf)
 
     if (header.getUint32(0, true) !== LOCAL_FILE_HEADER_SIG) {
-        throw new Error('Local file header not found')
+        throw new CorruptedFileError('Local file header not found', 'zip')
     }
 
     const compressionMethod = header.getUint16(8, true)
@@ -260,7 +261,7 @@ export async function extractDirectly(
         // Data descriptor case: compressed size is stored after the compressed data.
         // Use the next LFH position (from our scan) as an upper boundary.
         if (!localHeaderMap) {
-            throw new Error('Cannot determine compressed size (data descriptor)')
+            throw new CorruptedFileError('Cannot determine compressed size (data descriptor)', 'zip')
         }
 
         const nextLFH = findNextLFHOffset(localHeaderMap, localOffset)
@@ -269,7 +270,7 @@ export async function extractDirectly(
         // Read the region between dataStart and upperBound to find the
         // data descriptor (PK\x07\x08) at the end
         const regionSize = upperBound - dataStart
-        if (regionSize <= 0) throw new Error('No data between headers')
+        if (regionSize <= 0) throw new CorruptedFileError('No data between headers', 'zip')
 
         const regionBuf = await blob.slice(dataStart, upperBound).arrayBuffer()
         const regionView = new DataView(regionBuf)
@@ -318,14 +319,14 @@ export async function extractDirectly(
     // Method 8: deflate
     if (compressionMethod === 8) {
         if (typeof DecompressionStream === 'undefined') {
-            throw new Error('DecompressionStream API not available')
+            throw new AdapterRequiredError('DecompressionStream API')
         }
         const stream = compressedData.stream()
             .pipeThrough(new DecompressionStream('deflate-raw'))
         return new Response(stream).arrayBuffer()
     }
 
-    throw new Error(`Unsupported compression method: ${compressionMethod}`)
+    throw new CorruptedFileError(`Unsupported compression method: ${compressionMethod}`, 'zip')
 }
 
 // ============================================================================

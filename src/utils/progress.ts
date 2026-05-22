@@ -18,7 +18,7 @@ export class SectionProgress {
     private sizeTotal: number
     private sectionFractions: number[]
 
-    constructor(sections: Section[], sizePerLoc = 1500) {
+    constructor(sections: readonly Section[], sizePerLoc = 1500) {
         this.sizes = sections.map(s => s.linear !== 'no' && s.size > 0 ? s.size : 0)
         this.sizePerLoc = sizePerLoc
         this.sizeTotal = this.sizes.reduce((a, b) => a + b, 0)
@@ -91,23 +91,9 @@ export class SectionProgress {
 // ============================================================================
 
 /**
- * Assign unique IDs to TOC items (depth-first).
- */
-function assignIDs(items: TOCItem[], startId = 0): number {
-    let id = startId
-    for (const item of items) {
-        (item as TOCItem & { id: number }).id = id++
-        if (item.subitems?.length) {
-            id = assignIDs(item.subitems, id)
-        }
-    }
-    return id
-}
-
-/**
  * Flatten nested TOC items into a single array.
  */
-function flattenTOC(items: TOCItem[]): TOCItem[] {
+function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
     return items.flatMap(item =>
         item.subitems?.length
             ? [item, ...flattenTOC(item.subitems)]
@@ -119,19 +105,18 @@ function flattenTOC(items: TOCItem[]): TOCItem[] {
  * Tracks which TOC item corresponds to the current reading position.
  */
 export class TOCProgress {
-    private ids: (string | number)[] = []
+    private ids: readonly (string | number)[] = []
     private map: Map<string | number, { prev?: TOCItem; items: Array<{ fragment: string | null; item: TOCItem }> }> = new Map()
     private getFragment?: (doc: Document, id: string | number) => Element | null
 
     async init(options: {
-        toc: TOCItem[]
-        sectionIds: (string | number)[]
+        toc: readonly TOCItem[]
+        sectionIds: readonly (string | number)[]
         splitHref: (href: string) => [id: string | number, fragment: string | null] | undefined
         getFragment: (doc: Document, id: string | number) => Element | null
     }): Promise<void> {
         const { toc, sectionIds, splitHref, getFragment } = options
 
-        assignIDs(toc)
         const items = flattenTOC(toc)
         const grouped = new Map<string | number, { prev?: TOCItem; items: Array<{ fragment: string | null; item: TOCItem }> }>()
 

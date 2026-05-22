@@ -85,7 +85,7 @@ export class ReaderView {
     /**
      * Get table of contents.
      */
-    getTOC(): TOCItem[] | undefined {
+    getTOC(): readonly TOCItem[] | undefined {
         return this.book?.toc
     }
 
