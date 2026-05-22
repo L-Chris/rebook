@@ -94,10 +94,10 @@ describe('MOBIParser', () => {
             const book = await parser.parse(buffer, options)
 
             expect(book.metadata?.author).toBeDefined()
-            const authors = Array.isArray(book.metadata?.author)
-                ? book.metadata!.author
-                : [book.metadata?.author]
-            expect(authors[0]).toBe('Jane Austen')
+            // author is normalized to Contributor[]
+            const authors = book.metadata?.author
+            expect(Array.isArray(authors)).toBe(true)
+            expect((authors as any[])[0]?.name).toBe('Jane Austen')
         })
 
         it('should extract metadata: language', async () => {

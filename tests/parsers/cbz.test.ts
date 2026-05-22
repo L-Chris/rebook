@@ -67,7 +67,10 @@ describe('CBZParser', () => {
             expect(book).toBeDefined()
             expect(book.sections).toHaveLength(3)
             expect(book.metadata?.title).toBe('Test Comic')
-            expect(book.metadata?.author).toBe('John Doe')
+            // author is normalized to Contributor[]
+            const authors = book.metadata?.author
+            expect(Array.isArray(authors)).toBe(true)
+            expect((authors as any[])[0]?.name).toBe('John Doe')
             expect(book.metadata?.belongsTo?.series?.name).toBe('Test Series')
             expect(book.metadata?.belongsTo?.series?.position).toBe('5')
             expect(book.metadata?.belongsTo?.series?.total).toBe('10')

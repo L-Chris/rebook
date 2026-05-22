@@ -17,6 +17,7 @@ import type { Loader } from '../core/loader'
 import { createZipLoader, isZipFile } from '../loaders/zip-loader'
 import { normalizeWhitespace, getElementText, cssEscape, replaceSeries, regexEscape } from '../core/utils'
 import { UnsupportedInputError, AdapterRequiredError, ParseError, CorruptedFileError } from '../core/errors'
+import { normalizeLanguage, normalizeTitle, normalizePublisher } from '../core/metadata'
 
 // ============================================================================
 // Constants
@@ -277,11 +278,11 @@ const parseMetadata = (opf: XMLDocument): {
             opf.getElementById(opf.documentElement.getAttribute('unique-identifier') ?? '')
             ?? opf.getElementsByTagNameNS(NS.DC, 'identifier')[0]
         ) || undefined,
-        title: makeLanguageMap(mainTitle),
-        subtitle: one(dcTitle.filter(x => prop(x, 'title-type') === 'subtitle')),
-        language: dc('language').map(x => x.value).filter(Boolean),
+        title: normalizeTitle(makeLanguageMap(mainTitle)),
+        subtitle: normalizeTitle(one(dcTitle.filter(x => prop(x, 'title-type') === 'subtitle'))),
+        language: normalizeLanguage(dc('language').map(x => x.value).filter(Boolean)),
         description: one(dc('description')),
-        publisher: makeContributor(dc('publisher')[0]),
+        publisher: normalizePublisher(makeContributor(dc('publisher')[0])),
         published: dc('date').find(x => x.attrs.event === 'publication')?.value
             ?? one(dc('date')),
         modified: one(metaElements.filter(m => m.property === 'http://purl.org/dc/terms/modified'))
@@ -313,12 +314,9 @@ const parseMetadata = (opf: XMLDocument): {
         else metadata.contributor = [contrib]
     }
 
-    // Clean up single-element arrays and empty values
+    // Clean up null/undefined values
     for (const [key, val] of Object.entries(metadata)) {
         if (val == null) delete metadata[key]
-        else if (Array.isArray(val) && val.length === 1) {
-            (metadata as Record<string, unknown>)[key] = val[0]
-        }
     }
 
     // Parse rendition properties

@@ -283,6 +283,61 @@ try {
 registry.register('cbz', cbz, 20)
 ```
 
+## 元数据标准化
+
+所有解析器将元数据标准化为一致的类型，使得消费者无需处理格式差异：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `title` | `string` | 始终为纯字符串 |
+| `subtitle` | `string` | 始终为纯字符串 |
+| `author` | `Contributor[]` | 始终为 `{ name, sortAs?, role? }` 对象数组 |
+| `translator` | `Contributor[]` | 始终为数组 |
+| `editor` | `Contributor[]` | 始终为数组 |
+| `publisher` | `string` | 始终为纯字符串 |
+| `language` | `string` | 始终为单个字符串（多个语言时取第一个） |
+| `subject` | `string[]` | 始终为字符串数组 |
+| `identifier` | `string` | 纯字符串 |
+| `published` | `string` | 纯字符串（日期） |
+| `modified` | `string` | 纯字符串（日期） |
+| `description` | `string` | 纯字符串（可能包含 HTML） |
+
+### 访问元数据
+
+```typescript
+const book = await registry.open(file, options)
+
+// title 始终是字符串
+console.log(book.metadata?.title) // "我的书"
+
+// author 始终是 Contributor 对象数组
+const authors = book.metadata?.author ?? []
+for (const author of authors) {
+    console.log(author.name) // "张三"
+    if (author.sortAs) console.log(author.sortAs) // "Zhang, San"
+}
+
+// publisher 始终是字符串
+console.log(book.metadata?.publisher) // "出版社"
+
+// language 始终是字符串（多个语言时取第一个）
+console.log(book.metadata?.language) // "zh-CN"
+```
+
+### 标准化辅助函数
+
+对于高级用例，导出了标准化辅助函数：
+
+```typescript
+import {
+    normalizeLanguage,
+    normalizeTitle,
+    normalizePublisher,
+    normalizeContributors,
+    normalizeSubjects,
+} from 'ebook-js'
+```
+
 ## 畸形 EPUB 处理
 
 许多 EPUB 文件的 zip 归档存在结构性问题——特别是中央目录（Central Directory）偏移量错误，导致标准 zip 库无法读取条目数据。ebook-js 包含多重回退策略来优雅地处理这些文件：

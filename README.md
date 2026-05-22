@@ -288,6 +288,61 @@ You can override priority when registering:
 registry.register('cbz', cbz, 20)
 ```
 
+## Metadata Normalization
+
+All parsers normalize metadata to consistent types, making it safe to consume without format-specific handling:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `title` | `string` | Always a plain string |
+| `subtitle` | `string` | Always a plain string |
+| `author` | `Contributor[]` | Always an array of `{ name, sortAs?, role? }` objects |
+| `translator` | `Contributor[]` | Always an array |
+| `editor` | `Contributor[]` | Always an array |
+| `publisher` | `string` | Always a plain string |
+| `language` | `string` | Always a single string (first language if multiple) |
+| `subject` | `string[]` | Always an array of strings |
+| `identifier` | `string` | Plain string |
+| `published` | `string` | Plain string (date) |
+| `modified` | `string` | Plain string (date) |
+| `description` | `string` | Plain string (may contain HTML) |
+
+### Accessing Metadata
+
+```typescript
+const book = await registry.open(file, options)
+
+// Title is always a string
+console.log(book.metadata?.title) // "My Book"
+
+// Author is always an array of Contributor objects
+const authors = book.metadata?.author ?? []
+for (const author of authors) {
+    console.log(author.name) // "John Doe"
+    if (author.sortAs) console.log(author.sortAs) // "Doe, John"
+}
+
+// Publisher is always a string
+console.log(book.metadata?.publisher) // "Publisher Inc"
+
+// Language is always a string (first language if multiple)
+console.log(book.metadata?.language) // "en"
+```
+
+### Normalization Helpers
+
+For advanced use cases, normalization helpers are exported:
+
+```typescript
+import {
+    normalizeLanguage,
+    normalizeTitle,
+    normalizePublisher,
+    normalizeContributors,
+    normalizeSubjects,
+} from 'ebook-js'
+```
+
 ## Malformed EPUB Handling
 
 Many EPUB files in the wild have structural issues in their zip archives — particularly incorrect Central Directory offsets that prevent standard zip libraries from reading entry data. ebook-js includes multiple fallback strategies to handle these files gracefully:

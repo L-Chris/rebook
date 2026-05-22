@@ -89,6 +89,15 @@ export {
     UnsupportedInputError,
 } from './core/errors'
 
+// Metadata normalization helpers
+export {
+    normalizeLanguage,
+    normalizeTitle,
+    normalizePublisher,
+    normalizeContributors,
+    normalizeSubjects,
+} from './core/metadata'
+
 // Parsers
 export { epub, EPUBParser } from './parsers/epub'
 export { cbz, CBZParser } from './parsers/cbz'

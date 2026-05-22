@@ -22,3 +22,10 @@ export {
     escapeAttr,
     unescapeHTML,
 } from './utils'
+export {
+    normalizeLanguage,
+    normalizeTitle,
+    normalizePublisher,
+    normalizeContributors,
+    normalizeSubjects,
+} from './metadata'

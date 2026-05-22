@@ -13,6 +13,7 @@ import type { URLFactory } from '../core/url-factory'
 import type { DOMAdapter } from '../core/dom-adapter'
 import { createZipLoader, isZipFile } from '../loaders/zip-loader'
 import { UnsupportedInputError, ParseError, AdapterRequiredError } from '../core/errors'
+import { normalizeContributors } from '../core/metadata'
 
 // ============================================================================
 // Image extensions
@@ -210,7 +211,7 @@ export class CBZParser implements Parser {
         if (merged.title) metadata.title = merged.title
         if (merged.publisher) metadata.publisher = merged.publisher
         if (merged.language) metadata.language = merged.language
-        if (merged.author) metadata.author = merged.author
+        if (merged.author) metadata.author = normalizeContributors(merged.author)
         if (merged.series) {
             metadata.belongsTo = {
                 series: {

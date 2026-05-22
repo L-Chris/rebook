@@ -19,6 +19,7 @@ import type { DOMAdapter } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
 import { replaceSeries, unescapeHTML } from '../core/utils'
 import { UnsupportedInputError, ParseError, CorruptedFileError, AdapterRequiredError } from '../core/errors'
+import { normalizeContributors } from '../core/metadata'
 
 // ============================================================================
 // Constants
@@ -783,7 +784,7 @@ class MOBI {
         }
         if (exth?.creator) {
             const authors = (exth.creator as string[]).map(unescapeHTML)
-            metadata.author = authors.length === 1 ? authors[0] : authors
+            metadata.author = normalizeContributors(authors)
         }
         if (exth?.publisher) metadata.publisher = unescapeHTML(exth.publisher as string)
         if (exth?.language) {
@@ -796,7 +797,7 @@ class MOBI {
         if (exth?.description) metadata.description = unescapeHTML(exth.description as string)
         if (exth?.subject) metadata.subject = (exth.subject as string[]).map(unescapeHTML)
         if (exth?.rights) metadata.rights = unescapeHTML(exth.rights as string)
-        if (exth?.contributor) metadata.contributor = (exth.contributor as string[]).map(unescapeHTML)
+        if (exth?.contributor) metadata.contributor = normalizeContributors((exth.contributor as string[]).map(unescapeHTML))
         return metadata
     }
 
