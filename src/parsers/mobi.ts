@@ -13,13 +13,14 @@
  *   MOBIParser → public Parser interface
  */
 
-import type { Book, BookMetadata, Section, TOCItem, Landmark, Rendition } from '../core/types'
+import type { Book, BookMetadata, Section, TOCItem, Landmark, Rendition, SectionDocument } from '../core/types'
 import type { Parser, ParserInput, ParserOptions } from '../core/parser'
 import type { DOMAdapter } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
 import { replaceSeries, unescapeHTML } from '../core/utils'
 import { UnsupportedInputError, ParseError, CorruptedFileError, AdapterRequiredError } from '../core/errors'
 import { normalizeContributors } from '../core/metadata'
+import { parseHTML, createSectionDocument } from '../core/document'
 
 // ============================================================================
 // Constants
@@ -640,7 +641,7 @@ class PDB {
 
     loadRecord(index: number): Promise<ArrayBuffer> {
         const offsets = this.offsets[index]
-        if (!offsets) throw new RangeError('Record index out of bounds')
+        if (!offsets) throw new CorruptedFileError('Record index out of bounds', 'mobi')
         return this.file.slice(offsets.start, offsets.end).arrayBuffer()
     }
 
@@ -793,7 +794,8 @@ class MOBI {
     getMetadata(): BookMetadata {
         const { mobi, exth } = this.headers
         const title = unescapeHTML((exth?.title as string) || this.decode(mobi.title as unknown as ArrayBuffer))
-        const metadata: BookMetadata = {
+        // Build metadata (mutable during construction, readonly in final type)
+        const metadata: { -readonly [K in keyof BookMetadata]?: BookMetadata[K] } = {
             identifier: (mobi.uid as number)?.toString(),
             title,
         }
@@ -909,6 +911,12 @@ class MOBI6 {
             load: () => this.loadSection(section),
             createDocument: () => this.createDocument(section),
             format: 'html' as const,
+            getDocument: async (): Promise<SectionDocument | null> => {
+                const html = await this.createDocument(section)
+                if (!this.#domAdapter) return null
+                const nodes = parseHTML(html, this.#domAdapter)
+                return createSectionDocument(nodes, this.#domAdapter)
+            },
             size: section.end - section.start,
         }))
 
@@ -1300,6 +1308,12 @@ class KF8 {
                 load: () => this.loadSection(section),
                 createDocument: () => this.createDocument(section),
                 format: 'xhtml' as const,
+                getDocument: async (): Promise<SectionDocument | null> => {
+                    const html = await this.createDocument(section)
+                    if (!this.#domAdapter) return null
+                    const nodes = parseHTML(html, this.#domAdapter)
+                    return createSectionDocument(nodes, this.#domAdapter)
+                },
                 size: section.length,
             }) : ({ id: `nonlinear-${index}`, size: 0, linear: 'no', load: () => '' }))
 

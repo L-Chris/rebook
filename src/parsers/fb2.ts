@@ -8,13 +8,14 @@
  * using recursive element mapping tables.
  */
 
-import type { Book, BookMetadata, Section, TOCItem, Contributor } from '../core/types'
+import type { Book, BookMetadata, Section, TOCItem, Contributor, SectionDocument } from '../core/types'
 import type { Parser, ParserInput, ParserOptions } from '../core/parser'
 import type { DOMAdapter, XMLDocument, XMLElement } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
 import { createZipLoader, isZipFile } from '../loaders/zip-loader'
-import { normalizeWhitespace, getElementText } from '../core/utils'
+import { normalizeWhitespace, getElementText, escapeAttr } from '../core/utils'
 import { AdapterRequiredError, UnsupportedInputError, ParseError } from '../core/errors'
+import { parseHTML, createSectionDocument } from '../core/document'
 
 // ============================================================================
 // Constants
@@ -214,7 +215,7 @@ class FB2Converter {
         const alt = node.getAttribute('alt') || ''
         const title = node.getAttribute('title') || ''
         const src = this.getImageSrc(node)
-        return `<img src="${this.escapeAttr(src)}" alt="${this.escapeAttr(alt)}" title="${this.escapeAttr(title)}">`
+        return `<img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}" title="${escapeAttr(title)}">`
     }
 
     /**
@@ -225,14 +226,7 @@ class FB2Converter {
         const type = node.getAttribute('type')
         const inner = this.convertChildren(node, STYLE)
         const typeAttr = type === 'note' ? ' epub:type="noteref"' : ''
-        return `<a href="${this.escapeAttr(href)}"${typeAttr}>${inner}</a>`
-    }
-
-    /**
-     * Escape HTML attribute value.
-     */
-    private escapeAttr(str: string): string {
-        return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        return `<a href="${escapeAttr(href)}"${typeAttr}>${inner}</a>`
     }
 
     /**
@@ -280,7 +274,7 @@ class FB2Converter {
 
         // Copy ID
         const id = node.getAttribute('id')
-        if (id) result += ` id="${this.escapeAttr(id)}"`
+        if (id) result += ` id="${escapeAttr(id)}"`
 
         // Add class from original element name
         result += ` class="${nodeName}"`
@@ -289,7 +283,7 @@ class FB2Converter {
         if (attrs) {
             for (const attr of attrs) {
                 const value = node.getAttribute(attr)
-                if (value) result += ` ${attr}="${this.escapeAttr(value)}"`
+                if (value) result += ` ${attr}="${escapeAttr(value)}"`
             }
         }
 
@@ -431,7 +425,8 @@ export class FB2Parser implements Parser {
         const docInfo = $('document-info')
         const publishInfo = $('publish-info')
 
-        const metadata: BookMetadata = {}
+        // Build metadata (mutable during construction, readonly in final type)
+        const metadata: { -readonly [K in keyof BookMetadata]?: BookMetadata[K] } = {}
 
         if (titleInfo) {
             const title = getElementText(findByTag(titleInfo, 'book-title'))
@@ -554,6 +549,10 @@ export class FB2Parser implements Parser {
                         load: () => sectionHtml,
                         format: 'xhtml' as const,
                         createDocument: () => sectionHtml,
+                        getDocument: async (): Promise<SectionDocument | null> => {
+                            const nodes = parseHTML(sectionHtml, domAdapter)
+                            return createSectionDocument(nodes, domAdapter)
+                        },
                         linear: bodyType === 'notes' ? 'no' : undefined,
                     })
 
@@ -583,6 +582,10 @@ export class FB2Parser implements Parser {
                     load: () => sectionHtml,
                     format: 'xhtml' as const,
                     createDocument: () => sectionHtml,
+                    getDocument: async (): Promise<SectionDocument | null> => {
+                        const nodes = parseHTML(sectionHtml, domAdapter)
+                        return createSectionDocument(nodes, domAdapter)
+                    },
                     linear: 'no',
                 })
 
@@ -688,10 +691,6 @@ function serializeElement(el: XMLElement): string {
     }
 
     return result
-}
-
-function escapeAttr(str: string): string {
-    return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 function escapeText(str: string): string {

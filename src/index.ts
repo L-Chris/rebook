@@ -19,6 +19,11 @@
  * // Navigate
  * await reader.next()
  * await reader.prev()
+ *
+ * // Access document model (AI-friendly)
+ * const section = reader.sections[0]
+ * const doc = await section.getDocument()
+ * const paragraphs = doc.query('p')
  * ```
  */
 
@@ -37,6 +42,10 @@ export type {
     LoadEvent,
     RelocateEvent,
     LinkEvent,
+    // Document Model
+    DocumentNode,
+    SectionDocument,
+    DocumentResource,
 } from './core/types'
 
 export type {
@@ -98,6 +107,16 @@ export {
     normalizeContributors,
     normalizeSubjects,
 } from './core/metadata'
+
+// Document Model helpers
+export {
+    parseHTML,
+    createSectionDocument,
+    textNode,
+    elementNode,
+    isTextNode,
+    isElementNode,
+} from './core/document'
 
 // Parsers
 export { epub, EPUBParser } from './parsers/epub'

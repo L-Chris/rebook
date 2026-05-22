@@ -5,8 +5,9 @@
  * testing the EPUB parser without a browser.
  */
 
-import type { DOMAdapter, XMLDocument, XMLElement, XMLAttr } from '../core/dom-adapter'
+import type { DOMAdapter, XMLDocument, XMLElement, XMLAttr, XMLNode } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
+import { EBookError } from '../core/errors'
 
 // xmldom types
 interface XmldomDocument {
@@ -90,12 +91,24 @@ function getElementChildren(el: XmldomElement): XmldomElement[] {
 class XmldomXMLElement implements XMLElement {
   constructor(private el: XmldomElement) {}
 
+  get nodeType(): 1 {
+    return 1 // ELEMENT_NODE
+  }
+
   get localName(): string {
     return this.el.localName
   }
 
   get namespaceURI(): string | null {
     return this.el.namespaceURI
+  }
+
+  get parentNode(): XMLElement | null {
+    const parent = (this.el as any).parentNode
+    if (parent && parent.nodeType === 1) {
+      return new XmldomXMLElement(parent)
+    }
+    return null
   }
 
   get children(): XMLElement[] {
@@ -358,9 +371,30 @@ export class TestDOMAdapter implements DOMAdapter {
 
   serialize(doc: XMLDocument): string {
     const nativeDoc = doc.toNative?.() as XmldomDocument
-    if (!nativeDoc) throw new Error('XMLDocument does not support toNative()')
+    if (!nativeDoc) throw new EBookError('XMLDocument does not support toNative()', 'ADAPTER_ERROR')
     const serializer = new this.XMLSerializer()
     return serializer.serializeToString(nativeDoc)
+  }
+
+  getChildNodes(element: XMLElement): XMLNode[] {
+    const xmldomEl = element as XmldomXMLElement
+    const childNodes = xmldomEl['el'].childNodes
+    const results: XMLNode[] = []
+    for (let i = 0; i < childNodes.length; i++) {
+      const child = childNodes.item(i)
+      if (!child) continue
+      const nodeType = (child as any).nodeType
+      if (nodeType === 1) { // ELEMENT_NODE
+        results.push(new XmldomXMLElement(child as XmldomElement))
+      } else if (nodeType === 3) { // TEXT_NODE
+        results.push({
+          nodeType: 3,
+          textContent: child.textContent || '',
+          parentNode: element,
+        })
+      }
+    }
+    return results
   }
 }
 

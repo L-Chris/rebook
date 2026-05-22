@@ -204,8 +204,8 @@ export class CBZParser implements Parser {
         ])
         const merged = { ...(cbiMeta || {}), ...(xmlMeta || {}) }
 
-        // Build metadata
-        const metadata: BookMetadata = {}
+        // Build metadata (mutable during construction, readonly in final type)
+        const metadata: { -readonly [K in keyof BookMetadata]?: BookMetadata[K] } = {}
         if (merged.title) metadata.title = merged.title
         if (merged.publisher) metadata.publisher = merged.publisher
         if (merged.language) metadata.language = merged.language
@@ -250,6 +250,8 @@ export class CBZParser implements Parser {
             unload: () => {
                 dataCache.delete(filename)
             },
+            // Images don't have a document model
+            getDocument: async () => null,
         }))
 
         // Build TOC (flat list of images)

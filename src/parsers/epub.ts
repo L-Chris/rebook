@@ -9,15 +9,17 @@
 import type {
     Book, Section, TOCItem, Landmark, BookMetadata,
     Rendition, ResolvedNavigation, LanguageMap, Contributor,
+    SectionDocument,
 } from '../core/types'
 import type { Parser, ParserInput, ParserOptions } from '../core/parser'
 import type { DOMAdapter, XMLDocument, XMLElement } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
 import type { Loader } from '../core/loader'
 import { createZipLoader, isZipFile } from '../loaders/zip-loader'
-import { normalizeWhitespace, getElementText, cssEscape, replaceSeries, regexEscape } from '../core/utils'
+import { normalizeWhitespace, getElementText, cssEscape, replaceSeries } from '../core/utils'
 import { UnsupportedInputError, AdapterRequiredError, ParseError, CorruptedFileError } from '../core/errors'
 import { normalizeLanguage, normalizeTitle, normalizePublisher } from '../core/metadata'
+import { parseHTML, createSectionDocument } from '../core/document'
 
 // ============================================================================
 // Constants
@@ -273,7 +275,8 @@ const parseMetadata = (opf: XMLDocument): {
     const dcCreator = dc('creator')
     const dcContributor = dc('contributor')
 
-    const metadata: BookMetadata = {
+    // Build metadata (mutable during construction, readonly in final type)
+    const metadata: { -readonly [K in keyof BookMetadata]?: BookMetadata[K] } = {
         identifier: getElementText(
             opf.getElementById(opf.documentElement.getAttribute('unique-identifier') ?? '')
             ?? opf.getElementsByTagNameNS(NS.DC, 'identifier')[0]
@@ -765,6 +768,11 @@ class EPUBBook implements Book {
                 format: 'xhtml' as const,
                 loadText: () => this.loader.loadText(item.href).then(t => t ?? ''),
                 createDocument: () => this.loadDocument(item),
+                getDocument: async (): Promise<SectionDocument | null> => {
+                    const html = await this.loadDocument(item)
+                    const nodes = parseHTML(html, this.domAdapter)
+                    return createSectionDocument(nodes, this.domAdapter)
+                },
                 size: this.loader.getSize(item.href),
                 linear: spineItem.linear,
                 cfi: `/6/${(index + 1) * 2}`,

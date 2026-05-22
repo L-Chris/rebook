@@ -4,6 +4,77 @@
  */
 
 // ============================================================================
+// Document Model (AI-friendly structured content)
+// ============================================================================
+
+/**
+ * A node in the document tree, following a SlateJS-inspired model.
+ * Used for AI-friendly content manipulation.
+ */
+export interface DocumentNode {
+    /** Node type: 'element', 'text', 'p', 'h1', 'img', etc. */
+    readonly type: string
+    /** Node attributes (class, id, src, href, etc.) */
+    readonly attrs?: Readonly<Record<string, string>>
+    /** Child nodes (for element nodes) */
+    readonly children?: readonly DocumentNode[]
+    /** Text content (for text nodes) */
+    readonly text?: string
+}
+
+/**
+ * A structured document with query and mutation capabilities.
+ * Represents parsed HTML/XHTML content in a tree structure.
+ * Immutable — mutations return new instances.
+ */
+export interface SectionDocument {
+    /** Root nodes of the document */
+    readonly nodes: readonly DocumentNode[]
+
+    /** Query nodes using CSS-like selectors */
+    query(selector: string): DocumentNode[]
+
+    /** Get plain text content of the document */
+    getText(): string
+
+    /** Get all image resources */
+    getImages(): DocumentResource[]
+
+    /** Insert a node at the given path */
+    insertNode(path: number[], node: DocumentNode): SectionDocument
+
+    /** Remove a node at the given path */
+    removeNode(path: number[]): SectionDocument
+
+    /** Update node attributes at the given path */
+    setNode(path: number[], attrs: Record<string, string>): SectionDocument
+
+    /** Replace text at the given path */
+    replaceText(path: number[], text: string): SectionDocument
+
+    /** Serialize back to HTML string */
+    serialize(): string
+}
+
+/**
+ * A resource (image, font, CSS, etc.) with metadata and mutation support.
+ */
+export interface DocumentResource {
+    /** Unique resource ID */
+    readonly id: string
+    /** Resource type */
+    readonly type: 'image' | 'font' | 'css' | 'audio' | 'video'
+    /** MIME type */
+    readonly mimeType: string
+    /** URL or data URI */
+    readonly url: string
+    /** Load the resource data */
+    load?(): Promise<Blob | ArrayBuffer>
+    /** Replace the resource with new data */
+    replace?(data: Blob | ArrayBuffer): void
+}
+
+// ============================================================================
 // Metadata
 // ============================================================================
 
@@ -27,25 +98,25 @@ export type Contributor = string | {
  * Book metadata following a subset of Readium WebPub Manifest conventions.
  */
 export interface BookMetadata {
-    title?: LanguageMap
-    subtitle?: LanguageMap
-    author?: Contributor | Contributor[]
-    editor?: Contributor | Contributor[]
-    translator?: Contributor | Contributor[]
-    illustrator?: Contributor | Contributor[]
-    narrator?: Contributor | Contributor[]
-    contributor?: Contributor | Contributor[]
-    publisher?: Contributor | LanguageMap
-    published?: string
-    modified?: string
-    language?: string | string[]
-    description?: string
-    subject?: string | string[]
-    identifier?: string
-    rights?: string
-    belongsTo?: {
-        series?: { name: LanguageMap; position?: string; total?: string }
-        collection?: { name: LanguageMap }
+    readonly title?: LanguageMap
+    readonly subtitle?: LanguageMap
+    readonly author?: Contributor | Contributor[]
+    readonly editor?: Contributor | Contributor[]
+    readonly translator?: Contributor | Contributor[]
+    readonly illustrator?: Contributor | Contributor[]
+    readonly narrator?: Contributor | Contributor[]
+    readonly contributor?: Contributor | Contributor[]
+    readonly publisher?: Contributor | LanguageMap
+    readonly published?: string
+    readonly modified?: string
+    readonly language?: string | string[]
+    readonly description?: string
+    readonly subject?: string | string[]
+    readonly identifier?: string
+    readonly rights?: string
+    readonly belongsTo?: {
+        readonly series?: { readonly name: LanguageMap; readonly position?: string; readonly total?: string }
+        readonly collection?: { readonly name: LanguageMap }
     }
     [key: string]: unknown
 }
@@ -59,20 +130,20 @@ export interface BookMetadata {
  */
 export interface TOCItem {
     /** Display label */
-    label: string
+    readonly label: string
     /** Navigation target (href string) */
-    href: string
+    readonly href: string
     /** Nested items */
-    subitems?: TOCItem[]
+    readonly subitems?: readonly TOCItem[]
 }
 
 /**
  * A landmark entry (e.g. cover, TOC, bodymatter).
  */
 export interface Landmark {
-    label: string
-    href: string
-    type: string[]
+    readonly label: string
+    readonly href: string
+    readonly type: readonly string[]
 }
 
 // ============================================================================
@@ -98,7 +169,7 @@ export type SectionFormat = 'xhtml' | 'html' | 'image'
  */
 export interface Section {
     /** Unique identifier for this section (used as Map key) */
-    id: string | number
+    readonly id: string | number
     /**
      * Load the section and return content as a string.
      * - For 'xhtml'/'html' format: returns HTML/XHTML string (may contain blob URLs for embedded resources)
@@ -110,7 +181,7 @@ export interface Section {
      * Content format. Determines how the renderer should handle the content.
      * Default: 'xhtml'
      */
-    format?: SectionFormat
+    readonly format?: SectionFormat
     /**
      * Optional: free resources when the section is unloaded.
      */
@@ -121,18 +192,24 @@ export interface Section {
      */
     createDocument?(): Promise<string> | string
     /**
+     * Optional: return structured document model for AI-friendly manipulation.
+     * Lazily parses HTML/XHTML into a tree structure with query and mutation APIs.
+     * Returns null if the section format doesn't support document model (e.g., 'image').
+     */
+    getDocument?(): Promise<SectionDocument | null>
+    /**
      * Optional: raw text content for searching.
      */
     loadText?(): Promise<string> | string
     /** Byte size of the section (for progress calculation) */
-    size: number
+    readonly size: number
     /**
      * Linear reading sequence flag.
      * "no" means this section is not part of the main reading flow.
      */
-    linear?: string
+    readonly linear?: string
     /** Base CFI string for this section */
-    cfi?: string
+    readonly cfi?: string
     /** Resolve an href relative to this section */
     resolveHref?(href: string): string
 }
@@ -146,15 +223,15 @@ export interface Section {
  */
 export interface ResolvedNavigation {
     /** Index of the target section in book.sections */
-    index: number
+    readonly index: number
     /**
      * A function that, given a document (renderer-specific), returns the target element/range.
      * Can also be a number (offset) or an element directly.
      * The doc parameter is opaque to the parser; the renderer provides its live DOM.
      */
-    anchor?: ((doc: unknown) => unknown) | number | unknown
+    readonly anchor?: ((doc: unknown) => unknown) | number | unknown
     /** Whether to select/highlight the target */
-    select?: boolean
+    readonly select?: boolean
 }
 
 // ============================================================================
@@ -165,10 +242,10 @@ export interface ResolvedNavigation {
  * Rendition hints from the book.
  */
 export interface Rendition {
-    layout?: 'reflowable' | 'pre-paginated'
-    flow?: 'paginated' | 'scrolled'
-    spread?: 'none' | 'auto' | 'landscape'
-    orientation?: 'auto' | 'landscape' | 'portrait'
+    readonly layout?: 'reflowable' | 'pre-paginated'
+    readonly flow?: 'paginated' | 'scrolled'
+    readonly spread?: 'none' | 'auto' | 'landscape'
+    readonly orientation?: 'auto' | 'landscape' | 'portrait'
 }
 
 // ============================================================================
@@ -182,25 +259,25 @@ export interface Rendition {
  */
 export interface Book {
     /** The ordered list of sections (chapters) in the book */
-    sections: Section[]
+    readonly sections: readonly Section[]
 
     /** Page progression direction */
-    dir?: 'ltr' | 'rtl'
+    readonly dir?: 'ltr' | 'rtl'
 
     /** Table of contents */
-    toc?: TOCItem[]
+    readonly toc?: readonly TOCItem[]
 
     /** Page list (for page-based navigation) */
-    pageList?: TOCItem[]
+    readonly pageList?: readonly TOCItem[]
 
     /** Landmarks (cover, TOC, bodymatter, etc.) */
-    landmarks?: Landmark[]
+    readonly landmarks?: readonly Landmark[]
 
     /** Book metadata */
-    metadata?: BookMetadata
+    readonly metadata?: BookMetadata
 
     /** Rendition hints */
-    rendition?: Rendition
+    readonly rendition?: Rendition
 
     /**
      * Resolve an href string to a navigation target.

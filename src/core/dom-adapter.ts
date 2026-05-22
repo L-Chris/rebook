@@ -19,13 +19,38 @@ export interface XMLAttr {
 }
 
 /**
+ * Node type constants (matching DOM spec).
+ */
+export const NodeType = {
+  ELEMENT_NODE: 1,
+  TEXT_NODE: 3,
+} as const
+
+/**
+ * Minimal node interface (base for elements and text).
+ */
+export interface XMLNode {
+  nodeType: number
+  textContent: string | null
+  parentNode: XMLElement | null
+}
+
+/**
+ * Minimal text node interface.
+ */
+export interface XMLText extends XMLNode {
+  nodeType: typeof NodeType.TEXT_NODE
+  textContent: string
+}
+
+/**
  * Minimal element interface for XML/HTML querying.
  */
-export interface XMLElement {
+export interface XMLElement extends XMLNode {
+  nodeType: typeof NodeType.ELEMENT_NODE
   localName: string
   namespaceURI: string | null
   children: XMLElement[]
-  textContent: string | null
   attributes: XMLAttr[]
 
   getAttribute(name: string): string | null
@@ -84,4 +109,34 @@ export interface DOMAdapter {
    * Serialize a document back to a string.
    */
   serialize(doc: XMLDocument): string
+
+  /**
+   * Get all child nodes (elements and text nodes) of an element.
+   * Optional: used by Document Model for tree traversal.
+   */
+  getChildNodes?(element: XMLElement): XMLNode[]
+
+  /**
+   * Create an empty HTML document.
+   * Optional: used by Document Model for mutation.
+   */
+  createDocument?(): XMLDocument
+
+  /**
+   * Create an element node.
+   * Optional: used by Document Model for mutation.
+   */
+  createElement?(doc: XMLDocument, tagName: string): XMLElement
+
+  /**
+   * Create a text node.
+   * Optional: used by Document Model for mutation.
+   */
+  createTextNode?(doc: XMLDocument, text: string): XMLText
+
+  /**
+   * Append a child node to a parent element.
+   * Optional: used by Document Model for mutation.
+   */
+  appendChild?(parent: XMLElement, child: XMLNode): void
 }
