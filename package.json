@@ -60,6 +60,7 @@
     "vitest": "^4.1.7"
   },
   "dependencies": {
+    "@chenglou/pretext": "^0.0.7",
     "@zip.js/zip.js": "^2.7.52",
     "fflate": "^0.8.3"
   }

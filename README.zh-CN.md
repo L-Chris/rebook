@@ -12,8 +12,9 @@
 - **TypeScript**：完整的类型安全，提供全面的接口定义
 - **多格式支持**：EPUB 2.x/3.x、MOBI/AZW/AZW3、FictionBook 2、CBZ
 - **AI 友好的文档模型**：受 SlateJS 启发的树形结构，提供查询和修改 API，支持内容操作（翻译、标注、重构）
+- **Pretext 排版管线**：EPUB 章节可输出带样式文本片段，支持一次测量、多次纯内存行切片
 - **环境无关的解析器**：所有解析器通过适配器注入，可在浏览器、Node.js 或 Worker 中运行
-- **浏览器渲染器**：支持分页和滚动两种阅读模式，宽屏自动切换双页布局
+- **浏览器渲染器**：默认使用 AST/Pretext 虚拟文本渲染器，并保留旧 iframe 分页渲染器作为 fallback
 - **畸形 EPUB 容错**：多层回退策略处理损坏的 zip 归档
 - **框架无关**：核心库兼容任意框架；React/Vue 封装计划中
 
@@ -47,15 +48,13 @@ registry.register('mobi', mobi)
 registry.register('fb2', fb2)
 registry.register('cbz', cbz)
 
-// 创建阅读器（启用自动双页布局）
+// 创建阅读器（默认使用虚拟文本渲染器）
 const reader = createReader({
     container: document.getElementById('viewer')!,
-    layout: 'paginated',
-    maxColumnCount: 2, // 宽屏时显示两页并排（默认值：2）
     styles: {
-        fontSize: '16px',
-        maxInlineSize: '720px', // 每页最大宽度
-        gap: '48px', // 页间距
+        fontSize: '18px',
+        lineHeight: 1.7,
+        maxInlineSize: '720px',
     },
 })
 
@@ -64,20 +63,17 @@ const book = await reader.open(file)
 await reader.next()
 await reader.goTo('/path/to/chapter.xhtml#section')
 
-// 运行时控制布局
-reader.setSpread(2) // 启用自动双页（宽屏显示两页）
-reader.setSpread(1) // 强制单页
+// 需要保留 EPUB CSS/iframe 分页时，可以显式切回旧渲染器
+const iframeReader = createReader({ container, renderer: 'iframe', layout: 'paginated' })
 ```
 
-### 自动双页布局
+### 浏览器渲染
 
-在分页模式下，当容器足够宽时，渲染器会自动并排显示两页：
+`createReader()` 默认使用 `VirtualTextRenderer`。它会把 XHTML 解析成结构化阅读块（`chapter`、`heading`、`paragraph`、`listItem`、`blockquote`、`pre`），套用适合中英文阅读的预设文本样式，用 Pretext 做测量和行切片，然后只渲染可视区行。
 
-- **容器宽度 ≥ 2 × `maxInlineSize` + `gap`**：显示 2 页（双页）
-- **容器宽度 < 2 × `maxInlineSize` + `gap`**：显示 1 页（单页）
-- **窗口缩放**：自动在双页和单页之间切换
+在 `paginated` 布局下，滚轮和 `next()` / `prev()` 会按视口高度翻页，不再自由垂直漂移。宽屏时支持自动双列阅读：当可用宽度能容纳 `2 × maxInlineSize + gap` 时，可视行会分布到左右两列，并保留页内上下留白，避免文字贴到裁切边缘。`reader.setSpread(1)` 强制单列，`reader.setSpread(2)` 恢复自动双列。
 
-`maxColumnCount` 配置选项（默认值：`2`）控制最多显示的页数。设为 `1` 始终使用单页布局。
+设置 `renderer: 'iframe'` 可以使用旧 iframe 渲染器，保留 EPUB CSS 和自动双页分页。
 
 ## 文档模型（AI 友好）
 
@@ -104,9 +100,29 @@ const html = newDoc.serialize()
 
 支持 AI 驱动的工作流：翻译、内容摘要、标注、无障碍增强、布局适配等。详见 [API 参考](./docs/API.md#document-model)。
 
+## Pretext 行布局
+
+需要快速调整样式或做虚拟列表渲染时，可以从 EPUB 章节直接取得结构块和样式片段，先离屏测量一次，再在视口变化或字体缩放时只做内存中的行切片：
+
+```typescript
+import { prepareBlocks, layout, getVisibleLines } from 'ebook-js'
+
+const blocks = await book.sections[0].getBlocks!()
+const prepared = prepareBlocks(blocks, {
+    baseStyle: { fontSize: 18, lineHeight: 1.6 },
+})
+
+const lines = layout(prepared, { inlineSize: 680, lineHeight: 32 })
+const visible = getVisibleLines(lines, scrollTop, viewportHeight)
+```
+
+`prepare()` 内部使用 `@chenglou/pretext` 做一次性 Canvas 测量，`layout()` 遍历 Pretext 行范围并映射回 EPUB 的 segment/style 来源。输出的 `LineRange` 包含文本片段范围、宽度和行位置，虚拟列表或 Canvas 渲染器可以只渲染可视区内容。
+
+浏览器包也导出了 `VirtualTextRenderer` / `createVirtualTextRenderer`，它基于这条管线只把可视行渲染为简单 DOM spans。
+
 ## 文档
 
-- [**API 参考**](./docs/API.md) — 完整 API 文档：解析器、渲染器、适配器、文档模型、错误类型、元数据标准化
+- [**API 参考**](./docs/API.md) — 完整 API 文档：解析器、渲染器、适配器、文档模型、Pretext 布局、错误类型、元数据标准化
 - [**架构设计**](./docs/ARCHITECTURE.md) — 设计决策、解析器/渲染器分离、适配器系统、跨平台渲染
 - [**经验总结**](./docs/EXPERIENCE.md) — AI 友好设计理念、SlateJS 模式借鉴、畸形 EPUB 处理、性能注意事项
 

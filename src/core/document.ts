@@ -100,9 +100,11 @@ export function parseHTML(html: string, domAdapter: DOMAdapter): DocumentNode[] 
     // Wrap fragment in full HTML document for consistent parsing across adapters.
     // xmldom (test adapter) doesn't auto-wrap fragments in <html><body> the way
     // browser DOMParser does, so we do it explicitly.
-    const wrapped = `<html><body>${html}</body></html>`
-    const doc = domAdapter.parseHTML(wrapped, 'text/html')
-    const body = doc.querySelector('body') || doc.documentElement
+    const cleaned = html.replace(/^\uFEFF/, '').replace(/<\?xml[^>]*\?>/gi, '')
+    const isFullDocument = /^\s*(<!DOCTYPE|<html[\s>])/i.test(cleaned)
+    const source = isFullDocument ? cleaned : `<html><body>${cleaned}</body></html>`
+    const doc = domAdapter.parseHTML(source, 'text/html')
+    const body = doc.querySelector('body') || doc.getElementsByTagName('body')[0] || doc.documentElement
 
     const nodes: DocumentNode[] = []
 

@@ -12,8 +12,9 @@ Inspired by [foliate-js](https://github.com/johnfactotum/foliate-js), but restru
 - **TypeScript**: Full type safety with comprehensive interfaces
 - **Multi-format support**: EPUB 2.x/3.x, MOBI/AZW/AZW3, FictionBook 2, and CBZ
 - **AI-friendly Document Model**: SlateJS-inspired tree structure with query and mutation APIs for content manipulation (translation, annotation, restructuring)
+- **Pretext layout pipeline**: EPUB sections can expose styled text segments for one-time measurement and pure in-memory line slicing
 - **Environment-agnostic parsers**: All parsers run in browser, Node.js, or workers via adapter injection
-- **Browser renderer**: Paginated and scrolled reading modes with auto-spread (two-page layout on wide screens)
+- **Browser renderer**: Default AST/Pretext virtual text renderer with a legacy iframe paginator fallback
 - **Malformed EPUB recovery**: Multi-layer fallback for broken zip archives
 - **Framework-agnostic**: Core library works with any framework; React/Vue wrappers coming
 
@@ -47,15 +48,13 @@ registry.register('mobi', mobi)
 registry.register('fb2', fb2)
 registry.register('cbz', cbz)
 
-// Create reader with auto-spread enabled (default)
+// Create reader with the default virtual text renderer
 const reader = createReader({
     container: document.getElementById('viewer')!,
-    layout: 'paginated',
-    maxColumnCount: 2, // Enable two-page spread on wide screens (default: 2)
     styles: {
-        fontSize: '16px',
-        maxInlineSize: '720px', // Max width per page
-        gap: '48px', // Gap between pages
+        fontSize: '18px',
+        lineHeight: 1.7,
+        maxInlineSize: '720px',
     },
 })
 
@@ -64,20 +63,17 @@ const book = await reader.open(file)
 await reader.next()
 await reader.goTo('/path/to/chapter.xhtml#section')
 
-// Control spread at runtime
-reader.setSpread(2) // Enable auto-spread (2 pages on wide screens)
-reader.setSpread(1) // Force single page
+// Opt into the legacy iframe paginator when you need EPUB CSS fidelity
+const iframeReader = createReader({ container, renderer: 'iframe', layout: 'paginated' })
 ```
 
-### Auto-Spread Layout
+### Browser Rendering
 
-In paginated mode, the renderer uses a grid-sized page window and automatically displays two pages side-by-side when the container is wide enough:
+`createReader()` uses `VirtualTextRenderer` by default. It parses XHTML into structural reading blocks (`chapter`, `heading`, `paragraph`, `listItem`, `blockquote`, `pre`), applies preset Chinese/English-friendly text styles, uses Pretext for measurement/layout, and renders only the visible line rows.
 
-- **Container width ≥ 2 × `maxInlineSize` + `gap`**: Shows 2 pages (spread)
-- **Container width < 2 × `maxInlineSize` + `gap`**: Shows 1 page (single)
-- **Resizing**: Recomputes the grid span and switches between spread and single-page
+In `paginated` layout, wheel and `next()` / `prev()` turn viewport-height pages instead of allowing free vertical drift. On wide containers it supports auto-spread two-column reading: when the available width fits `2 × maxInlineSize + gap`, visible rows are flowed into left and right columns with page padding so text does not touch the clipped edge. `reader.setSpread(1)` forces single column, and `reader.setSpread(2)` restores auto-spread.
 
-The `maxColumnCount` config option (default: `2`) controls the maximum number of visible pages. Set to `1` to always use single-page layout.
+Set `renderer: 'iframe'` to use the legacy iframe renderer with EPUB CSS and auto-spread pagination.
 
 ## Document Model (AI-friendly)
 
@@ -104,9 +100,29 @@ const html = newDoc.serialize()
 
 This enables AI-powered workflows: translation, content summarization, annotation, accessibility enhancement, layout adaptation, and more. See [API Reference](./docs/API.md#document-model) for details.
 
+## Pretext Line Layout
+
+For renderers that need fast style changes or virtualized text, EPUB sections expose structural blocks and styled segments that can be measured once and laid out repeatedly without reflowing a full chapter DOM:
+
+```typescript
+import { prepare, layout, getVisibleLines } from 'ebook-js'
+
+const blocks = await book.sections[0].getBlocks!()
+const prepared = prepareBlocks(blocks, {
+    baseStyle: { fontSize: 18, lineHeight: 1.6 },
+})
+
+const lines = layout(prepared, { inlineSize: 680, lineHeight: 32 })
+const visible = getVisibleLines(lines, scrollTop, viewportHeight)
+```
+
+`prepare()` delegates to `@chenglou/pretext` for one-time Canvas measurement, while `layout()` walks Pretext line ranges and maps every visible fragment back to its EPUB segment/style source. The resulting `LineRange` objects can feed a virtual list or Canvas renderer while keeping the live DOM minimal.
+
+The browser package also exports `VirtualTextRenderer` / `createVirtualTextRenderer`, which uses this pipeline to render only visible line rows as simple DOM spans.
+
 ## Documentation
 
-- [**API Reference**](./docs/API.md) — Full API documentation: parsers, renderer, adapters, Document Model, error types, metadata normalization
+- [**API Reference**](./docs/API.md) — Full API documentation: parsers, renderer, adapters, Document Model, Pretext layout, error types, metadata normalization
 - [**Architecture**](./docs/ARCHITECTURE.md) — Design decisions, parser/renderer separation, adapter system, cross-platform rendering
 - [**Experience & Lessons**](./docs/EXPERIENCE.md) — AI-friendly design rationale, SlateJS patterns, malformed EPUB handling, performance notes
 

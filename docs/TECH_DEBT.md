@@ -220,15 +220,19 @@ Improve when:
 
 ### Description
 
-`BrowserRenderer` is functional but lacks advanced features:
+The browser renderers are functional but intentionally limited:
 
-- ✅ Pagination (CSS columns)
-- ✅ Scrolling mode
+- ✅ Legacy iframe pagination (CSS columns)
+- ✅ Virtual text pagination and scrolling
+- ✅ Virtual text two-column auto-spread
 - ✅ Basic styling (font, colors)
+- ✅ AST-derived text blocks for common Chinese/English reflowable EPUBs
 - ⏳ Annotations (highlight, notes) — Not started
 - ⏳ Search (find in book) — Not started
 - ⏳ Accessibility (screen reader support) — Not started
-- ⏳ Custom themes (user-defined CSS) — Partially supported
+- ⏳ Arbitrary EPUB CSS fidelity in virtual text mode — Out of scope; use iframe renderer
+- ⏳ Images/tables/ruby/footnotes in virtual text mode — Partial or not modeled yet
+- ⏳ Custom themes (user-defined CSS) — Partially supported in iframe, preset styles in virtual text
 - ⏳ Progress sync (cross-device) — Not started
 
 ### Why Not Implement Now?
@@ -236,6 +240,7 @@ Improve when:
 1. **Core library focus**: ebook-js is a parsing/rendering foundation, not a full reader
 2. **Application-specific**: Annotations, search, and themes vary by use case
 3. **Resource constraints**: Limited development time
+4. **Renderer split is deliberate**: Virtual text optimizes predictable typography and small DOM; iframe optimizes EPUB CSS fidelity
 
 ### Future Implementation
 
@@ -266,6 +271,7 @@ Implement when:
 1. **User demand**: Multiple users request specific features
 2. **Reference implementation**: Building a demo reader app
 3. **Partnership**: Collaborating with a reading app developer
+4. **Block model extension**: Add explicit `image`, `table`, `ruby`, and `footnote` blocks before trying to emulate arbitrary EPUB CSS
 
 ---
 

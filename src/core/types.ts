@@ -75,6 +75,57 @@ export interface DocumentResource {
 }
 
 // ============================================================================
+// Text Blocks (normalized reading model)
+// ============================================================================
+
+/**
+ * Preset inline text style used by the virtual text rendering pipeline.
+ * This is intentionally smaller than CSS: it captures the portable subset
+ * needed for Pretext measurement and DOM/Canvas rendering.
+ */
+export interface TextStyle {
+    fontFamily?: string
+    fontSize?: number
+    fontWeight?: string
+    fontStyle?: string
+    fontVariant?: string
+    lineHeight?: number
+    color?: string
+    textDecoration?: string
+    letterSpacing?: number
+}
+
+/**
+ * A contiguous inline text fragment with optional style metadata.
+ */
+export interface TextSegment {
+    text: string
+    style?: TextStyle
+    break?: 'normal' | 'never'
+    extraWidth?: number
+    source?: {
+        nodeType?: string
+        attrs?: Readonly<Record<string, string>>
+    }
+}
+
+/**
+ * Normalized reading block extracted from the HTML AST.
+ */
+export type TextBlockType = 'container' | 'chapter' | 'heading' | 'paragraph' | 'listItem' | 'blockquote' | 'pre'
+
+export interface TextBlock {
+    id: string
+    type: TextBlockType
+    depth?: number
+    attrs?: Readonly<Record<string, string>>
+    style?: TextStyle
+    blockGapBefore?: number
+    blockGapAfter?: number
+    segments: readonly TextSegment[]
+}
+
+// ============================================================================
 // Metadata
 // ============================================================================
 
@@ -197,6 +248,18 @@ export interface Section {
      * Returns null if the section format doesn't support document model (e.g., 'image').
      */
     getDocument?(): Promise<SectionDocument | null>
+    /**
+     * Optional: return text/style segments for pre-measured layout engines.
+     * This is useful for renderers that avoid full chapter DOM layout and
+     * instead virtualize line ranges or paint text on Canvas.
+     */
+    getSegments?(): Promise<TextSegment[]> | TextSegment[]
+    /**
+     * Optional: return AST-derived structural blocks for preset text rendering.
+     * A block is a normalized chapter heading, paragraph, list item, quote, or
+     * similar reading unit with inline text/style segments.
+     */
+    getBlocks?(): Promise<TextBlock[]> | TextBlock[]
     /**
      * Optional: raw text content for searching.
      */

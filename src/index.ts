@@ -46,7 +46,23 @@ export type {
     DocumentNode,
     SectionDocument,
     DocumentResource,
+    TextStyle,
+    TextSegment,
+    TextBlock,
+    TextBlockType,
 } from './core/types'
+
+export type {
+    PreparedTextBlock,
+    PreparedText,
+    PrepareOptions,
+    LayoutOptions,
+    LinePosition,
+    LineSegmentRange,
+    LineRange,
+    VisibleLineWindow,
+    PretextRichInlineLineRange,
+} from './core/pretext'
 
 export type {
     Parser,
@@ -118,6 +134,15 @@ export {
     isElementNode,
 } from './core/document'
 
+export {
+    extractDocumentBlocks,
+    extractDocumentSegments,
+    prepare,
+    prepareBlocks,
+    layout,
+    getVisibleLines,
+} from './core/pretext'
+
 // Parsers
 export { epub, EPUBParser } from './parsers/epub'
 export { cbz, CBZParser } from './parsers/cbz'
@@ -134,6 +159,8 @@ export { SectionProgress, TOCProgress } from './utils/progress'
 export {
     BrowserRenderer,
     createBrowserRenderer,
+    VirtualTextRenderer,
+    createVirtualTextRenderer,
     ReaderView,
     createReader,
 } from './renderers/browser'

@@ -269,8 +269,12 @@
         <button id="btn-sidebar" title="Toggle sidebar">☰</button>
         <h1 id="book-title">ebook-js Demo</h1>
         <div class="controls">
+            <select id="renderer-select">
+                <option value="virtual-text" selected>Virtual Text</option>
+                <option value="iframe">Iframe</option>
+            </select>
             <select id="layout-select">
-                <option value="paginated">Paginated</option>
+                <option value="paginated" selected>Paginated</option>
                 <option value="scrolled">Scrolled</option>
             </select>
             <select id="spread-select">
@@ -375,6 +379,7 @@
         const sidebar = document.getElementById('sidebar')
         const tocList = document.getElementById('toc-list')
         const bookTitle = document.getElementById('book-title')
+        const rendererSelect = document.getElementById('renderer-select')
         const layoutSelect = document.getElementById('layout-select')
         const spreadSelect = document.getElementById('spread-select')
         const fontSizeSelect = document.getElementById('font-size-select')
@@ -385,8 +390,32 @@
         const progressFill = document.getElementById('progress-fill')
         const progressText = document.getElementById('progress-text')
 
-        // Create reader with adapter options
-        const reader = createReader({ container: viewer, ...parserOptions })
+        let currentFile = null
+        let reader = createDemoReader()
+
+        function createDemoReader() {
+            return createReader({
+                container: viewer,
+                renderer: rendererSelect.value,
+                layout: layoutSelect.value,
+                maxColumnCount: Number(spreadSelect.value),
+                parserOptions,
+                styles: {
+                    fontSize: fontSizeSelect.value,
+                    lineHeight: 1.7,
+                    maxInlineSize: '720px',
+                    margin: '32px',
+                },
+            })
+        }
+
+        async function recreateReader() {
+            reader.destroy()
+            viewer.textContent = ''
+            reader = createDemoReader()
+            wireReaderEvents()
+            if (currentFile) await openFile(currentFile, { preserveFile: true })
+        }
 
         // Format helpers
         const formatLanguageMap = x => {
@@ -424,8 +453,9 @@
         }
 
         // Open a file
-        const openFile = async (file) => {
+        const openFile = async (file, options = {}) => {
             try {
+                if (!options.preserveFile) currentFile = file
                 dropTarget.classList.add('hidden')
 
                 // Detect FB2 files and apply default styles
@@ -484,6 +514,10 @@
             reader.setLayout(e.target.value)
         })
 
+        rendererSelect.addEventListener('change', () => {
+            recreateReader()
+        })
+
         spreadSelect.addEventListener('change', (e) => {
             reader.setSpread(Number(e.target.value))
         })
@@ -518,21 +552,24 @@
             else if (e.key === 'ArrowRight' || e.key === 'l') reader.goRight()
         })
 
-        // Reader events
-        reader.on('relocate', (e) => {
-            const percent = Math.round((e.totalFraction ?? 0) * 100)
-            progressFill.style.width = `${percent}%`
-            progressText.textContent = `${percent}%`
+        function wireReaderEvents() {
+            reader.on('relocate', (e) => {
+                const percent = Math.round((e.totalFraction ?? 0) * 100)
+                progressFill.style.width = `${percent}%`
+                progressText.textContent = `${percent}%`
 
-            // Highlight current TOC item
-            // (simplified - could be improved)
-        })
+                // Highlight current TOC item
+                // (simplified - could be improved)
+            })
 
-        reader.on('link', (e) => {
-            if (e.external) {
-                window.open(e.href, '_blank')
-            }
-        })
+            reader.on('link', (e) => {
+                if (e.external) {
+                    window.open(e.href, '_blank')
+                }
+            })
+        }
+
+        wireReaderEvents()
 
         // Drag and drop
         dropTarget.addEventListener('dragover', (e) => {

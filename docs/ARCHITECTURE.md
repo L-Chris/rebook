@@ -69,6 +69,7 @@ Parsers produce a `Book`, renderers consume it. Neither knows about the other.
 | Platform | Renderer | Content Pipeline |
 |----------|----------|------------------|
 | Web browser | `BrowserRenderer` | String → HTML document → blob URL → iframe |
+| Virtual text / Canvas | (custom) | XHTML AST → styled segments → `@chenglou/pretext` prepare/layout → visible line ranges |
 | WeChat Mini Program | (planned) | String → WXML → `<rich-text>` |
 | React Native | (planned) | String → WebView |
 | Node.js / SSR | (custom) | String → text extraction or static HTML |
@@ -87,6 +88,39 @@ switch (section.format) {
 ```
 
 ## Browser Renderer Architecture
+
+`createReader()` defaults to `VirtualTextRenderer`. The legacy iframe paginator remains available through `createReader({ renderer: 'iframe' })` or direct `BrowserRenderer` usage.
+
+### Virtual Text Renderer
+
+`VirtualTextRenderer` is the 80/20 browser path for reflowable Chinese/English EPUB text. It ignores arbitrary EPUB page CSS, extracts reading-oriented objects from the HTML AST, and re-renders with preset typography:
+
+- `chapter` from `h1`
+- `heading` from `h2`-`h6`
+- `paragraph` from `p` and loose text
+- `listItem` from `li`
+- `blockquote` from `blockquote`
+- `pre` from `pre`
+
+The live DOM contains only visible line rows and inline spans. Block identity is preserved on rows via `data-block-id` and `data-block-type`.
+
+For wide viewports in `paginated` mode, the same line list is projected into two columns. The renderer computes one Pretext line flow for the selected column width, then maps source line `top` offsets into `(page, column)` coordinates by page inner height. Page mode hides free scrolling and turns pages via wheel/`next()`/`prev()`, with top/bottom page padding to prevent clipped edge text. This keeps line measurement single-pass while allowing `setSpread(1)` / `setSpread(2)` to switch between single-column and auto-spread layouts.
+
+### Text Block Boundary
+
+`TextBlock`, `TextSegment`, and `TextStyle` live in `src/core/types.ts` because they are part of the parser-renderer contract. The Pretext module is deliberately only an adapter:
+
+- `extractDocumentBlocks()` maps `DocumentNode[]` to normalized reading blocks
+- `prepareBlocks()` maps blocks to Pretext rich-inline prepared state
+- `layout()` maps Pretext line ranges back to `LineRange[]`
+
+This avoids making the core `Section` interface depend on a concrete rendering adapter and keeps future Canvas, SVG, or native renderers able to consume the same block model.
+
+### Renderer Lifecycle
+
+`ReaderView` owns renderer instances. Opening a new book destroys and recreates the renderer so stale DOM, scroll listeners, and pending async section loads cannot leak between books. `VirtualTextRenderer` also tags async section loads with an internal version so a destroyed or superseded load cannot write into the active renderer state.
+
+### Legacy Iframe Paginator
 
 The `BrowserRenderer` uses CSS Grid sizing around iframe content to achieve paginated reading.
 
@@ -170,6 +204,32 @@ interface DOMAdapter {
 ```
 
 The optional methods enable Document Model serialization back to HTML. If not provided, `serialize()` falls back to string-based HTML generation.
+
+## Pretext Segment Layout
+
+The Pretext path is a separate rendering pipeline for EPUB text that needs fast style changes, font scaling, or virtualized display:
+
+```
+EPUB zip
+  → XHTML string
+  → DocumentNode AST
+  → TextBlock[] (chapter/heading/paragraph/listItem/blockquote/pre)
+  → TextSegment[] with inline style metadata
+  → @chenglou/pretext prepareRichInline() for one-time Canvas measurement
+  → @chenglou/pretext line range walking for width changes
+  → ebook-js LineRange[] with source segment/style mapping
+  → virtual DOM rows, Canvas, SVG, or WebGL
+```
+
+ebook-js does not implement the text measurement or Unicode line-breaking engine. That responsibility belongs to `@chenglou/pretext`. The local `src/core/pretext.ts` module is an adapter that:
+
+- extracts structural reading blocks and text/style segments from `DocumentNode`
+- converts each segment into a Pretext rich-inline item with a Canvas font string
+- applies preset block typography for Chinese/English text
+- maps Pretext line fragments back to the source EPUB segment index and style
+- computes visible line windows for virtualized renderers
+
+The iframe `BrowserRenderer` remains compatible as an explicit fallback for fixed-layout, image-heavy, or EPUB-CSS-sensitive books.
 
 ### URLFactory responsibilities
 
@@ -295,6 +355,7 @@ src/
 │   ├── parser.ts       # Parser interface and registry
 │   ├── renderer.ts     # Renderer interface
 │   ├── document.ts     # Document Model implementation
+│   ├── pretext.ts      # TextBlock extraction and Pretext adapter
 │   ├── dom-adapter.ts  # DOMAdapter interface
 │   ├── url-factory.ts  # URLFactory interface
 │   ├── errors.ts       # Error hierarchy
@@ -313,6 +374,7 @@ src/
 ├── renderers/
 │   └── browser/        # Browser renderer
 │       ├── paginator.ts
+│       ├── virtual-text.ts # Pretext-backed virtual line renderer
 │       └── view.ts     # ReaderView high-level API
 └── utils/
     └── progress.ts     # Progress tracking
@@ -321,6 +383,7 @@ tests/
 ├── fixtures/           # Test file generators (EPUB, MOBI, FB2, CBZ)
 ├── loaders/            # Zip loader tests
 ├── parsers/            # Parser tests
+├── renderers/          # Renderer tests
 ├── utils/              # Utility tests
 └── document.test.ts    # Document Model tests
 ```

@@ -9,6 +9,7 @@ Complete API documentation for ebook-js.
 - [Book](#book)
 - [Section](#section)
 - [Document Model](#document-model)
+- [Pretext Layout](#pretext-layout)
 - [Parser Interface](#parser-interface)
 - [Renderer Interface](#renderer-interface)
 - [Adapter System](#adapter-system)
@@ -69,19 +70,16 @@ import { createReader } from 'ebook-js'
 
 const reader = createReader({
     container: document.getElementById('viewer')!,
-    layout: 'paginated', // or 'scrolled'
-    maxColumnCount: 2,   // Max visible pages (1 = single, 2 = auto-spread)
+    renderer: 'virtual-text', // default; use 'iframe' for the legacy paginator
     styles: {
-        fontFamily: 'Georgia, serif',
-        fontSize: '16px',
-        lineHeight: 1.6,
-        textAlign: 'justify',
-        hyphenate: true,
-        maxInlineSize: '720px', // Max page width
-        gap: '48px',            // Gap between pages
+        fontSize: '18px',
+        lineHeight: 1.7,
+        maxInlineSize: '720px',
     },
 })
 ```
+
+The default browser backend is `VirtualTextRenderer`: XHTML AST → structural blocks → preset styles → Pretext line ranges → visible DOM rows. Use `renderer: 'iframe'` when you need the legacy iframe/CSS paginator.
 
 ### Opening
 
@@ -114,7 +112,7 @@ reader.setSpread(1) // Force single page
 
 #### Auto-Spread Layout
 
-In paginated mode, the renderer uses a grid-sized page window and automatically displays two pages side-by-side when the container is wide enough:
+In the default virtual text renderer, wide containers display two text columns side-by-side using the Pretext line list. The legacy iframe renderer uses its CSS-grid page window for the same `setSpread()` API.
 
 - **Container width ≥ 2 × `maxInlineSize` + `gap`**: Shows 2 pages (spread)
 - **Container width < 2 × `maxInlineSize` + `gap`**: Shows 1 page (single)
@@ -243,6 +241,8 @@ interface Section {
     load(): Promise<string> | string       // Returns content string
     unload?(): void                        // Free cached resources
     getDocument?(): Promise<SectionDocument | null>  // AI-friendly doc tree
+    getSegments?(): Promise<TextSegment[]> | TextSegment[]  // Styled text segments
+    getBlocks?(): Promise<TextBlock[]> | TextBlock[]         // Structural reading blocks
     createDocument?(): Promise<string>     // Raw HTML string for searching
 }
 ```
@@ -256,6 +256,14 @@ Returns a **content string** — the renderer decides how to display it:
 ### `getDocument()`
 
 Returns a `SectionDocument` with query and mutation APIs. Returns `null` for formats without document structure (e.g., `'image'`). See [Document Model](#document-model).
+
+### `getSegments()`
+
+Returns styled text fragments extracted from the parsed XHTML tree. EPUB sections use this as the input to the Pretext adapter so renderers can avoid full chapter DOM layout during font or viewport changes.
+
+### `getBlocks()`
+
+Returns AST-derived reading blocks such as `chapter`, `heading`, `paragraph`, `listItem`, `blockquote`, and `pre`. The virtual browser renderer uses these blocks as its primary input and applies preset styles instead of trusting arbitrary EPUB CSS.
 
 ---
 
@@ -408,6 +416,112 @@ The Document Model enables these AI-powered workflows:
 
 ---
 
+## Pretext Layout
+
+ebook-js integrates the community package `@chenglou/pretext` instead of implementing text measurement itself. The library extracts EPUB/XHTML structure into styled `TextSegment[]`, then delegates measurement and line breaking to Pretext.
+
+```typescript
+import { prepareBlocks, layout, getVisibleLines } from 'ebook-js'
+
+const blocks = await section.getBlocks!()
+const prepared = prepareBlocks(blocks, {
+    baseStyle: {
+        fontFamily: 'Georgia, serif',
+        fontSize: 18,
+        lineHeight: 1.6,
+    },
+})
+
+const lines = layout(prepared, {
+    inlineSize: 680,
+    lineHeight: 29,
+    blockGap: 8,
+})
+
+const visible = getVisibleLines(lines, scrollTop, viewportHeight, 2)
+```
+
+### `TextSegment`
+
+```typescript
+interface TextSegment {
+    text: string
+    style?: TextStyle
+    break?: 'normal' | 'never'
+    extraWidth?: number
+    source?: {
+        nodeType?: string
+        attrs?: Record<string, string>
+    }
+}
+```
+
+`extractDocumentSegments(nodes)` converts a `DocumentNode[]` tree into these segments, preserving inline style markers such as bold, italic, color, font size, and text decoration.
+
+### `TextBlock`
+
+```typescript
+type TextBlockType = 'container' | 'chapter' | 'heading' | 'paragraph' | 'listItem' | 'blockquote' | 'pre'
+
+interface TextBlock {
+    id: string
+    type: TextBlockType
+    depth?: number
+    attrs?: Record<string, string>
+    style?: TextStyle
+    blockGapBefore?: number
+    blockGapAfter?: number
+    segments: TextSegment[]
+}
+```
+
+These types are defined in the core parser-renderer contract, not inside the browser renderer. Any renderer can consume `section.getBlocks()` without depending on the Pretext adapter.
+
+### `prepareBlocks(blocks, options?)`
+
+Compiles structural reading blocks into Pretext rich-inline items. This is the preferred path for browser rendering because block type and depth drive preset styles and spacing.
+
+### `prepare(segments, options?)`
+
+Compiles segment text into Pretext rich-inline items. This is the expensive step because Pretext uses Canvas text measurement. Run it when the text or font changes, not on every resize.
+
+### `layout(prepared, options)`
+
+Runs the cheap layout step for a given inline size and line height. It returns `LineRange[]`:
+
+```typescript
+interface LineRange {
+    index: number
+    start: LinePosition | null
+    end: LinePosition | null
+    text: string
+    width: number
+    top: number
+    height: number
+    segments: LineSegmentRange[]
+}
+```
+
+Each `LineSegmentRange` maps a rendered fragment back to the original EPUB segment index and Pretext cursor range, which is the data a virtual list, Canvas renderer, or SVG renderer needs to render only visible lines.
+
+### `getVisibleLines(lines, scrollTop, viewportHeight, overscan?)`
+
+Returns a virtual window:
+
+```typescript
+{
+    startIndex: number
+    endIndex: number
+    offsetTop: number
+    totalHeight: number
+    lines: LineRange[]
+}
+```
+
+This is intentionally framework-agnostic. React, Vue, Canvas, and custom renderers can consume the same line window.
+
+---
+
 ## Parser Interface
 
 ```typescript
@@ -493,13 +607,35 @@ renderer.setSpread(1) // Force single page
 
 #### `setSpread(maxColumns)`
 
-Controls the maximum number of visible columns (pages) in paginated mode:
+Controls the maximum number of visible columns:
 
 - `1`: Always show single page
 - `2` (default): Auto-spread — show 2 pages when container width ≥ `2 × maxInlineSize + gap`
 - The renderer dynamically switches between 1 and 2 columns on resize
 
-In spread mode, navigation (`next()` / `prev()`) scrolls by the full visible width (2 pages + gap), and progress calculation accounts for the wider viewport.
+In virtual-text spread mode, rows are flowed into left and right columns per viewport-height group, and only visible rows from both columns are mounted.
+
+### Virtual Text Renderer
+
+`VirtualTextRenderer` consumes `section.getBlocks()`, Pretext prepared blocks, and `LineRange[]` to render only the visible text rows as simple DOM spans. It supports auto-spread two-column layout through `maxColumnCount`, `maxInlineSize`, `gap`, and `setSpread()`.
+
+```typescript
+import { createVirtualTextRenderer } from 'ebook-js'
+
+const renderer = createVirtualTextRenderer({
+    container: document.getElementById('viewer')!,
+    styles: {
+        fontSize: '18px',
+        lineHeight: 1.6,
+        maxInlineSize: '680px',
+    },
+})
+
+await renderer.open(book)
+await renderer.goTo(0)
+```
+
+In `paginated` mode, this renderer hides free scrolling, maps wheel/`next()`/`prev()` to page turns, and keeps page-block padding so text is not clipped at the viewport edge. In `scrolled` mode it falls back to continuous vertical scrolling.
 
 ---
 

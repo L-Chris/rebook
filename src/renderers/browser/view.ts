@@ -8,6 +8,7 @@ import type { ParserInput, ParserOptions } from '../../core/parser'
 import type { RendererConfig, RendererStyles, LayoutMode, Renderer } from '../../core/renderer'
 import { registry } from '../../core/parser'
 import { BrowserRenderer } from './paginator'
+import { VirtualTextRenderer } from './virtual-text'
 import { BrowserDOMAdapter, BrowserURLFactory } from '../../adapters/browser'
 
 // ============================================================================
@@ -17,6 +18,12 @@ import { BrowserDOMAdapter, BrowserURLFactory } from '../../adapters/browser'
 export interface ReaderConfig extends Omit<RendererConfig, 'container'> {
     /** Container element */
     container: HTMLElement
+    /**
+     * Browser rendering backend.
+     * Default: 'virtual-text' (AST -> preset blocks -> Pretext -> visible DOM rows).
+     * Use 'iframe' to opt back into the legacy EPUB CSS/iframe paginator.
+     */
+    renderer?: 'virtual-text' | 'iframe'
     /** Parser options */
     parserOptions?: ParserOptions
     /** Auto-register default parsers */
@@ -33,7 +40,7 @@ export class ReaderView {
 
     constructor(config: ReaderConfig) {
         this.config = config
-        this.renderer = new BrowserRenderer(config)
+        this.renderer = this.createRenderer()
     }
 
     /**
@@ -41,6 +48,7 @@ export class ReaderView {
      */
     async open(input: ParserInput): Promise<Book> {
         this.close()
+        this.resetRenderer()
 
         // Auto-wire browser adapters if not provided
         const options: ParserOptions = {
@@ -64,6 +72,7 @@ export class ReaderView {
      */
     async openBook(book: Book): Promise<void> {
         this.close()
+        this.resetRenderer()
         this.book = book
         await this.renderer.open(book)
     }
@@ -207,6 +216,17 @@ export class ReaderView {
     destroy(): void {
         this.close()
         this.renderer.destroy()
+    }
+
+    private createRenderer(): Renderer {
+        return this.config.renderer === 'iframe'
+            ? new BrowserRenderer(this.config)
+            : new VirtualTextRenderer(this.config)
+    }
+
+    private resetRenderer(): void {
+        this.renderer.destroy()
+        this.renderer = this.createRenderer()
     }
 }
 

@@ -20,6 +20,7 @@ import { normalizeWhitespace, getElementText, cssEscape, replaceSeries } from '.
 import { UnsupportedInputError, AdapterRequiredError, ParseError, CorruptedFileError } from '../core/errors'
 import { normalizeLanguage, normalizeTitle, normalizePublisher } from '../core/metadata'
 import { parseHTML, createSectionDocument } from '../core/document'
+import { extractDocumentBlocks, extractDocumentSegments } from '../core/pretext'
 
 // ============================================================================
 // Constants
@@ -772,6 +773,16 @@ class EPUBBook implements Book {
                     const html = await this.loadDocument(item)
                     const nodes = parseHTML(html, this.domAdapter)
                     return createSectionDocument(nodes, this.domAdapter)
+                },
+                getSegments: async () => {
+                    const html = await this.loadDocument(item)
+                    const nodes = parseHTML(html, this.domAdapter)
+                    return extractDocumentSegments(nodes)
+                },
+                getBlocks: async () => {
+                    const html = await this.loadDocument(item)
+                    const nodes = parseHTML(html, this.domAdapter)
+                    return extractDocumentBlocks(nodes)
                 },
                 size: this.loader.getSize(item.href),
                 linear: spineItem.linear,
