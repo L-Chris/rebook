@@ -110,9 +110,37 @@ export interface TextSegment {
 }
 
 /**
+ * Portable image sizing/alignment metadata used by virtual renderers.
+ */
+export interface ImageStyle {
+    width?: number
+    height?: number
+    maxWidth?: number
+    maxHeight?: number
+    objectFit?: 'contain' | 'cover' | 'fill' | 'none' | 'scale-down'
+    align?: 'start' | 'center' | 'end'
+}
+
+/**
+ * Image payload for normalized reading blocks.
+ */
+export interface TextImage {
+    src: string
+    originalSrc?: string
+    alt?: string
+    title?: string
+    width?: number
+    height?: number
+    aspectRatio?: number
+    isCover?: boolean
+    role?: string
+    style?: ImageStyle
+}
+
+/**
  * Normalized reading block extracted from the HTML AST.
  */
-export type TextBlockType = 'container' | 'chapter' | 'heading' | 'paragraph' | 'listItem' | 'blockquote' | 'pre'
+export type TextBlockType = 'container' | 'chapter' | 'heading' | 'paragraph' | 'listItem' | 'blockquote' | 'pre' | 'image'
 
 export interface TextBlock {
     id: string
@@ -122,6 +150,7 @@ export interface TextBlock {
     style?: TextStyle
     blockGapBefore?: number
     blockGapAfter?: number
+    image?: TextImage
     segments: readonly TextSegment[]
 }
 

@@ -48,6 +48,8 @@ export type {
     DocumentResource,
     TextStyle,
     TextSegment,
+    ImageStyle,
+    TextImage,
     TextBlock,
     TextBlockType,
 } from './core/types'

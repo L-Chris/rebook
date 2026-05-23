@@ -15,6 +15,7 @@ import {
     type LineRange,
     type PreparedText,
     type TextBlock,
+    type TextImage,
     type TextStyle,
 } from '../../core/pretext'
 
@@ -326,24 +327,25 @@ export class VirtualTextRenderer implements Renderer {
         const margin = parseCSSPixels(this.styles.margin, DEFAULT_MARGIN)
         const gap = parseCSSPixels(this.styles.gap, DEFAULT_GAP)
         const minColumnWidth = parseCSSPixels(this.styles.minColumnWidth, 320)
-        const maxColumnWidth = parseCSSPixels(this.styles.maxColumnWidth, 720)
+        const maxColumnWidth = parseCSSPixels(this.styles.maxColumnWidth ?? this.styles.maxInlineSize, 720)
         const availableWidth = Math.max(1, this.scroller.clientWidth - margin * 2)
         const columns = this.getColumnCount(availableWidth, minColumnWidth, gap)
         const rawWidth = columns > 1
             ? (availableWidth - gap * (columns - 1)) / columns
             : availableWidth
         const inlineSize = Math.max(minColumnWidth, Math.min(maxColumnWidth, rawWidth))
-        this.lines = layoutText(this.prepared, {
-            inlineSize,
-            lineHeight: this.getLineHeightPixels(),
-            blockGap: this.getLineHeightPixels() * 0.5,
-        })
-        const contentHeight = this.lines[this.lines.length - 1]?.top + this.lines[this.lines.length - 1]?.height || 0
         const pageHeight = Math.max(1, this.scroller.clientHeight)
         const pagePaddingBlock = this.getPagePaddingBlock(pageHeight, margin)
         const columnHeight = this.layoutMode === 'paginated'
             ? Math.max(this.getLineHeightPixels(), pageHeight - pagePaddingBlock * 2)
             : Number.POSITIVE_INFINITY
+        this.lines = layoutText(this.prepared, {
+            inlineSize,
+            lineHeight: this.getLineHeightPixels(),
+            blockGap: this.getLineHeightPixels() * 0.5,
+            maxBlockHeight: this.layoutMode === 'paginated' ? columnHeight : undefined,
+        })
+        const contentHeight = this.lines[this.lines.length - 1]?.top + this.lines[this.lines.length - 1]?.height || 0
         const pageCount = this.layoutMode === 'paginated'
             ? Math.max(1, Math.ceil(contentHeight / (columnHeight * columns)))
             : 1
@@ -383,6 +385,10 @@ export class VirtualTextRenderer implements Renderer {
 
         for (const line of window.lines) {
             const position = this.getRenderedLinePosition(line)
+            if (line.kind === 'image' && line.image) {
+                this.content.appendChild(this.createImageLine(line, position))
+                continue
+            }
             const lineEl = document.createElement('div')
             lineEl.style.cssText = `
                 position: absolute;
@@ -393,7 +399,7 @@ export class VirtualTextRenderer implements Renderer {
                 line-height: ${line.height}px;
                 white-space: pre;
             `
-            const block = this.prepared?.blocks.find(item => item.itemSegmentIndexes.includes(line.start?.segmentIndex ?? -1))?.block
+            const block = line.block ?? this.prepared?.blocks.find(item => item.itemSegmentIndexes.includes(line.start?.segmentIndex ?? -1))?.block
             if (block) {
                 lineEl.dataset.blockId = block.id
                 lineEl.dataset.blockType = block.type
@@ -409,6 +415,44 @@ export class VirtualTextRenderer implements Renderer {
 
             this.content.appendChild(lineEl)
         }
+    }
+
+    private createImageLine(line: LineRange, position: { top: number; left: number }): HTMLElement {
+        const layout = this.columnLayout
+        const image = line.image!
+        const wrapper = document.createElement('figure')
+        wrapper.style.cssText = `
+            position: absolute;
+            top: ${position.top}px;
+            left: ${position.left}px;
+            width: ${layout.columnWidth}px;
+            height: ${line.height}px;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: ${getImageJustifyContent(image)};
+            overflow: hidden;
+        `
+        if (line.block) {
+            wrapper.dataset.blockId = line.block.id
+            wrapper.dataset.blockType = line.block.type
+        }
+        if (image.isCover) wrapper.dataset.cover = 'true'
+
+        const img = document.createElement('img')
+        img.src = image.src
+        img.alt = image.alt ?? ''
+        if (image.title) img.title = image.title
+        img.style.cssText = `
+            display: block;
+            width: auto;
+            height: auto;
+            max-width: ${Math.min(line.width, layout.columnWidth)}px;
+            max-height: ${line.height}px;
+            object-fit: ${image.style?.objectFit ?? 'contain'};
+        `
+        wrapper.appendChild(img)
+        return wrapper
     }
 
     private emitRelocate(reason: string): void {
@@ -559,6 +603,12 @@ function applyTextStyle(element: HTMLElement, style: TextStyle): void {
     if (style.color) element.style.color = style.color
     if (style.textDecoration) element.style.textDecoration = style.textDecoration
     if (style.letterSpacing) element.style.letterSpacing = `${style.letterSpacing}px`
+}
+
+function getImageJustifyContent(image: TextImage): string {
+    if (image.style?.align === 'start') return 'flex-start'
+    if (image.style?.align === 'end') return 'flex-end'
+    return 'center'
 }
 
 function parseCSSPixels(value: string | undefined, fallback: number): number {

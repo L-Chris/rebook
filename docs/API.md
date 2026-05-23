@@ -461,7 +461,20 @@ interface TextSegment {
 ### `TextBlock`
 
 ```typescript
-type TextBlockType = 'container' | 'chapter' | 'heading' | 'paragraph' | 'listItem' | 'blockquote' | 'pre'
+type TextBlockType = 'container' | 'chapter' | 'heading' | 'paragraph' | 'listItem' | 'blockquote' | 'pre' | 'image'
+
+interface TextImage {
+    src: string
+    originalSrc?: string
+    alt?: string
+    title?: string
+    width?: number
+    height?: number
+    aspectRatio?: number
+    isCover?: boolean
+    role?: string
+    style?: ImageStyle
+}
 
 interface TextBlock {
     id: string
@@ -471,11 +484,12 @@ interface TextBlock {
     style?: TextStyle
     blockGapBefore?: number
     blockGapAfter?: number
+    image?: TextImage
     segments: TextSegment[]
 }
 ```
 
-These types are defined in the core parser-renderer contract, not inside the browser renderer. Any renderer can consume `section.getBlocks()` without depending on the Pretext adapter.
+These types are defined in the core parser-renderer contract, not inside the browser renderer. Any renderer can consume `section.getBlocks()` without depending on the Pretext adapter. Image blocks carry a renderable `src`; EPUB sections also preserve `originalSrc` so renderers or tooling can distinguish OPF cover images from regular illustrations.
 
 ### `prepareBlocks(blocks, options?)`
 

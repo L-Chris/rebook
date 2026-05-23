@@ -236,4 +236,52 @@ describe('VirtualTextRenderer', () => {
 
         renderer.destroy()
     })
+
+    it('renders image blocks and marks covers', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '160')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [{
+                id: 'cover.xhtml',
+                size: 120,
+                format: 'xhtml',
+                load: () => '<p><img src="test://cover.png" alt="Cover"/></p>',
+                getBlocks: () => [{
+                    id: 'cover-image',
+                    type: 'image',
+                    image: {
+                        src: 'test://cover.png',
+                        originalSrc: 'images/cover.png',
+                        alt: 'Cover',
+                        width: 600,
+                        height: 900,
+                        isCover: true,
+                        style: { maxWidth: 280, objectFit: 'contain', align: 'center' },
+                    },
+                    segments: [],
+                }],
+            }],
+        }
+
+        const renderer = new VirtualTextRenderer({
+            container,
+            layout: 'paginated',
+            styles: { margin: '20px', fontSize: '16px', lineHeight: 1.5 },
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+
+        const figure = container.querySelector('[data-block-type="image"]') as HTMLElement
+        const img = container.querySelector('img') as HTMLImageElement
+        expect(figure.dataset.cover).toBe('true')
+        expect(img.src).toBe('test://cover.png')
+        expect(img.alt).toBe('Cover')
+        expect(parseFloat(figure.style.height)).toBeLessThanOrEqual(120)
+
+        renderer.destroy()
+    })
 })

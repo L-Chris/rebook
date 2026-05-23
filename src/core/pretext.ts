@@ -14,13 +14,13 @@ import {
     type RichInlineItem,
     type RichInlineLineRange,
 } from '@chenglou/pretext/rich-inline'
-import type { DocumentNode, TextBlock, TextBlockType, TextSegment, TextStyle } from './types'
+import type { DocumentNode, ImageStyle, TextBlock, TextBlockType, TextImage, TextSegment, TextStyle } from './types'
 import { isTextNode } from './document'
 
-export type { TextBlock, TextBlockType, TextSegment, TextStyle } from './types'
+export type { ImageStyle, TextBlock, TextBlockType, TextImage, TextSegment, TextStyle } from './types'
 
 export interface PreparedTextBlock {
-    prepared: PreparedRichInline
+    prepared?: PreparedRichInline
     itemSegmentIndexes: readonly number[]
     block: TextBlock
 }
@@ -36,11 +36,16 @@ export interface PrepareOptions {
     baseStyle?: TextStyle
 }
 
+export interface ExtractDocumentBlocksOptions {
+    coverImageSrcs?: readonly string[]
+}
+
 export interface LayoutOptions {
     inlineSize: number
     lineHeight?: number
     blockStart?: number
     blockGap?: number
+    maxBlockHeight?: number
 }
 
 export interface LinePosition {
@@ -60,6 +65,9 @@ export interface LineSegmentRange {
 
 export interface LineRange {
     index: number
+    kind: 'text' | 'image'
+    block?: TextBlock
+    image?: TextImage
     start: LinePosition | null
     end: LinePosition | null
     text: string
@@ -93,16 +101,19 @@ const DEFAULT_STYLE = {
 export function extractDocumentSegments(
     nodes: readonly DocumentNode[],
     baseStyle: TextStyle = {},
+    options: ExtractDocumentBlocksOptions = {},
 ): TextSegment[] {
-    return extractDocumentBlocks(nodes, baseStyle).flatMap(block => block.segments)
+    return extractDocumentBlocks(nodes, baseStyle, options).flatMap(block => block.segments)
 }
 
 export function extractDocumentBlocks(
     nodes: readonly DocumentNode[],
     baseStyle: TextStyle = {},
+    options: ExtractDocumentBlocksOptions = {},
 ): TextBlock[] {
     const blocks: TextBlock[] = []
     let nextId = 0
+    const coverImageSrcs = new Set((options.coverImageSrcs ?? []).map(normalizeResourceRef))
 
     const pushBlock = (
         type: TextBlockType,
@@ -133,6 +144,22 @@ export function extractDocumentBlocks(
         })
     }
 
+    const pushImageBlock = (node: DocumentNode) => {
+        const image = getImageData(node, coverImageSrcs)
+        if (!image) return
+        const fontSize = baseStyle.fontSize ?? DEFAULT_STYLE.fontSize
+        blocks.push({
+            id: node.attrs?.id ?? `image-${nextId++}`,
+            type: 'image',
+            attrs: node.attrs,
+            style: parseInlineStyle(node.attrs?.style),
+            blockGapBefore: image.isCover ? 0 : fontSize * 0.75,
+            blockGapAfter: fontSize * 0.75,
+            image,
+            segments: [],
+        })
+    }
+
     const walkBlock = (node: DocumentNode, inherited: TextStyle) => {
         if (isTextNode(node)) {
             if (node.text.trim()) {
@@ -144,6 +171,11 @@ export function extractDocumentBlocks(
         const type = node.type.toLowerCase()
         if (type === 'script' || type === 'style' || type === 'head') return
 
+        if (isImageNode(type, node)) {
+            pushImageBlock(node)
+            return
+        }
+
         if (/^h[1-6]$/.test(type)) {
             const depth = Number(type[1])
             pushBlock(depth === 1 ? 'chapter' : 'heading', node, collectInlineSegments(node, inherited), depth)
@@ -152,6 +184,7 @@ export function extractDocumentBlocks(
 
         if (type === 'p') {
             pushBlock('paragraph', node, collectInlineSegments(node, inherited))
+            for (const image of collectImageNodes(node)) pushImageBlock(image)
             return
         }
 
@@ -165,6 +198,7 @@ export function extractDocumentBlocks(
 
         if (type === 'blockquote') {
             pushBlock('blockquote', node, collectInlineSegments(node, inherited))
+            for (const image of collectImageNodes(node)) pushImageBlock(image)
             return
         }
 
@@ -197,9 +231,15 @@ export function prepareBlocks(
     const segments = textBlocks.flatMap(block => block.segments)
     let nextSegmentIndex = 0
     const blocks = textBlocks
-        .filter(block => block.segments.some(segment => segment.text.trim()))
+        .filter(block => block.type === 'image' || block.segments.some(segment => segment.text.trim()))
         .map(block => {
         const itemSegmentIndexes = block.segments.map(() => nextSegmentIndex++)
+        if (block.type === 'image') {
+            return {
+                itemSegmentIndexes,
+                block,
+            } satisfies PreparedTextBlock
+        }
         const items: RichInlineItem[] = block.segments.map(segment => ({
             text: segment.text,
             font: toCanvasFont({ ...baseStyle, ...segment.style }),
@@ -228,8 +268,29 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
     for (const block of prepared.blocks) {
         const blockStartCount = lines.length
         if (blockStartCount > 0) top += block.block.blockGapBefore ?? 0
-        walkRichInlineLineRanges(block.prepared, inlineSize, (range) => {
-            const materialized = materializeRichInlineLineRange(block.prepared, range)
+        if (block.block.type === 'image' && block.block.image) {
+            const metrics = getImageBlockMetrics(block.block.image, inlineSize, lineHeight, options.maxBlockHeight)
+            lines.push({
+                index: lines.length,
+                kind: 'image',
+                block: block.block,
+                image: block.block.image,
+                start: null,
+                end: null,
+                text: block.block.image.alt ?? block.block.image.title ?? '',
+                width: metrics.width,
+                top,
+                height: metrics.height,
+                segments: [],
+            })
+            top += metrics.height
+            top += block.block.blockGapAfter ?? blockGap
+            continue
+        }
+        const richInline = block.prepared
+        if (!richInline) continue
+        walkRichInlineLineRanges(richInline, inlineSize, (range) => {
+            const materialized = materializeRichInlineLineRange(richInline, range)
             const fragments = materialized.fragments.map((fragment, index): LineSegmentRange => {
                 const rangeFragment = range.fragments[index]!
                 const segmentIndex = block.itemSegmentIndexes[fragment.itemIndex]!
@@ -247,6 +308,8 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
             const last = fragments[fragments.length - 1]
             lines.push({
                 index: lines.length,
+                kind: 'text',
+                block: block.block,
                 start: first ? { segmentIndex: first.segmentIndex, cursor: first.start } : null,
                 end: last ? { segmentIndex: last.segmentIndex, cursor: last.end } : null,
                 text: joinFragments(fragments),
@@ -264,6 +327,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
     if (lines.length === 0) {
         lines.push({
             index: 0,
+            kind: 'text',
             start: null,
             end: null,
             text: '',
@@ -332,6 +396,93 @@ function collectInlineSegments(node: DocumentNode, inherited: TextStyle): TextSe
 
     for (const child of node.children ?? []) walk(child, inherited)
     return segments
+}
+
+function collectImageNodes(node: DocumentNode): DocumentNode[] {
+    const images: DocumentNode[] = []
+    const walk = (current: DocumentNode) => {
+        if (isTextNode(current)) return
+        const type = current.type.toLowerCase()
+        if (isImageNode(type, current)) {
+            images.push(current)
+            return
+        }
+        for (const child of current.children ?? []) walk(child)
+    }
+    for (const child of node.children ?? []) walk(child)
+    return images
+}
+
+function isImageNode(type: string, node: DocumentNode): boolean {
+    if (type === 'img') return Boolean(node.attrs?.src)
+    if (type === 'image') return Boolean(node.attrs?.href ?? node.attrs?.src)
+    return false
+}
+
+function getImageData(
+    node: DocumentNode,
+    coverImageSrcs: ReadonlySet<string>,
+): TextImage | null {
+    const attrs = node.attrs ?? {}
+    const src = attrs.src ?? attrs.href
+    if (!src) return null
+
+    const imageStyle = parseImageStyle(attrs.style)
+    const width = parseCSSDimension(attrs.width) ?? imageStyle.width
+    const height = parseCSSDimension(attrs.height) ?? imageStyle.height
+    const originalSrc = attrs['data-rebook-original-src']
+        ?? attrs['data-rebook-original-href']
+        ?? attrs['data-rebook-original-data']
+        ?? src
+    const role = [
+        attrs['epub:type'],
+        attrs.type,
+        attrs.role,
+        attrs.properties,
+        attrs.class,
+    ].filter(Boolean).join(' ')
+    const roleLower = role.toLowerCase()
+    const normalizedSrc = normalizeResourceRef(src)
+    const normalizedOriginalSrc = normalizeResourceRef(originalSrc)
+    const isCover = roleLower.split(/\s+/).includes('cover')
+        || coverImageSrcs.has(normalizedSrc)
+        || coverImageSrcs.has(normalizedOriginalSrc)
+
+    return {
+        src,
+        originalSrc,
+        alt: attrs.alt,
+        title: attrs.title,
+        width,
+        height,
+        aspectRatio: width && height ? width / height : undefined,
+        isCover,
+        role: role || undefined,
+        style: imageStyle,
+    }
+}
+
+function getImageBlockMetrics(
+    image: TextImage,
+    inlineSize: number,
+    lineHeight: number,
+    maxBlockHeight?: number,
+): { width: number; height: number } {
+    const maxWidth = Math.min(inlineSize, image.style?.maxWidth ?? inlineSize)
+    const preferredWidth = image.style?.width ?? image.width ?? maxWidth
+    const width = Math.max(1, Math.min(maxWidth, preferredWidth))
+    const naturalRatio = image.aspectRatio ?? (image.width && image.height ? image.width / image.height : undefined)
+    const fallbackHeight = image.isCover ? width * 1.35 : Math.max(lineHeight * 6, width * 0.62)
+    const preferredHeight = image.style?.height
+        ?? (naturalRatio ? width / naturalRatio : undefined)
+        ?? image.height
+        ?? fallbackHeight
+    const styleMaxHeight = image.style?.maxHeight ?? Number.POSITIVE_INFINITY
+    const maxHeight = maxBlockHeight
+        ? Math.max(lineHeight * 2, Math.min(maxBlockHeight, styleMaxHeight))
+        : styleMaxHeight
+    const height = Math.max(lineHeight * 2, Math.min(maxHeight, preferredHeight))
+    return { width, height }
 }
 
 function segmentsToBlocks(segments: readonly TextSegment[]): TextBlock[] {
@@ -475,11 +626,7 @@ function applyNodeStyle(
 function parseInlineStyle(style?: string): TextStyle {
     if (!style) return {}
     const result: TextStyle = {}
-    for (const declaration of style.split(';')) {
-        const [rawName, rawValue] = declaration.split(':')
-        if (!rawName || !rawValue) continue
-        const name = rawName.trim().toLowerCase()
-        const value = rawValue.trim()
+    for (const [name, value] of parseStyleDeclarations(style)) {
         if (name === 'font-family') result.fontFamily = value
         else if (name === 'font-size') result.fontSize = parseCSSPixels(value)
         else if (name === 'font-weight') result.fontWeight = value
@@ -493,12 +640,62 @@ function parseInlineStyle(style?: string): TextStyle {
     return result
 }
 
+function parseImageStyle(style: string | undefined): ImageStyle {
+    const result: ImageStyle = {}
+    for (const [name, value] of parseStyleDeclarations(style)) {
+        if (name === 'width') result.width = parseCSSDimension(value)
+        else if (name === 'height') result.height = parseCSSDimension(value)
+        else if (name === 'max-width') result.maxWidth = parseCSSDimension(value)
+        else if (name === 'max-height') result.maxHeight = parseCSSDimension(value)
+        else if (name === 'object-fit' && isObjectFit(value)) result.objectFit = value
+        else if (name === 'text-align') result.align = parseTextAlign(value)
+        else if (name === 'margin-left' && value === 'auto') result.align = 'center'
+        else if (name === 'margin-right' && value === 'auto' && result.align === 'center') result.align = 'center'
+    }
+    return result
+}
+
+function parseStyleDeclarations(style?: string): Array<[string, string]> {
+    if (!style) return []
+    const declarations: Array<[string, string]> = []
+    for (const declaration of style.split(';')) {
+        const separator = declaration.indexOf(':')
+        if (separator < 0) continue
+        const name = declaration.slice(0, separator).trim().toLowerCase()
+        const value = declaration.slice(separator + 1).trim()
+        if (name && value) declarations.push([name, value])
+    }
+    return declarations
+}
+
 function parseCSSPixels(value: string): number | undefined {
     const match = value.match(/^([\d.]+)(px|em|rem)?$/)
     if (!match) return undefined
     const amount = Number(match[1])
     if (!Number.isFinite(amount)) return undefined
     return match[2] === 'em' || match[2] === 'rem' ? amount * DEFAULT_STYLE.fontSize : amount
+}
+
+function parseCSSDimension(value?: string): number | undefined {
+    if (!value) return undefined
+    const trimmed = value.trim()
+    if (trimmed === 'auto' || trimmed.endsWith('%')) return undefined
+    return parseCSSPixels(trimmed)
+}
+
+function isObjectFit(value: string): value is NonNullable<ImageStyle['objectFit']> {
+    return value === 'contain'
+        || value === 'cover'
+        || value === 'fill'
+        || value === 'none'
+        || value === 'scale-down'
+}
+
+function parseTextAlign(value: string): ImageStyle['align'] | undefined {
+    if (value === 'center') return 'center'
+    if (value === 'right' || value === 'end') return 'end'
+    if (value === 'left' || value === 'start') return 'start'
+    return undefined
 }
 
 function parseLineHeight(value: string): number | undefined {
@@ -550,4 +747,12 @@ function sameStyle(a?: TextStyle, b?: TextStyle): boolean {
 
 function sameSource(a?: TextSegment['source'], b?: TextSegment['source']): boolean {
     return JSON.stringify(a ?? {}) === JSON.stringify(b ?? {})
+}
+
+function normalizeResourceRef(ref: string): string {
+    return decodeURI(ref)
+        .replace(/[?#].*$/, '')
+        .replace(/\\/g, '/')
+        .replace(/^\.\//, '')
+        .toLowerCase()
 }

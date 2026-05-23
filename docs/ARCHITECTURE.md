@@ -213,11 +213,11 @@ The Pretext path is a separate rendering pipeline for EPUB text that needs fast 
 EPUB zip
   → XHTML string
   → DocumentNode AST
-  → TextBlock[] (chapter/heading/paragraph/listItem/blockquote/pre)
+  → TextBlock[] (chapter/heading/paragraph/listItem/blockquote/pre/image)
   → TextSegment[] with inline style metadata
   → @chenglou/pretext prepareRichInline() for one-time Canvas measurement
   → @chenglou/pretext line range walking for width changes
-  → rebook LineRange[] with source segment/style mapping
+  → rebook LineRange[] with source segment/style/image mapping
   → virtual DOM rows, Canvas, SVG, or WebGL
 ```
 

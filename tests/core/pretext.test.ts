@@ -64,6 +64,34 @@ describe('Pretext pipeline', () => {
         expect(prepared.blocks[0].block.type).toBe('chapter')
     })
 
+    it('extracts image blocks with sizing and cover metadata', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('p', {}, [
+                elementNode('img', {
+                    src: 'blob:test-cover',
+                    'data-rebook-original-src': 'images/cover.jpg',
+                    alt: 'Cover',
+                    width: '600',
+                    height: '900',
+                    style: 'max-width: 320px; max-height: 420px; object-fit: contain; text-align: center',
+                }),
+            ]),
+        ], {}, { coverImageSrcs: ['images/cover.jpg'] })
+
+        expect(blocks.map(block => block.type)).toEqual(['image'])
+        expect(blocks[0].image?.src).toBe('blob:test-cover')
+        expect(blocks[0].image?.originalSrc).toBe('images/cover.jpg')
+        expect(blocks[0].image?.isCover).toBe(true)
+        expect(blocks[0].image?.style?.maxWidth).toBe(320)
+        expect(blocks[0].image?.style?.maxHeight).toBe(420)
+
+        const prepared = prepareBlocks(blocks, { baseStyle: { fontSize: 16, lineHeight: 1.5 } })
+        const lines = layout(prepared, { inlineSize: 280, maxBlockHeight: 300 })
+        expect(lines[0].kind).toBe('image')
+        expect(lines[0].image?.isCover).toBe(true)
+        expect(lines[0].height).toBeLessThanOrEqual(300)
+    })
+
     it('delegates preparation and line layout to Pretext while preserving segment ranges', () => {
         const segments = [
             { text: 'one two three four' },

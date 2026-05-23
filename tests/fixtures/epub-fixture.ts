@@ -3,7 +3,7 @@
  * Creates a valid EPUB file as ArrayBuffer for testing the parser.
  */
 
-import { configure, ZipWriter, BlobWriter, TextReader } from '@zip.js/zip.js'
+import { configure, ZipWriter, BlobWriter, TextReader, Uint8ArrayReader } from '@zip.js/zip.js'
 
 configure({ useWebWorkers: false })
 
@@ -16,6 +16,13 @@ export interface MinimalEPUBOptions {
         id: string
         title: string
         content: string
+    }>
+    resources?: Array<{
+        id: string
+        href: string
+        mediaType: string
+        properties?: string
+        data: Uint8Array | string
     }>
 }
 
@@ -42,6 +49,9 @@ const generateOPF = (options: MinimalEPUBOptions): string => {
     const manifestItems = chapters.map(ch =>
         `        <item id="${ch.id}" href="${ch.id}.xhtml" media-type="application/xhtml+xml"/>`
     ).join('\n')
+    const resourceItems = (options.resources ?? []).map(resource =>
+        `        <item id="${resource.id}" href="${resource.href}" media-type="${resource.mediaType}"${resource.properties ? ` properties="${resource.properties}"` : ''}/>`
+    ).join('\n')
 
     const spineItems = chapters.map(ch =>
         `        <itemref idref="${ch.id}"/>`
@@ -59,6 +69,7 @@ const generateOPF = (options: MinimalEPUBOptions): string => {
     <manifest>
         <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
 ${manifestItems}
+${resourceItems}
     </manifest>
     <spine>
 ${spineItems}
@@ -118,6 +129,12 @@ export async function createTestEPUB(options: MinimalEPUBOptions = {}): Promise<
     // Add chapters
     for (const chapter of chapters) {
         await zipWriter.add(`OEBPS/${chapter.id}.xhtml`, new TextReader(chapter.content))
+    }
+    for (const resource of options.resources ?? []) {
+        const reader = typeof resource.data === 'string'
+            ? new TextReader(resource.data)
+            : new Uint8ArrayReader(resource.data)
+        await zipWriter.add(`OEBPS/${resource.href}`, reader)
     }
 
     await zipWriter.close()

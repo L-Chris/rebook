@@ -504,7 +504,12 @@ class ResourceLoader {
             // Replace href/src/data/poster attributes
             const replace = async (el: XMLElement, attr: string) => {
                 const val = el.getAttribute(attr)
-                if (val) el.setAttribute(attr, await this.loadHref(val, href))
+                if (val) {
+                    if (attr === 'src' || attr === 'poster' || attr === 'data') {
+                        el.setAttribute(`data-rebook-original-${attr}`, resolveURL(val, href))
+                    }
+                    el.setAttribute(attr, await this.loadHref(val, href))
+                }
             }
 
             for (const el of doc.querySelectorAll('link[href]')) await replace(el, 'href')
@@ -513,7 +518,10 @@ class ResourceLoader {
             for (const el of doc.querySelectorAll('object[data]')) await replace(el, 'data')
             for (const el of doc.querySelectorAll('[*|href]:not([href])')) {
                 const val = el.getAttributeNS(NS.XLINK, 'href')
-                if (val) el.setAttributeNS(NS.XLINK, 'href', await this.loadHref(val, href))
+                if (val) {
+                    el.setAttribute('data-rebook-original-href', resolveURL(val, href))
+                    el.setAttributeNS(NS.XLINK, 'href', await this.loadHref(val, href))
+                }
             }
 
             // Replace srcset
@@ -780,9 +788,11 @@ class EPUBBook implements Book {
                     return extractDocumentSegments(nodes)
                 },
                 getBlocks: async () => {
-                    const html = await this.loadDocument(item)
+                    const html = await this.resourceLoader.loadItem(item)
                     const nodes = parseHTML(html, this.domAdapter)
-                    return extractDocumentBlocks(nodes)
+                    return extractDocumentBlocks(nodes, {}, {
+                        coverImageSrcs: this.getCoverImageSrcs(),
+                    })
                 },
                 size: this.loader.getSize(item.href),
                 linear: spineItem.linear,
@@ -867,14 +877,23 @@ class EPUBBook implements Book {
     }
 
     async getCover(): Promise<Blob | null> {
-        const coverItem = this.manifest.find(m => m.properties?.includes('cover-image'))
-            ?? this.manifest.find(m => m.id === 'cover' && m.mediaType.startsWith('image'))
-            ?? this.manifest.find(m => m.href.includes('cover') && m.mediaType.startsWith('image'))
-            ?? this.manifest.find(m => m.mediaType.startsWith('image'))
+        const coverItem = this.getCoverImageItem()
 
         if (!coverItem) return null
         const blob = await this.loader.loadBlob(coverItem.href)
         return blob
+    }
+
+    private getCoverImageItem(): ManifestItem | undefined {
+        return this.manifest.find(m => m.properties?.includes('cover-image'))
+            ?? this.manifest.find(m => m.id === 'cover' && m.mediaType.startsWith('image'))
+            ?? this.manifest.find(m => m.href.includes('cover') && m.mediaType.startsWith('image'))
+            ?? this.manifest.find(m => m.mediaType.startsWith('image'))
+    }
+
+    private getCoverImageSrcs(): string[] {
+        const coverItem = this.getCoverImageItem()
+        return coverItem ? [coverItem.href] : []
     }
 
     destroy(): void {

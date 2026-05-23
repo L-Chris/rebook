@@ -78,4 +78,38 @@ describe('EPUB Pretext segments', () => {
         expect(lines[0].segments.length).toBeGreaterThan(0)
         expect(lines.every(line => line.width <= 360 || line.segments.length === 1)).toBe(true)
     })
+
+    it('exposes image blocks with renderable URLs and cover hints', async () => {
+        const parser = new EPUBParser()
+        const urlFactory = new TestURLFactory()
+        const book = await parser.parse(await createTestEPUB({
+            chapters: [{
+                id: 'cover',
+                title: 'Cover',
+                content: '<html xmlns="http://www.w3.org/1999/xhtml"><body><p><img src="images/cover.png" alt="Cover image" width="600" height="900" style="max-width: 320px; object-fit: contain"/></p></body></html>',
+            }],
+            resources: [{
+                id: 'cover-image',
+                href: 'images/cover.png',
+                mediaType: 'image/png',
+                properties: 'cover-image',
+                data: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+            }],
+        }), {
+            domAdapter: new TestDOMAdapter(),
+            urlFactory,
+        })
+
+        const blocks = await book.sections[0].getBlocks?.()
+        const image = blocks?.find(block => block.type === 'image')
+
+        expect(image?.image?.src.startsWith('test://resource-')).toBe(true)
+        expect(image?.image?.originalSrc).toBe('OEBPS/images/cover.png')
+        expect(image?.image?.isCover).toBe(true)
+        expect(image?.image?.alt).toBe('Cover image')
+        expect(image?.image?.width).toBe(600)
+        expect(image?.image?.height).toBe(900)
+        expect(image?.image?.style?.maxWidth).toBe(320)
+        expect(urlFactory.hasURL(image!.image!.src)).toBe(true)
+    })
 })
