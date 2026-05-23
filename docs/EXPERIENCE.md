@@ -294,6 +294,75 @@ const epub = createTestEPUB({
 - Zip loader tests (including malformed zip recovery)
 - Utility tests (progress tracking)
 
+## CSS Multi-Column Layout Lessons
+
+### The `column-width` trap
+
+CSS `column-width` is **not** a fixed width — it's a suggestion. The browser adjusts actual column width to fill the container:
+
+```css
+html {
+    column-width: 720px;  /* Suggestion only! */
+}
+```
+
+If the container is 1200px wide, the browser creates 1 column × 1200px (not 720px). This causes content to overflow the visible area.
+
+**Fix**: Constrain the iframe width to exactly the desired visible span:
+
+```typescript
+// Single page
+iframe.style.width = `${pageWidth + gap}px`
+
+// Two-page spread
+iframe.style.width = `${pageWidth * 2 + gap}px`
+```
+
+With the iframe width constrained, the browser creates columns that are exactly `pageWidth` wide.
+
+### Scrolling through columns
+
+We use CSS multi-column for horizontal pagination: columns flow left-to-right, and we scroll horizontally to reveal them:
+
+```typescript
+html.style.columnWidth = '720px'
+html.style.columnGap = '48px'
+html.style.height = '800px'
+html.style.overflow = 'hidden'
+html.style.columnFill = 'auto'
+
+// Scroll to next page
+iframe.contentWindow.scrollTo({ left: 720, behavior: 'smooth' })
+```
+
+**Key insight**: `contentWidth` captures the total width of all columns. For a spread (2 visible pages), scroll by `pageWidth * 2 + gap` to advance one "view".
+
+### Auto-spread detection
+
+To dynamically switch between single-page and spread layouts:
+
+```typescript
+const divisor = Math.min(
+    maxColumnCount,  // e.g., 2
+    Math.max(1, Math.ceil(availableWidth / maxInlineSize)),
+)
+// divisor = 1 when narrow, 2 when wide
+```
+
+On resize, recalculate `divisor` and update iframe width. The browser automatically reflows content into the correct number of columns.
+
+### XML declaration parsing
+
+EPUB sections are serialized by `XMLSerializer`, which prepends `<?xml version="1.0" encoding="UTF-8"?>`. The renderer must detect this:
+
+```typescript
+const isFullDocument = /^\s*(<\?xml|<!DOCTYPE|<html[\s>])/i.test(content)
+```
+
+Without detecting `<?xml`, the content is treated as a fragment and wrapped in another document, causing double XML declarations and parse errors.
+
+**Lesson**: Always serve full documents as `text/html` (lenient parsing) rather than `application/xhtml+xml` (strict XML parsing), since real-world EPUBs often have quirks.
+
 ## Future Directions
 
 ### Plugin system

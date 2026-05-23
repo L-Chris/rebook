@@ -107,6 +107,14 @@ export interface Renderer {
     setLayout(mode: LayoutMode): void
 
     /**
+     * Set the maximum number of visible columns (pages) in paginated mode.
+     * 1 = single page, 2 = two-page spread when the container is wide enough.
+     * In 'auto' mode (value 2), the renderer dynamically switches between
+     * 1 and 2 columns based on the available container width.
+     */
+    setSpread(maxColumns: number): void
+
+    /**
      * Get the current reading location.
      */
     getLocation(): RelocateEvent | null

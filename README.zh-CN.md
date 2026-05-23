@@ -13,7 +13,7 @@
 - **多格式支持**：EPUB 2.x/3.x、MOBI/AZW/AZW3、FictionBook 2、CBZ
 - **AI 友好的文档模型**：受 SlateJS 启发的树形结构，提供查询和修改 API，支持内容操作（翻译、标注、重构）
 - **环境无关的解析器**：所有解析器通过适配器注入，可在浏览器、Node.js 或 Worker 中运行
-- **浏览器渲染器**：支持分页和滚动两种阅读模式
+- **浏览器渲染器**：支持分页和滚动两种阅读模式，宽屏自动切换双页布局
 - **畸形 EPUB 容错**：多层回退策略处理损坏的 zip 归档
 - **框架无关**：核心库兼容任意框架；React/Vue 封装计划中
 
@@ -47,16 +47,37 @@ registry.register('mobi', mobi)
 registry.register('fb2', fb2)
 registry.register('cbz', cbz)
 
-// 创建阅读器（浏览器环境下适配器自动注入）
+// 创建阅读器（启用自动双页布局）
 const reader = createReader({
     container: document.getElementById('viewer')!,
+    layout: 'paginated',
+    maxColumnCount: 2, // 宽屏时显示两页并排（默认值：2）
+    styles: {
+        fontSize: '16px',
+        maxInlineSize: '720px', // 每页最大宽度
+        gap: '48px', // 页间距
+    },
 })
 
 // 打开书籍并导航
 const book = await reader.open(file)
 await reader.next()
 await reader.goTo('/path/to/chapter.xhtml#section')
+
+// 运行时控制布局
+reader.setSpread(2) // 启用自动双页（宽屏显示两页）
+reader.setSpread(1) // 强制单页
 ```
+
+### 自动双页布局
+
+在分页模式下，当容器足够宽时，渲染器会自动并排显示两页：
+
+- **容器宽度 ≥ 2 × `maxInlineSize` + `gap`**：显示 2 页（双页）
+- **容器宽度 < 2 × `maxInlineSize` + `gap`**：显示 1 页（单页）
+- **窗口缩放**：自动在双页和单页之间切换
+
+`maxColumnCount` 配置选项（默认值：`2`）控制最多显示的页数。设为 `1` 始终使用单页布局。
 
 ## 文档模型（AI 友好）
 

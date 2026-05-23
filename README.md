@@ -13,7 +13,7 @@ Inspired by [foliate-js](https://github.com/johnfactotum/foliate-js), but restru
 - **Multi-format support**: EPUB 2.x/3.x, MOBI/AZW/AZW3, FictionBook 2, and CBZ
 - **AI-friendly Document Model**: SlateJS-inspired tree structure with query and mutation APIs for content manipulation (translation, annotation, restructuring)
 - **Environment-agnostic parsers**: All parsers run in browser, Node.js, or workers via adapter injection
-- **Browser renderer**: Paginated and scrolled reading modes
+- **Browser renderer**: Paginated and scrolled reading modes with auto-spread (two-page layout on wide screens)
 - **Malformed EPUB recovery**: Multi-layer fallback for broken zip archives
 - **Framework-agnostic**: Core library works with any framework; React/Vue wrappers coming
 
@@ -47,16 +47,37 @@ registry.register('mobi', mobi)
 registry.register('fb2', fb2)
 registry.register('cbz', cbz)
 
-// Create reader (adapters auto-injected in browser)
+// Create reader with auto-spread enabled (default)
 const reader = createReader({
     container: document.getElementById('viewer')!,
+    layout: 'paginated',
+    maxColumnCount: 2, // Enable two-page spread on wide screens (default: 2)
+    styles: {
+        fontSize: '16px',
+        maxInlineSize: '720px', // Max width per page
+        gap: '48px', // Gap between pages
+    },
 })
 
 // Open and navigate
 const book = await reader.open(file)
 await reader.next()
 await reader.goTo('/path/to/chapter.xhtml#section')
+
+// Control spread at runtime
+reader.setSpread(2) // Enable auto-spread (2 pages on wide screens)
+reader.setSpread(1) // Force single page
 ```
+
+### Auto-Spread Layout
+
+In paginated mode, the renderer uses a grid-sized page window and automatically displays two pages side-by-side when the container is wide enough:
+
+- **Container width ≥ 2 × `maxInlineSize` + `gap`**: Shows 2 pages (spread)
+- **Container width < 2 × `maxInlineSize` + `gap`**: Shows 1 page (single)
+- **Resizing**: Recomputes the grid span and switches between spread and single-page
+
+The `maxColumnCount` config option (default: `2`) controls the maximum number of visible pages. Set to `1` to always use single-page layout.
 
 ## Document Model (AI-friendly)
 

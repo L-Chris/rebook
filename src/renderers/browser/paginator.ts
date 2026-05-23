@@ -2,7 +2,7 @@
  * Browser Paginator
  *
  * Handles paginated and scrolled rendering of book sections using
- * CSS multi-column layout in iframes.
+ * a CSS Grid-sized iframe page window.
  */
 
 import type { Book, Section, ResolvedNavigation } from '../../core/types'
@@ -176,10 +176,14 @@ class View {
      */
     private buildDocument(content: string, format?: string): { html: string; mimeType: string } {
         // Already a full document — use as-is
-        const isFullDocument = /^\s*(<!DOCTYPE|<html[\s>])/i.test(content)
+        // Match <?xml declarations, DOCTYPE, or <html> tags
+        const isFullDocument = /^\s*(<\?xml|<!DOCTYPE|<html[\s>])/i.test(content)
         if (isFullDocument) {
-            const mimeType = format === 'xhtml' ? 'application/xhtml+xml' : 'text/html'
-            return { html: content, mimeType }
+            // Always serve full documents as text/html — the HTML parser is
+            // lenient about XML declarations and XHTML self-closing tags,
+            // while application/xhtml+xml triggers strict XML parsing that
+            // rejects common EPUB quirks (e.g. multiple XML declarations).
+            return { html: content, mimeType: 'text/html' }
         }
 
         // Image content — wrap in HTML with <img>
@@ -239,6 +243,7 @@ class View {
                 padding: 0;
             }
             body {
+                height: 100%;
                 font-family: ${styles.fontFamily ?? 'Georgia, serif'};
                 font-size: ${styles.fontSize ?? '16px'};
                 line-height: ${styles.lineHeight ?? 1.6};
@@ -252,17 +257,26 @@ class View {
             }
             img { max-width: 100%; height: auto; }
             pre { white-space: pre-wrap; }
+            .main { height: 100%; }
             ${styles.css ?? ''}
         `
         this.doc.head.appendChild(style)
     }
 
     /**
-     * Set up paginated layout using CSS multi-column.
+     * Set up paginated layout using a grid-sized iframe page window.
+     *
+     * @param columns Number of columns to show simultaneously (1 or 2)
      */
-    paginate(pageWidth: number, pageHeight: number, gap: number): void {
+    paginate(pageWidth: number, pageHeight: number, gap: number, columns = 1): void {
         if (!this.doc?.documentElement) return
         const html = this.doc.documentElement
+
+        // Constrain iframe to the visible span (N columns + N-1 gaps)
+        const visibleWidth = pageWidth * columns + gap * (columns - 1)
+        this.iframe.style.width = `${visibleWidth}px`
+        this.iframe.style.margin = '0 auto'
+
         html.style.columnWidth = `${pageWidth}px`
         html.style.columnGap = `${gap}px`
         html.style.height = `${pageHeight}px`
@@ -279,6 +293,11 @@ class View {
     unpaginate(): void {
         if (!this.doc?.documentElement) return
         const html = this.doc.documentElement
+
+        // Restore iframe to full width
+        this.iframe.style.width = '100%'
+        this.iframe.style.margin = ''
+
         html.style.columnWidth = ''
         html.style.columnGap = ''
         html.style.columnFill = ''
@@ -346,6 +365,9 @@ export class BrowserRenderer implements Renderer {
     private currentFraction = 0
     private pageWidth = 0
     private pageHeight = 0
+    private visibleWidth = 0
+    private columns = 1
+    private maxColumnCount: number
     private layout: LayoutMode
     private styles: RendererStyles
     private animated: boolean
@@ -360,12 +382,16 @@ export class BrowserRenderer implements Renderer {
         this.layout = config.layout ?? 'paginated'
         this.styles = config.styles ?? {}
         this.animated = config.animated ?? true
+        this.maxColumnCount = config.maxColumnCount ?? 2
 
         // Create wrapper
         this.wrapper = document.createElement('div')
         this.wrapper.style.cssText = `
             width: 100%;
             height: 100%;
+            display: grid;
+            grid-template-columns: 1fr;
+            place-items: stretch center;
             overflow: hidden;
             position: relative;
         `
@@ -391,17 +417,32 @@ export class BrowserRenderer implements Renderer {
         }
     }
 
-    private getPageSize(): { width: number; height: number; gap: number } {
+    private getPageSize(): { width: number; height: number; gap: number; columns: number } {
         const rect = this.wrapper.getBoundingClientRect()
         const margin = parseInt(this.styles.margin ?? '48') || 48
         const gap = parseInt(this.styles.gap ?? '48') || 48
         const maxWidth = parseInt(this.styles.maxInlineSize ?? '720') || 720
         const maxHeight = parseInt(this.styles.maxBlockSize ?? '0') || 0
 
-        const width = Math.min(maxWidth, rect.width - margin * 2)
-        const height = maxHeight > 0 ? Math.min(maxHeight, rect.height - margin * 2) : rect.height - margin * 2
+        const availableWidth = rect.width - margin * 2
 
-        return { width: Math.max(200, width), height: Math.max(200, height), gap }
+        // Auto-spread: show 2 columns when the container is wide enough
+        // to fit at least two pages at maxInlineSize each.
+        const divisor = Math.min(
+            this.maxColumnCount,
+            Math.max(1, Math.ceil(availableWidth / maxWidth)),
+        )
+        const width = (availableWidth - gap * (divisor - 1)) / divisor
+        const height = maxHeight > 0
+            ? Math.min(maxHeight, rect.height)
+            : rect.height
+
+        return {
+            width: Math.max(200, width),
+            height: Math.max(200, height),
+            gap,
+            columns: divisor,
+        }
     }
 
     private async loadSection(index: number, anchor?: ResolvedNavigation['anchor']): Promise<void> {
@@ -432,11 +473,13 @@ export class BrowserRenderer implements Renderer {
             this.view.applyStyles(this.styles)
 
             // Set up layout
-            const { width, height, gap } = this.getPageSize()
+            const { width, height, gap, columns } = this.getPageSize()
             if (this.layout === 'paginated') {
-                this.view.paginate(width, height, gap)
+                this.view.paginate(width, height, gap, columns)
                 this.pageWidth = width
                 this.pageHeight = height
+                this.columns = columns
+                this.visibleWidth = width * columns + gap * (columns - 1)
             } else {
                 this.view.unpaginate()
             }
@@ -461,11 +504,11 @@ export class BrowserRenderer implements Renderer {
         if (!this.view?.doc) return
 
         const range = this.layout === 'paginated'
-            ? this.view.getVisibleRange(this.pageWidth)
+            ? this.view.getVisibleRange(this.visibleWidth)
             : null
 
         const scrollLeft = this.view.iframe.contentWindow?.scrollX ?? 0
-        const maxScroll = this.view.contentWidth - this.pageWidth
+        const maxScroll = this.view.contentWidth - this.visibleWidth
         const fraction = maxScroll > 0 ? scrollLeft / maxScroll : 0
 
         this.currentFraction = fraction
@@ -532,11 +575,8 @@ export class BrowserRenderer implements Renderer {
     }
 
     private onResize(): void {
+        this.recomputeLayout()
         if (this.view && this.layout === 'paginated') {
-            const { width, height, gap } = this.getPageSize()
-            this.view.paginate(width, height, gap)
-            this.pageWidth = width
-            this.pageHeight = height
             this.emitRelocate('resize')
         }
     }
@@ -560,10 +600,10 @@ export class BrowserRenderer implements Renderer {
 
         if (this.layout === 'paginated') {
             const scrollLeft = this.view.iframe.contentWindow?.scrollX ?? 0
-            const maxScroll = this.view.contentWidth - this.pageWidth
+            const maxScroll = this.view.contentWidth - this.visibleWidth
 
             if (scrollLeft < maxScroll - 1) {
-                const newScroll = Math.min(maxScroll, scrollLeft + this.pageWidth)
+                const newScroll = Math.min(maxScroll, scrollLeft + this.visibleWidth)
                 this.view.iframe.contentWindow?.scrollTo({
                     left: newScroll,
                     behavior: this.animated ? 'smooth' : 'instant',
@@ -596,7 +636,7 @@ export class BrowserRenderer implements Renderer {
             const scrollLeft = this.view.iframe.contentWindow?.scrollX ?? 0
 
             if (scrollLeft > 1) {
-                const newScroll = Math.max(0, scrollLeft - this.pageWidth)
+                const newScroll = Math.max(0, scrollLeft - this.visibleWidth)
                 this.view.iframe.contentWindow?.scrollTo({
                     left: newScroll,
                     behavior: this.animated ? 'smooth' : 'instant',
@@ -609,7 +649,7 @@ export class BrowserRenderer implements Renderer {
                     })
                     // Scroll to end after loading
                     if (this.view) {
-                        const maxScroll = this.view.contentWidth - this.pageWidth
+                        const maxScroll = this.view.contentWidth - this.visibleWidth
                         this.view.iframe.contentWindow?.scrollTo(maxScroll, 0)
                     }
                 }
@@ -638,22 +678,30 @@ export class BrowserRenderer implements Renderer {
 
         // Scroll to fraction within section
         if (this.view && this.layout === 'paginated') {
-            const maxScroll = this.view.contentWidth - this.pageWidth
+            const maxScroll = this.view.contentWidth - this.visibleWidth
             this.view.iframe.contentWindow?.scrollTo(maxScroll * fractionInSection, 0)
             this.emitRelocate('fraction')
         }
     }
 
+    /**
+     * Recompute page size and re-paginate the current view.
+     * Used after resize, style changes, or spread changes.
+     */
+    private recomputeLayout(): void {
+        if (!this.view || this.layout !== 'paginated') return
+        const { width, height, gap, columns } = this.getPageSize()
+        this.view.paginate(width, height, gap, columns)
+        this.pageWidth = width
+        this.pageHeight = height
+        this.columns = columns
+        this.visibleWidth = width * columns + gap * (columns - 1)
+    }
+
     setStyles(styles: RendererStyles): void {
         this.styles = { ...this.styles, ...styles }
         this.view?.applyStyles(this.styles)
-
-        if (this.layout === 'paginated' && this.view) {
-            const { width, height, gap } = this.getPageSize()
-            this.view.paginate(width, height, gap)
-            this.pageWidth = width
-            this.pageHeight = height
-        }
+        this.recomputeLayout()
     }
 
     setLayout(mode: LayoutMode): void {
@@ -662,14 +710,20 @@ export class BrowserRenderer implements Renderer {
 
         if (this.view) {
             if (mode === 'paginated') {
-                const { width, height, gap } = this.getPageSize()
-                this.view.paginate(width, height, gap)
-                this.pageWidth = width
-                this.pageHeight = height
+                this.recomputeLayout()
             } else {
                 this.view.unpaginate()
+                this.visibleWidth = 0
+                this.columns = 1
             }
         }
+    }
+
+    setSpread(maxColumns: number): void {
+        if (this.maxColumnCount === maxColumns) return
+        this.maxColumnCount = Math.max(1, maxColumns)
+        this.recomputeLayout()
+        this.emitRelocate('spread')
     }
 
     getLocation(): RelocateEvent | null {

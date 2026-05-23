@@ -168,6 +168,14 @@ export class ReaderView {
     }
 
     /**
+     * Set maximum number of visible columns (pages).
+     * 1 = single page, 2 = auto spread (two pages when wide enough).
+     */
+    setSpread(maxColumns: number): void {
+        this.renderer.setSpread(maxColumns)
+    }
+
+    /**
      * Register an event listener.
      */
     on(event: 'load', listener: (e: LoadEvent) => void): void

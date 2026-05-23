@@ -70,12 +70,15 @@ import { createReader } from 'ebook-js'
 const reader = createReader({
     container: document.getElementById('viewer')!,
     layout: 'paginated', // or 'scrolled'
+    maxColumnCount: 2,   // Max visible pages (1 = single, 2 = auto-spread)
     styles: {
         fontFamily: 'Georgia, serif',
         fontSize: '16px',
         lineHeight: 1.6,
         textAlign: 'justify',
         hyphenate: true,
+        maxInlineSize: '720px', // Max page width
+        gap: '48px',            // Gap between pages
     },
 })
 ```
@@ -103,7 +106,21 @@ await reader.goToFraction(0.5)   // Navigate to 50% progress
 ```typescript
 reader.setStyles({ fontSize: '18px', theme: 'dark' })
 reader.setLayout('scrolled')
+
+// Control spread (two-page layout)
+reader.setSpread(2) // Auto-spread: 2 pages on wide screens, 1 on narrow
+reader.setSpread(1) // Force single page
 ```
+
+#### Auto-Spread Layout
+
+In paginated mode, the renderer uses a grid-sized page window and automatically displays two pages side-by-side when the container is wide enough:
+
+- **Container width ≥ 2 × `maxInlineSize` + `gap`**: Shows 2 pages (spread)
+- **Container width < 2 × `maxInlineSize` + `gap`**: Shows 1 page (single)
+- **Resizing**: Recomputes the grid span and switches between spread and single-page
+
+The `maxColumnCount` config option (default: `2`) controls the maximum number of visible pages. Set to `1` to always use single-page layout.
 
 ### Events
 
@@ -445,6 +462,7 @@ interface Renderer {
     prev(): Promise<void>
     setStyles(styles: RendererStyles): void
     setLayout(layout: LayoutMode): void
+    setSpread(maxColumns: number): void  // Control two-page layout
     on(event: string, listener: (e: any) => void): void
     off(event: string, listener: (e: any) => void): void
     destroy(): void
@@ -460,13 +478,28 @@ import { BrowserRenderer, createBrowserRenderer } from 'ebook-js'
 const renderer = createBrowserRenderer({
     container: document.getElementById('viewer')!,
     layout: 'paginated',
+    maxColumnCount: 2,  // Enable auto-spread (default: 2)
 })
 
 // Or class directly
 const renderer = new BrowserRenderer({
     container: element,
 })
+
+// Control spread at runtime
+renderer.setSpread(2) // Auto-spread: 2 pages on wide screens
+renderer.setSpread(1) // Force single page
 ```
+
+#### `setSpread(maxColumns)`
+
+Controls the maximum number of visible columns (pages) in paginated mode:
+
+- `1`: Always show single page
+- `2` (default): Auto-spread — show 2 pages when container width ≥ `2 × maxInlineSize + gap`
+- The renderer dynamically switches between 1 and 2 columns on resize
+
+In spread mode, navigation (`next()` / `prev()`) scrolls by the full visible width (2 pages + gap), and progress calculation accounts for the wider viewport.
 
 ---
 

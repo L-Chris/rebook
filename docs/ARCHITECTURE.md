@@ -45,9 +45,9 @@ Parsers have zero browser dependencies. DOM parsing, URL creation, and other pla
 
 ### 2. Renderers own the platform
 
-Platform-specific concerns (iframe management, CSS columns, DOM events, WXML, WebView) live entirely in renderers.
+Platform-specific concerns (iframe management, paginated grid layout, DOM events, WXML, WebView) live entirely in renderers.
 
-**Why**: Different platforms render content differently. A browser uses iframes and CSS columns; WeChat uses `<rich-text>` with WXML; React Native uses WebView. None of these concerns belong in a parser.
+**Why**: Different platforms render content differently. A browser uses iframes and CSS Grid to size the visible page window; WeChat uses `<rich-text>` with WXML; React Native uses WebView. None of these concerns belong in a parser.
 
 ### 3. Book is the contract
 
@@ -85,6 +85,61 @@ switch (section.format) {
     case 'image': // Data URI — render with image component
 }
 ```
+
+## Browser Renderer Architecture
+
+The `BrowserRenderer` uses CSS Grid sizing around iframe content to achieve paginated reading.
+
+### Pagination Strategy
+
+Each section is loaded into an iframe whose visible page window is sized as a grid:
+
+```typescript
+const visibleWidth = pageWidth * columns + gap * (columns - 1)
+
+iframe.style.width = `${visibleWidth}px`
+iframe.style.margin = '0 auto'
+wrapper.style.display = 'grid'
+wrapper.style.gridTemplateColumns = '1fr'
+wrapper.style.placeItems = 'stretch center'
+```
+
+The grid keeps the active page window centered and gives it an exact width. Navigation still advances by the visible grid span: `pageWidth` for a single page, or `pageWidth * 2 + gap` for a two-page spread.
+
+### Auto-Spread Layout
+
+The renderer dynamically switches the grid span between single-page and two-page spread layouts based on container width:
+
+```typescript
+const columns = Math.min(
+    maxColumnCount,  // default: 2
+    Math.max(1, Math.ceil(availableWidth / maxInlineSize)),
+)
+
+const pageWidth = (availableWidth - gap * (columns - 1)) / columns
+const visibleWidth = pageWidth * columns + gap * (columns - 1)
+```
+
+**Single-page mode** (narrow containers):
+- Grid span width = `pageWidth`
+- One page slot visible at a time
+
+**Spread mode** (wide containers, `columns = 2`):
+- Grid span width = `pageWidth * 2 + gap`
+- Two page slots visible side-by-side
+- Navigation scrolls by the full visible width
+
+The `maxColumnCount` config option (default: `2`) controls the maximum number of visible pages. Set to `1` to always use single-page layout.
+
+### Key Implementation Details
+
+1. **Grid sizing owns the visible span**: The renderer computes `pageWidth`, `gap`, and `columns`, then sizes the iframe to the exact grid span so single-page and spread modes share the same navigation model.
+
+2. **XML declaration detection**: EPUB sections serialized by `XMLSerializer` start with `<?xml version="1.0"?>`. The renderer detects this and serves as `text/html` (lenient parsing) rather than `application/xhtml+xml` (strict XML).
+
+3. **Resource replacement**: Embedded resources (images, CSS, fonts) are converted to blob URLs during section loading, replacing relative paths in the content string.
+
+4. **Resize handling**: `ResizeObserver` monitors the container and recalculates layout, potentially switching between single-page and spread modes.
 
 ## Adapter System
 

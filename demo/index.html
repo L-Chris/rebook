@@ -152,34 +152,7 @@
             overflow: hidden;
         }
 
-        /* Navigation buttons */
-        .nav-buttons {
-            position: absolute;
-            top: 50%;
-            transform: translateY(-50%);
-            display: flex;
-            gap: 8px;
-        }
-
-        .nav-buttons.left {
-            left: 30px;
-        }
-
-        .nav-buttons.right {
-            right: 30px;
-        }
-
-        .nav-btn {
-            width: 48px;
-            height: 48px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 24px;
-            padding: 0;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-        }
+        /* Navigation buttons - removed */
 
         /* Footer / Progress bar */
         footer {
@@ -300,6 +273,10 @@
                 <option value="paginated">Paginated</option>
                 <option value="scrolled">Scrolled</option>
             </select>
+            <select id="spread-select">
+                <option value="2">Auto Spread</option>
+                <option value="1">Single Page</option>
+            </select>
             <select id="font-size-select">
                 <option value="14px">Small</option>
                 <option value="16px" selected>Medium</option>
@@ -340,14 +317,6 @@
         <!-- Viewer -->
         <div id="viewer-container">
             <div id="viewer"></div>
-
-            <!-- Navigation -->
-            <div class="nav-buttons left">
-                <button class="nav-btn" id="btn-prev" title="Previous">‹</button>
-            </div>
-            <div class="nav-buttons right">
-                <button class="nav-btn" id="btn-next" title="Next">›</button>
-            </div>
         </div>
 
         <!-- Drop target -->
@@ -401,14 +370,13 @@
         const dropTarget = document.getElementById('drop-target')
         const fileInput = document.getElementById('file-input')
         const btnOpen = document.getElementById('btn-open')
-        const btnPrev = document.getElementById('btn-prev')
-        const btnNext = document.getElementById('btn-next')
         const btnSidebar = document.getElementById('btn-sidebar')
         const btnSettings = document.getElementById('btn-settings')
         const sidebar = document.getElementById('sidebar')
         const tocList = document.getElementById('toc-list')
         const bookTitle = document.getElementById('book-title')
         const layoutSelect = document.getElementById('layout-select')
+        const spreadSelect = document.getElementById('spread-select')
         const fontSizeSelect = document.getElementById('font-size-select')
         const settingsPanel = document.getElementById('settings-panel')
         const themeSelect = document.getElementById('theme-select')
@@ -504,9 +472,6 @@
             if (e.target.files[0]) openFile(e.target.files[0])
         })
 
-        btnPrev.addEventListener('click', () => reader.prev())
-        btnNext.addEventListener('click', () => reader.next())
-
         btnSidebar.addEventListener('click', () => {
             sidebar.classList.toggle('hidden')
         })
@@ -517,6 +482,10 @@
 
         layoutSelect.addEventListener('change', (e) => {
             reader.setLayout(e.target.value)
+        })
+
+        spreadSelect.addEventListener('change', (e) => {
+            reader.setSpread(Number(e.target.value))
         })
 
         fontSizeSelect.addEventListener('change', (e) => {
