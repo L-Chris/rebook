@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { EPUBParser } from '../../src/parsers/epub'
-import { TestDOMAdapter, TestURLFactory } from '../../src/adapters/test'
+import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import { layout, prepare, type TextSegment } from '../../src/core/pretext'
 import { createTestEPUB } from '../fixtures/epub-fixture'
 
@@ -34,8 +34,8 @@ describe('EPUB Pretext segments', () => {
                 content: '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Plain <strong>bold</strong> <em style="color: red">red</em></p></body></html>',
             }],
         }), {
-            domAdapter: new TestDOMAdapter(),
-            urlFactory: new TestURLFactory(),
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
         })
 
         const segments = await book.sections[0].getSegments?.()
@@ -64,8 +64,8 @@ describe('EPUB Pretext segments', () => {
                 data: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
             }],
         }), {
-            domAdapter: new TestDOMAdapter(),
-            urlFactory: new TestURLFactory(),
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
         })
 
         const html = await book.sections[0].load()
@@ -80,8 +80,8 @@ describe('EPUB Pretext segments', () => {
             data.byteOffset,
             data.byteOffset + data.byteLength,
         ), {
-            domAdapter: new TestDOMAdapter(),
-            urlFactory: new TestURLFactory(),
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
         })
 
         let segments: TextSegment[] = []
@@ -110,8 +110,8 @@ describe('EPUB Pretext segments', () => {
             data.byteOffset,
             data.byteOffset + data.byteLength,
         ), {
-            domAdapter: new TestDOMAdapter(),
-            urlFactory: new TestURLFactory(),
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
         })
 
         let blockCount = 0
@@ -125,7 +125,7 @@ describe('EPUB Pretext segments', () => {
 
     it('exposes image blocks with renderable URLs and cover hints', async () => {
         const parser = new EPUBParser()
-        const urlFactory = new TestURLFactory()
+        const urlFactory = new NodeURLFactory()
         const book = await parser.parse(await createTestEPUB({
             chapters: [{
                 id: 'cover',
@@ -140,7 +140,7 @@ describe('EPUB Pretext segments', () => {
                 data: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
             }],
         }), {
-            domAdapter: new TestDOMAdapter(),
+            domAdapter: new NodeDOMAdapter(),
             urlFactory,
         })
 

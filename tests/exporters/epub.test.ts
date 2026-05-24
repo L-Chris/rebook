@@ -4,7 +4,7 @@ import { createTestEPUB } from '../fixtures/epub-fixture'
 import { createTestCBZ } from '../fixtures/cbz-fixture'
 import { createTestFB2Buffer } from '../fixtures/fb2-fixture'
 import { createTestMOBI } from '../fixtures/mobi-fixture'
-import { TestDOMAdapter, TestURLFactory } from '../../src/adapters/test'
+import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import type { Exporter } from '../../src'
 import {
     cbz,
@@ -22,8 +22,8 @@ import {
 } from '../../src'
 
 const parserOptions = {
-    domAdapter: new TestDOMAdapter(),
-    urlFactory: new TestURLFactory(),
+    domAdapter: new NodeDOMAdapter(),
+    urlFactory: new NodeURLFactory(),
 }
 
 const tinyPNG = new Uint8Array([

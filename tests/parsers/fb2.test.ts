@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { FB2Parser, fb2 } from '../../src/parsers/fb2'
 import { createTestFB2, createTestFB2Buffer, createTestFBZ } from '../fixtures/fb2-fixture'
-import { TestDOMAdapter, TestURLFactory } from '../../src/adapters/test'
+import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import type { ParserOptions } from '../../src/core/parser'
 
 describe('FB2Parser', () => {
@@ -15,8 +15,8 @@ describe('FB2Parser', () => {
     beforeAll(() => {
         parser = new FB2Parser()
         options = {
-            domAdapter: new TestDOMAdapter(),
-            urlFactory: new TestURLFactory(),
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
         }
     })
 
@@ -281,7 +281,7 @@ describe('FB2Parser', () => {
         })
 
         it('should cleanup URLs on destroy', async () => {
-            const urlFactory = new TestURLFactory()
+            const urlFactory = new NodeURLFactory()
             const buffer = createTestFB2Buffer({
                 sections: [{ title: 'Ch', paragraphs: ['text'] }],
             })
@@ -310,14 +310,14 @@ describe('FB2Parser', () => {
     describe('error handling', () => {
         it('should throw without domAdapter', async () => {
             const buffer = createTestFB2Buffer()
-            await expect(parser.parse(buffer, { urlFactory: new TestURLFactory() }))
+            await expect(parser.parse(buffer, { urlFactory: new NodeURLFactory() }))
                 .rejects.toThrow('domAdapter')
         })
 
         it('should work without urlFactory (FB2 uses data URIs)', async () => {
             const buffer = createTestFB2Buffer()
-            // FB2 no longer requires urlFactory — sections return content strings
-            const book = await parser.parse(buffer, { domAdapter: new TestDOMAdapter() })
+            // FB2 no longer requires urlFactory 鈥?sections return content strings
+            const book = await parser.parse(buffer, { domAdapter: new NodeDOMAdapter() })
             expect(book.sections.length).toBeGreaterThan(0)
         })
     })

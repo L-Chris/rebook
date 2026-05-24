@@ -5,30 +5,30 @@ Design decisions and architectural rationale for rebook.
 ## Overview
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                          rebook                             │
-├────────────────────────────┬─────────────────────────────────┤
-│         Parsers            │           Renderers             │
-│                            │                                 │
-│  ┌──────────────────────┐  │  ┌───────────────────────────┐  │
-│  │  EPUB Parser         │  │  │  Browser Renderer         │  │
-│  │  MOBI/AZW3 Parser    │  │  │  (paginated/scrolled)     │  │
-│  │  FB2 Parser          │  │  └───────────────────────────┘  │
-│  │  CBZ Parser          │  │  ┌───────────────────────────┐  │
-│  │  (all env-agnostic)  │  │  │  React/Vue Wrappers       │  │
-│  └──────────┬───────────┘  │  │  (planned)                │  │
-│             │              │  └───────────────────────────┘  │
-│  ┌──────────┴───────────┐  │                                 │
-│  │  Adapters (injected) │  │                                 │
-│  │  - DOMAdapter        │  │                                 │
-│  │  - URLFactory        │  │                                 │
-│  └──────────────────────┘  │                                 │
-│                            │                                 │
-│         │                  │            ▲                    │
-│         ▼                  │            │                    │
-│      Book Interface ───────┼────────────┘                    │
-│   (common contract)        │                                 │
-└────────────────────────────┴─────────────────────────────────┘
+鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
+鈹?                         rebook                             鈹?
+鈹溾攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
+鈹?        Parsers            鈹?          Renderers             鈹?
+鈹?                           鈹?                                鈹?
+鈹? 鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹? 鈹? 鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹? 鈹?
+鈹? 鈹? EPUB Parser         鈹? 鈹? 鈹? Browser Renderer         鈹? 鈹?
+鈹? 鈹? MOBI/AZW3 Parser    鈹? 鈹? 鈹? (paginated/scrolled)     鈹? 鈹?
+鈹? 鈹? FB2 Parser          鈹? 鈹? 鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹? 鈹?
+鈹? 鈹? CBZ Parser          鈹? 鈹? 鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹? 鈹?
+鈹? 鈹? (all env-agnostic)  鈹? 鈹? 鈹? React/Vue Wrappers       鈹? 鈹?
+鈹? 鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹? 鈹? 鈹? (planned)                鈹? 鈹?
+鈹?            鈹?             鈹? 鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹? 鈹?
+鈹? 鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹粹攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹? 鈹?                                鈹?
+鈹? 鈹? Adapters (injected) 鈹? 鈹?                                鈹?
+鈹? 鈹? - DOMAdapter        鈹? 鈹?                                鈹?
+鈹? 鈹? - URLFactory        鈹? 鈹?                                鈹?
+鈹? 鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹? 鈹?                                鈹?
+鈹?                           鈹?                                鈹?
+鈹?        鈹?                 鈹?           鈻?                   鈹?
+鈹?        鈻?                 鈹?           鈹?                   鈹?
+鈹?     Book Interface 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹尖攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?                   鈹?
+鈹?  (common contract)        鈹?                                鈹?
+鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹粹攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
 ```
 
 ## Design Principles
@@ -37,11 +37,11 @@ Design decisions and architectural rationale for rebook.
 
 Parsers have zero browser dependencies. DOM parsing, URL creation, and other platform APIs are injected via adapters.
 
-**Why**: Parsers should run anywhere — browser, Node.js, Web Workers, React Native, WeChat Mini Programs. A parser that calls `document.createElement` internally can only run in a browser.
+**Why**: Parsers should run anywhere 鈥?browser, Node.js, Web Workers, React Native, WeChat Mini Programs. A parser that calls `document.createElement` internally can only run in a browser.
 
 **How**: Two adapter interfaces are injected via `ParserOptions`:
-- `DOMAdapter` — XML/HTML parsing and querying
-- `URLFactory` — Blob URL creation and revocation
+- `DOMAdapter` 鈥?XML/HTML parsing and querying
+- `URLFactory` 鈥?Blob URL creation and revocation
 
 ### 2. Renderers own the platform
 
@@ -60,19 +60,19 @@ Parsers produce a `Book`, renderers consume it. Neither knows about the other.
 `Section.load()` returns content strings, not blob URLs.
 
 **Why**: A URL is browser-specific. A string is universal. The renderer decides what to do with the string:
-- **WeChat Mini Program**: string → WXML `<rich-text>`
-- **Browser**: string/blocks → Pretext lines → DOM spans component
+- **WeChat Mini Program**: string 鈫?WXML `<rich-text>`
+- **Browser**: string/blocks 鈫?Pretext lines 鈫?DOM spans component
 - Node.js: extract text, generate static HTML
 
 ## Cross-Platform Rendering
 
 | Platform | Renderer | Content Pipeline |
 |----------|----------|------------------|
-| Web browser | `VirtualTextRenderer` | AST blocks → Pretext lines → DOM spans |
-| Virtual text / Canvas | (custom) | XHTML AST → styled segments → `@chenglou/pretext` prepare/layout → visible line ranges |
-| WeChat Mini Program | (planned) | String → WXML → `<rich-text>` |
-| React Native | (planned) | String → WebView |
-| Node.js / SSR | (custom) | String → text extraction or static HTML |
+| Web browser | `VirtualTextRenderer` | AST blocks 鈫?Pretext lines 鈫?DOM spans |
+| Virtual text / Canvas | (custom) | XHTML AST 鈫?styled segments 鈫?`@chenglou/pretext` prepare/layout 鈫?visible line ranges |
+| WeChat Mini Program | (planned) | String 鈫?WXML 鈫?`<rich-text>` |
+| React Native | (planned) | String 鈫?WebView |
+| Node.js / SSR | (custom) | String 鈫?text extraction or static HTML |
 
 ### Custom Renderer
 
@@ -81,9 +81,9 @@ To build a custom renderer, implement the `Renderer` interface:
 ```typescript
 const content = await section.load()
 switch (section.format) {
-    case 'xhtml': // Valid XHTML — render with XML parser
-    case 'html':  // HTML — render with HTML parser
-    case 'image': // Data URI — render with image component
+    case 'xhtml': // Valid XHTML 鈥?render with XML parser
+    case 'html':  // HTML 鈥?render with HTML parser
+    case 'image': // Data URI 鈥?render with image component
 }
 ```
 
@@ -128,10 +128,10 @@ The `VirtualTextRenderer` receives Pretext layout lines and renders only the vis
 
 ### Why dependency injection?
 
-The alternative — conditional imports or environment detection — creates tight coupling and makes testing difficult. With DI:
+The alternative 鈥?conditional imports or environment detection 鈥?creates tight coupling and makes testing difficult. With DI:
 
 - **Browser**: `BrowserDOMAdapter` uses native `DOMParser`
-- **Node.js**: `TestDOMAdapter` uses `@xmldom/xmldom`
+- **Node.js**: `NodeDOMAdapter` uses `@xmldom/xmldom`
 - **Custom**: Implement `DOMAdapter` for any XML parser
 
 ### DOMAdapter responsibilities
@@ -160,14 +160,14 @@ The Pretext path is a separate rendering pipeline for EPUB text that needs fast 
 
 ```
 EPUB zip
-  → XHTML string
-  → DocumentNode AST
-  → TextBlock[] (chapter/heading/paragraph/listItem/blockquote/pre/image)
-  → TextSegment[] with inline style metadata
-  → @chenglou/pretext prepareRichInline() for one-time Canvas measurement
-  → @chenglou/pretext line range walking for width changes
-  → rebook LineRange[] with source segment/style/image mapping
-  → virtual DOM rows, Canvas, SVG, or WebGL
+  鈫?XHTML string
+  鈫?DocumentNode AST
+  鈫?TextBlock[] (chapter/heading/paragraph/listItem/blockquote/pre/image)
+  鈫?TextSegment[] with inline style metadata
+  鈫?@chenglou/pretext prepareRichInline() for one-time Canvas measurement
+  鈫?@chenglou/pretext line range walking for width changes
+  鈫?rebook LineRange[] with source segment/style/image mapping
+  鈫?virtual DOM rows, Canvas, SVG, or WebGL
 ```
 
 rebook does not implement the text measurement or Unicode line-breaking engine. That responsibility belongs to `@chenglou/pretext`. The local `src/core/pretext.ts` module is an adapter that:
@@ -205,7 +205,7 @@ HTML is already a tree (the DOM). But the DOM is:
 The Document Model is:
 - **Immutable**: mutations return new instances, enabling undo/redo and safe concurrent access
 - **Platform-agnostic**: plain JavaScript objects, no DOM dependency
-- **Minimal**: `type`, `attrs`, `children`, `text` — four properties cover everything
+- **Minimal**: `type`, `attrs`, `children`, `text` 鈥?four properties cover everything
 
 ### Node structure
 
@@ -225,9 +225,9 @@ Text nodes are leaf nodes with `type: 'text'`. Element nodes have a tag-name `ty
 Nodes are addressed by path (array of indices), following SlateJS convention:
 
 ```
-[0]       → first root node
-[0, 1]    → second child of first root node
-[0, 1, 2] → third child of second child of first root node
+[0]       鈫?first root node
+[0, 1]    鈫?second child of first root node
+[0, 1, 2] 鈫?third child of second child of first root node
 ```
 
 Paths are stable across reads but invalidated by mutations (which return new documents).
@@ -271,27 +271,27 @@ Plugins would follow SlateJS's `withX(editor)` middleware pattern, wrapping the 
 
 ```
 EBookError (base)
-├── ParseError           — Content parsing failed
-├── UnsupportedFormatError — Format not recognized
-├── CorruptedFileError   — File severely corrupted
-├── AdapterRequiredError — Missing required adapter
-└── UnsupportedInputError — Input type not supported
+鈹溾攢鈹€ ParseError           鈥?Content parsing failed
+鈹溾攢鈹€ UnsupportedFormatError 鈥?Format not recognized
+鈹溾攢鈹€ CorruptedFileError   鈥?File severely corrupted
+鈹溾攢鈹€ AdapterRequiredError 鈥?Missing required adapter
+鈹斺攢鈹€ UnsupportedInputError 鈥?Input type not supported
 ```
 
 **Why typed errors?** Consumers can handle specific failure modes:
-- `UnsupportedFormatError` → show "unsupported format" dialog
-- `ParseError` → show "file is corrupted" with format name
-- `AdapterRequiredError` → developer error, log and report
+- `UnsupportedFormatError` 鈫?show "unsupported format" dialog
+- `ParseError` 鈫?show "file is corrupted" with format name
+- `AdapterRequiredError` 鈫?developer error, log and report
 
 ## Malformed EPUB Recovery
 
 Many EPUB files in the wild have broken zip archives. The `zip-loader` implements a multi-layer recovery strategy:
 
-1. **Standard parse** — Try `@zip.js/zip.js` first
-2. **Prepended data correction** — Detect uniformly-shifted Central Directory offsets and patch them
-3. **Per-entry LFH scan** — Scan the file for actual Local File Header positions
-4. **Full LFH fallback** — Build entry list entirely from Local File Headers
-5. **Graceful degradation** — Return `null` for unrecoverable entries
+1. **Standard parse** 鈥?Try `@zip.js/zip.js` first
+2. **Prepended data correction** 鈥?Detect uniformly-shifted Central Directory offsets and patch them
+3. **Per-entry LFH scan** 鈥?Scan the file for actual Local File Header positions
+4. **Full LFH fallback** 鈥?Build entry list entirely from Local File Headers
+5. **Graceful degradation** 鈥?Return `null` for unrecoverable entries
 
 This makes the library significantly more resilient than raw zip.js or foliate-js when dealing with EPUB files from various authoring tools.
 
@@ -299,40 +299,40 @@ This makes the library significantly more resilient than raw zip.js or foliate-j
 
 ```
 src/
-├── core/               # Shared interfaces and types
-│   ├── types.ts        # Book, Section, DocumentNode, etc.
-│   ├── parser.ts       # Parser interface and registry
-│   ├── renderer.ts     # Renderer interface
-│   ├── document.ts     # Document Model implementation
-│   ├── pretext.ts      # TextBlock extraction and Pretext adapter
-│   ├── dom-adapter.ts  # DOMAdapter interface
-│   ├── url-factory.ts  # URLFactory interface
-│   ├── errors.ts       # Error hierarchy
-│   ├── metadata.ts     # Metadata normalization helpers
-│   └── utils.ts        # Shared utilities
-├── adapters/
-│   ├── browser.ts      # Browser DOM/URL adapters
-│   └── test.ts         # Node.js test adapters
-├── parsers/
-│   ├── epub.ts         # EPUB parser
-│   ├── mobi.ts         # MOBI/AZW/AZW3 parser
-│   ├── fb2.ts          # FictionBook 2 parser
-│   └── cbz.ts          # Comic Book Zip parser
-├── loaders/
-│   └── zip-loader.ts   # Zip archive loader (with malformed recovery)
-├── renderers/
-│   └── browser/        # Browser renderer
-│       ├── paginator.ts
-│       ├── virtual-text.ts # Pretext-backed virtual line renderer
-│       └── view.ts     # ReaderView high-level API
-└── utils/
-    └── progress.ts     # Progress tracking
+鈹溾攢鈹€ core/               # Shared interfaces and types
+鈹?  鈹溾攢鈹€ types.ts        # Book, Section, DocumentNode, etc.
+鈹?  鈹溾攢鈹€ parser.ts       # Parser interface and registry
+鈹?  鈹溾攢鈹€ renderer.ts     # Renderer interface
+鈹?  鈹溾攢鈹€ document.ts     # Document Model implementation
+鈹?  鈹溾攢鈹€ pretext.ts      # TextBlock extraction and Pretext adapter
+鈹?  鈹溾攢鈹€ dom-adapter.ts  # DOMAdapter interface
+鈹?  鈹溾攢鈹€ url-factory.ts  # URLFactory interface
+鈹?  鈹溾攢鈹€ errors.ts       # Error hierarchy
+鈹?  鈹溾攢鈹€ metadata.ts     # Metadata normalization helpers
+鈹?  鈹斺攢鈹€ utils.ts        # Shared utilities
+鈹溾攢鈹€ adapters/
+鈹?  鈹溾攢鈹€ browser.ts      # Browser DOM/URL adapters
+鈹?  鈹斺攢鈹€ test.ts         # Node.js test adapters
+鈹溾攢鈹€ parsers/
+鈹?  鈹溾攢鈹€ epub.ts         # EPUB parser
+鈹?  鈹溾攢鈹€ mobi.ts         # MOBI/AZW/AZW3 parser
+鈹?  鈹溾攢鈹€ fb2.ts          # FictionBook 2 parser
+鈹?  鈹斺攢鈹€ cbz.ts          # Comic Book Zip parser
+鈹溾攢鈹€ loaders/
+鈹?  鈹斺攢鈹€ zip-loader.ts   # Zip archive loader (with malformed recovery)
+鈹溾攢鈹€ renderers/
+鈹?  鈹斺攢鈹€ browser/        # Browser renderer
+鈹?      鈹溾攢鈹€ paginator.ts
+鈹?      鈹溾攢鈹€ virtual-text.ts # Pretext-backed virtual line renderer
+鈹?      鈹斺攢鈹€ view.ts     # ReaderView high-level API
+鈹斺攢鈹€ utils/
+    鈹斺攢鈹€ progress.ts     # Progress tracking
 
 tests/
-├── fixtures/           # Test file generators (EPUB, MOBI, FB2, CBZ)
-├── loaders/            # Zip loader tests
-├── parsers/            # Parser tests
-├── renderers/          # Renderer tests
-├── utils/              # Utility tests
-└── document.test.ts    # Document Model tests
+鈹溾攢鈹€ fixtures/           # Test file generators (EPUB, MOBI, FB2, CBZ)
+鈹溾攢鈹€ loaders/            # Zip loader tests
+鈹溾攢鈹€ parsers/            # Parser tests
+鈹溾攢鈹€ renderers/          # Renderer tests
+鈹溾攢鈹€ utils/              # Utility tests
+鈹斺攢鈹€ document.test.ts    # Document Model tests
 ```

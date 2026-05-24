@@ -22,7 +22,7 @@ A tree-based representation with query and mutation APIs:
 ```typescript
 const doc = await section.getDocument()
 
-// AI pipeline: extract → process → inject
+// AI pipeline: extract 鈫?process 鈫?inject
 const text = doc.getText()
 const translation = await translate(text)
 const translated = replaceTextInDoc(doc, translation)
@@ -32,10 +32,10 @@ const html = translated.serialize()
 ### Why not just use the DOM?
 
 The DOM is:
-1. **Mutable** — side effects make undo/redo and concurrent access dangerous
-2. **Browser-only** — can't run in Node.js workers or server-side
-3. **Verbose** — Node has ~100 properties/methods, most irrelevant for content manipulation
-4. **Format-specific** — EPUB uses XHTML, MOBI uses HTML, FB2 uses custom XML
+1. **Mutable** 鈥?side effects make undo/redo and concurrent access dangerous
+2. **Browser-only** 鈥?can't run in Node.js workers or server-side
+3. **Verbose** 鈥?Node has ~100 properties/methods, most irrelevant for content manipulation
+4. **Format-specific** 鈥?EPUB uses XHTML, MOBI uses HTML, FB2 uses custom XML
 
 The Document Model normalizes all formats into the same tree structure.
 
@@ -97,10 +97,10 @@ We haven't implemented this yet, but the Document Model is designed to support i
 
 ### What we didn't borrow
 
-- **Selection/Cursor**: rebook is for reading, not editing — no cursor state needed
-- **Normalization**: SlateJS auto-normalizes invalid trees — we trust parser output
-- **Commands**: SlateJS has a command system — we use direct method calls
-- **React integration**: SlateJS is React-coupled — we're framework-agnostic
+- **Selection/Cursor**: rebook is for reading, not editing 鈥?no cursor state needed
+- **Normalization**: SlateJS auto-normalizes invalid trees 鈥?we trust parser output
+- **Commands**: SlateJS has a command system 鈥?we use direct method calls
+- **React integration**: SlateJS is React-coupled 鈥?we're framework-agnostic
 
 ## Immutability Pattern
 
@@ -155,7 +155,7 @@ Without deep-cloning attrs, `setNode` on the clone modifies the original's attrs
 
 ### xmldom vs browser DOMParser
 
-`@xmldom/xmldom` (used in `TestDOMAdapter`) behaves differently from browser `DOMParser` in several ways:
+`@xmldom/xmldom` (used in `NodeDOMAdapter`) behaves differently from browser `DOMParser` in several ways:
 
 1. **No `<body>` wrapping**: Browser `DOMParser` wraps HTML fragments in `<html><body>`. xmldom does not.
    - **Fix**: Wrap HTML in `<html><body>...</body></html>` before parsing.
@@ -203,7 +203,7 @@ EXTH records have ~20 defined types, but real-world files often have:
 ### FB2 is XML, not HTML
 
 FB2 uses a custom XML schema with namespaced elements. Converting it to XHTML requires:
-- Mapping FB2 elements to HTML equivalents (`<section>` → `<div>`, `<p>` → `<p>`, `<image>` → `<img>`)
+- Mapping FB2 elements to HTML equivalents (`<section>` 鈫?`<div>`, `<p>` 鈫?`<p>`, `<image>` 鈫?`<img>`)
 - Converting binary images to data URIs
 - Handling the "body" concept (FB2 has main body + notes body)
 
@@ -228,13 +228,13 @@ EPUB is a zip archive with specific structure. Common breakage:
 
 Each layer tries a broader recovery:
 
-1. **zip.js standard parse** — works for well-formed files
-2. **CD offset correction** — detect uniform shift and patch all entries
-3. **Per-entry LFH scan** — find actual data by scanning for Local File Headers
-4. **LFH-only fallback** — ignore CD entirely, build from LFH chain
-5. **Graceful null** — return `null` for individual entries that can't be recovered
+1. **zip.js standard parse** 鈥?works for well-formed files
+2. **CD offset correction** 鈥?detect uniform shift and patch all entries
+3. **Per-entry LFH scan** 鈥?find actual data by scanning for Local File Headers
+4. **LFH-only fallback** 鈥?ignore CD entirely, build from LFH chain
+5. **Graceful null** 鈥?return `null` for individual entries that can't be recovered
 
-**Lesson**: The key insight is that Local File Headers are self-contained — each has its own filename, sizes, and compressed data. You don't need the Central Directory at all if you're willing to scan the entire file.
+**Lesson**: The key insight is that Local File Headers are self-contained 鈥?each has its own filename, sizes, and compressed data. You don't need the Central Directory at all if you're willing to scan the entire file.
 
 ### Impact
 
@@ -246,7 +246,7 @@ This recovery stack makes rebook handle ~90% of broken EPUB files that fail in o
 
 `Section.load()` is async and called on demand. A 100-chapter book only loads the current chapter's content.
 
-`getDocument()` is also lazy — the HTML is parsed into a DocumentNode tree only when first accessed. Subsequent calls return the cached tree.
+`getDocument()` is also lazy 鈥?the HTML is parsed into a DocumentNode tree only when first accessed. Subsequent calls return the cached tree.
 
 ### Zip entry access
 
@@ -284,7 +284,7 @@ const epub = createTestEPUB({
 
 ### Adapter-based testing
 
-`TestDOMAdapter` (using `@xmldom/xmldom`) enables testing parsers in Node.js without jsdom. This is faster and more reliable than browser-based testing.
+`NodeDOMAdapter` (using `@xmldom/xmldom`) enables testing parsers in Node.js without jsdom. This is faster and more reliable than browser-based testing.
 
 ### Test coverage
 
@@ -298,7 +298,7 @@ const epub = createTestEPUB({
 
 ### The `column-width` trap
 
-CSS `column-width` is **not** a fixed width — it's a suggestion. The browser adjusts actual column width to fill the container:
+CSS `column-width` is **not** a fixed width 鈥?it's a suggestion. The browser adjusts actual column width to fill the container:
 
 ```css
 html {
@@ -306,7 +306,7 @@ html {
 }
 ```
 
-If the container is 1200px wide, the browser creates 1 column × 1200px (not 720px). This causes content to overflow the visible area.
+If the container is 1200px wide, the browser creates 1 column 脳 1200px (not 720px). This causes content to overflow the visible area.
 
 **Fix**: Constrain the iframe width to exactly the desired visible span:
 

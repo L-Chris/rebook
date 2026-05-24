@@ -15,7 +15,7 @@ import {
     createSectionDocument,
 } from '../src/core/document'
 import { BrowserDOMAdapter } from '../src/adapters/browser'
-import { TestDOMAdapter } from '../src/adapters/test'
+import { NodeDOMAdapter } from '../src/adapters/node'
 
 describe('Document Model', () => {
     describe('Node helpers', () => {
@@ -47,7 +47,7 @@ describe('Document Model', () => {
     describe('parseHTML', () => {
         it('should parse simple HTML', () => {
             const html = '<p>Hello world</p>'
-            const nodes = parseHTML(html, new TestDOMAdapter())
+            const nodes = parseHTML(html, new NodeDOMAdapter())
 
             expect(nodes).toHaveLength(1)
             expect(nodes[0].type).toBe('p')
@@ -58,7 +58,7 @@ describe('Document Model', () => {
 
         it('should parse nested elements', () => {
             const html = '<div><p>First</p><p>Second</p></div>'
-            const nodes = parseHTML(html, new TestDOMAdapter())
+            const nodes = parseHTML(html, new NodeDOMAdapter())
 
             expect(nodes).toHaveLength(1)
             expect(nodes[0].type).toBe('div')
@@ -69,19 +69,19 @@ describe('Document Model', () => {
 
         it('should parse attributes', () => {
             const html = '<p class="intro" id="p1">Text</p>'
-            const nodes = parseHTML(html, new TestDOMAdapter())
+            const nodes = parseHTML(html, new NodeDOMAdapter())
 
             expect(nodes[0].attrs).toEqual({ class: 'intro', id: 'p1' })
         })
 
         it('should handle empty content', () => {
-            const nodes = parseHTML('', new TestDOMAdapter())
+            const nodes = parseHTML('', new NodeDOMAdapter())
             expect(nodes).toHaveLength(0)
         })
     })
 
     describe('SectionDocument', () => {
-        const domAdapter = new TestDOMAdapter()
+        const domAdapter = new NodeDOMAdapter()
 
         it('should create document from nodes', () => {
             const nodes = [
@@ -205,8 +205,8 @@ describe('Document Model', () => {
     })
 
     describe('Parser integration', () => {
-        it('should work with TestDOMAdapter', () => {
-            const domAdapter = new TestDOMAdapter()
+        it('should work with NodeDOMAdapter', () => {
+            const domAdapter = new NodeDOMAdapter()
             const html = '<p>Test adapter</p>'
             const nodes = parseHTML(html, domAdapter)
             const doc = createSectionDocument(nodes, domAdapter)

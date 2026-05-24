@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { parseHTML } from 'linkedom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Book } from '../../src/core/types'
-import { TestDOMAdapter, TestURLFactory } from '../../src/adapters/test'
+import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import { epub } from '../../src/parsers/epub'
 import { mobi } from '../../src/parsers/mobi'
 import { createReader, VirtualTextRenderer } from '../../src/renderers/browser'
@@ -573,8 +573,8 @@ describe('VirtualTextRenderer', () => {
         const buf = await readFile('data/4.epub')
         const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
         const book = await epub().parse(ab, {
-            domAdapter: new TestDOMAdapter(),
-            urlFactory: new TestURLFactory(),
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
         })
         const flatTOC = flattenTestTOC(book.toc ?? [])
         const target = flatTOC
@@ -656,8 +656,8 @@ describe('VirtualTextRenderer', () => {
         const buf = await readFile('data/1.azw3')
         const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
         const book = await mobi().parse(ab, {
-            domAdapter: new TestDOMAdapter(),
-            urlFactory: new TestURLFactory(),
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
         })
         const cover = book.toc?.[0]
         const last = flattenTestTOC(book.toc ?? []).at(-1)
@@ -698,8 +698,8 @@ describe('VirtualTextRenderer', () => {
         const buf = await readFile('data/1.mobi')
         const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
         const book = await mobi().parse(ab, {
-            domAdapter: new TestDOMAdapter(),
-            urlFactory: new TestURLFactory(),
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
         })
 
         expect(book.toc?.[0]?.label).toBe('版权信息')
@@ -733,8 +733,8 @@ describe('VirtualTextRenderer', () => {
         const buf = await readFile('data/1.mobi')
         const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
         const book = await mobi().parse(ab, {
-            domAdapter: new TestDOMAdapter(),
-            urlFactory: new TestURLFactory(),
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
         })
         const tocOrder = new Map(flattenTestTOC(book.toc ?? []).map((item, index) => [item.href, index]))
 

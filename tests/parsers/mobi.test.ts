@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { MOBIParser, mobi } from '../../src/parsers/mobi'
 import { createTestMOBI, createTestMOBIBlob } from '../fixtures/mobi-fixture'
-import { TestDOMAdapter, TestURLFactory } from '../../src/adapters/test'
+import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import type { ParserOptions } from '../../src/core/parser'
 
 describe('MOBIParser', () => {
@@ -15,8 +15,8 @@ describe('MOBIParser', () => {
     beforeAll(() => {
         parser = new MOBIParser()
         options = {
-            domAdapter: new TestDOMAdapter(),
-            urlFactory: new TestURLFactory(),
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
         }
     })
 
@@ -213,7 +213,7 @@ describe('MOBIParser', () => {
         })
 
         it('should cleanup on destroy', async () => {
-            const urlFactory = new TestURLFactory()
+            const urlFactory = new NodeURLFactory()
             const buffer = createTestMOBI({
                 sections: [{ html: '<html><body><p>text</p></body></html>' }],
             })

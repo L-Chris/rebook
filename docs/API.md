@@ -157,7 +157,7 @@ const reader = createReader({
 })
 ```
 
-The default browser backend is `VirtualTextRenderer`: XHTML AST → structural blocks → preset styles → Pretext line ranges → visible DOM rows.
+The default browser backend is `VirtualTextRenderer`: XHTML AST 鈫?structural blocks 鈫?preset styles 鈫?Pretext line ranges 鈫?visible DOM rows.
 
 ### Opening
 
@@ -192,8 +192,8 @@ reader.setSpread(1) // Force single page
 
 In the default virtual text renderer, wide containers display two text columns side-by-side using the Pretext line list.
 
-- **Container width ≥ 2 × `maxInlineSize` + `gap`**: Shows 2 pages (spread)
-- **Container width < 2 × `maxInlineSize` + `gap`**: Shows 1 page (single)
+- **Container width 鈮?2 脳 `maxInlineSize` + `gap`**: Shows 2 pages (spread)
+- **Container width < 2 脳 `maxInlineSize` + `gap`**: Shows 1 page (single)
 - **Resizing**: Recomputes the grid span and switches between spread and single-page
 
 The `maxColumnCount` config option (default: `2`) controls the maximum number of visible pages. Set to `1` to always use single-page layout.
@@ -335,7 +335,7 @@ interface Section {
 
 ### `load()`
 
-Returns a **content string** — the renderer decides how to display it:
+Returns a **content string** 鈥?the renderer decides how to display it:
 - `'xhtml'`/`'html'`: Full HTML/XHTML document or fragment
 - `'image'`: Data URI or base64 string
 
@@ -424,7 +424,7 @@ interface DocumentResource {
 
 #### Mutation Operations
 
-All mutations are **immutable** — they return a new `SectionDocument` without modifying the original.
+All mutations are **immutable** 鈥?they return a new `SectionDocument` without modifying the original.
 
 ```typescript
 import { textNode, elementNode } from 'rebook'
@@ -492,13 +492,13 @@ The Document Model enables these AI-powered workflows:
 
 | Use Case | How |
 |----------|-----|
-| Translation | `getText()` → translate → `replaceText()` per text node |
-| Content summary | `getText()` → summarize |
+| Translation | `getText()` 鈫?translate 鈫?`replaceText()` per text node |
+| Content summary | `getText()` 鈫?summarize |
 | Annotation | `setNode([path], { class: 'annotation' })` |
 | Accessibility | Walk tree, add `alt` attrs to images via `setNode()` |
 | Content injection | `insertNode()` to add AI-generated content |
 | Restructuring | `removeNode()` + `insertNode()` to reorder sections |
-| Image enhancement | `getImages()` → process → replace via `setNode()` |
+| Image enhancement | `getImages()` 鈫?process 鈫?replace via `setNode()` |
 
 ---
 
@@ -747,8 +747,8 @@ interface URLFactory {
 |---------|--------|-------------|
 | `BrowserDOMAdapter` | `rebook` | Browser |
 | `BrowserURLFactory` | `rebook` | Browser |
-| `TestDOMAdapter` | `rebook/adapters/test` | Node.js (@xmldom/xmldom) |
-| `TestURLFactory` | `rebook/adapters/test` | Node.js (fake URLs) |
+| `NodeDOMAdapter` | `rebook/adapters/node` | Node.js (@xmldom/xmldom) |
+| `NodeURLFactory` | `rebook/adapters/node` | Node.js (fake URLs) |
 
 ### Browser Usage (auto-wired)
 
@@ -766,13 +766,13 @@ await reader.open(file) // Browser adapters auto-injected
 ```typescript
 import { registry } from 'rebook'
 import { epub } from 'rebook/parsers/epub'
-import { TestDOMAdapter, TestURLFactory } from 'rebook/adapters/test'
+import { NodeDOMAdapter, NodeURLFactory } from 'rebook/adapters/node'
 
 registry.register('epub', epub)
 
 const book = await registry.open(arrayBuffer, {
-    domAdapter: new TestDOMAdapter(),
-    urlFactory: new TestURLFactory(),
+    domAdapter: new NodeDOMAdapter(),
+    urlFactory: new NodeURLFactory(),
 })
 ```
 
@@ -920,7 +920,7 @@ import { mobi6DefaultStyles } from 'rebook'
 reader.setStyles({ css: mobi6DefaultStyles })
 ```
 
-Modern KF8/AZW3 files (`.azw3`) have embedded styles — `mobi6DefaultStyles` won't conflict.
+Modern KF8/AZW3 files (`.azw3`) have embedded styles 鈥?`mobi6DefaultStyles` won't conflict.
 
 ---
 

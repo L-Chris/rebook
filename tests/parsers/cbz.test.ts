@@ -5,21 +5,21 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { CBZParser, cbz } from '../../src/parsers/cbz'
 import { createTestCBZ, createTestCBZWithoutMetadata } from '../fixtures/cbz-fixture'
-import { TestDOMAdapter, TestURLFactory } from '../../src/adapters/test'
+import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import { AdapterRequiredError, UnsupportedInputError, ParseError } from '../../src/core/errors'
 
 describe('CBZParser', () => {
     let parser: CBZParser
-    let domAdapter: TestDOMAdapter
-    let urlFactory: TestURLFactory
+    let domAdapter: NodeDOMAdapter
+    let urlFactory: NodeURLFactory
 
     beforeAll(() => {
         parser = new CBZParser()
-        domAdapter = new TestDOMAdapter()
-        urlFactory = new TestURLFactory()
+        domAdapter = new NodeDOMAdapter()
+        urlFactory = new NodeURLFactory()
     })
 
-    const options = () => ({ domAdapter, urlFactory: new TestURLFactory() })
+    const options = () => ({ domAdapter, urlFactory: new NodeURLFactory() })
 
     describe('canParse', () => {
         it('should return true for .cbz file extension', async () => {
@@ -194,8 +194,8 @@ describe('CBZParser', () => {
             const buffer = await createTestCBZ({ pages: 1 })
             await expect(parser.parse(buffer)).rejects.toThrow(AdapterRequiredError)
             await expect(parser.parse(buffer, {})).rejects.toThrow(AdapterRequiredError)
-            // urlFactory alone is not sufficient — domAdapter is required
-            await expect(parser.parse(buffer, { urlFactory: new TestURLFactory() })).rejects.toThrow(AdapterRequiredError)
+            // urlFactory alone is not sufficient 鈥?domAdapter is required
+            await expect(parser.parse(buffer, { urlFactory: new NodeURLFactory() })).rejects.toThrow(AdapterRequiredError)
         })
 
         it('should work with only domAdapter (urlFactory not required)', async () => {

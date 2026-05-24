@@ -283,6 +283,30 @@ Implement when:
 | TD-002 | Incomplete Document Model | Low | Planned, low priority |
 | TD-003 | Test coverage gaps | Low | Acceptable, improve when needed |
 | TD-004 | Limited renderer features | Low | Out of scope (application layer) |
+| TD-005 | Inconsistent ZIP libraries | Low | To be unified |
+
+## TD-005: Inconsistent ZIP Libraries
+
+**Severity**: Low  
+**Impact**: Bundle size, maintenance cost  
+**Created**: 2026
+
+### Description
+
+The project currently uses two different ZIP libraries:
+- `loaders/zip-loader.ts` uses `@zip.js/zip.js` for reading ZIP archives (like EPUB and CBZ)
+- `exporters/epub.ts`, `cbz.ts`, and `utils.ts` use `fflate` for creating ZIP archives
+
+### Why Not Refactor Now?
+
+1. **Different Strengths**: `@zip.js/zip.js` is robust and handles encoding issues well when reading, while `fflate` is extremely fast and lightweight for writing/compression.
+2. **Effort vs Reward**: Unifying them requires significant refactoring of either the loader or the exporters, with a risk of introducing subtle bugs in archive processing, while the current dual-library setup works reliably.
+
+### Resolution Criteria
+
+Refactor when:
+1. **Bundle size optimization** becomes a critical priority.
+2. We encounter bugs that require replacing one of the libraries anyway.
 
 ## Updating This Document
 

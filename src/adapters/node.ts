@@ -1,8 +1,8 @@
 /**
- * Test adapter implementations.
+ * Node.js adapter implementations.
  *
  * These use @xmldom/xmldom (proper XML DOM for Node.js) to enable
- * testing the EPUB parser without a browser.
+ * parsing and manipulation without a browser environment.
  */
 
 import type { DOMAdapter, XMLDocument, XMLElement, XMLAttr, XMLNode } from '../core/dom-adapter'
@@ -354,9 +354,9 @@ class XmldomXMLDocument implements XMLDocument {
 }
 
 /**
- * Test implementation of DOMAdapter using @xmldom/xmldom.
+ * Node.js implementation of DOMAdapter using @xmldom/xmldom.
  */
-export class TestDOMAdapter implements DOMAdapter {
+export class NodeDOMAdapter implements DOMAdapter {
   private DOMParser: new () => { parseFromString(str: string, mimeType: string): XmldomDocument }
   private XMLSerializer: new () => { serializeToString(doc: XmldomDocument): string }
 
@@ -410,9 +410,10 @@ export class TestDOMAdapter implements DOMAdapter {
 }
 
 /**
- * Test implementation of URLFactory using fake URLs.
+ * Node.js implementation of URLFactory using mock URLs.
+ * In a real Node environment, this might store files in memory or a temp dir.
  */
-export class TestURLFactory implements URLFactory {
+export class NodeURLFactory implements URLFactory {
   private counter = 0
   private urls = new Map<string, { data: string | ArrayBuffer | Blob; mimeType: string }>()
 

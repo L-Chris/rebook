@@ -4,18 +4,18 @@
 
 import { describe, it, expect, beforeAll } from 'vitest'
 import { EPUBParser, epub } from '../../src/parsers/epub'
-import { TestDOMAdapter, TestURLFactory } from '../../src/adapters/test'
+import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import { createTestEPUB, createTestEPUBWithNCX } from '../fixtures/epub-fixture'
 
 describe('EPUBParser', () => {
     let parser: EPUBParser
-    let domAdapter: TestDOMAdapter
-    let urlFactory: TestURLFactory
+    let domAdapter: NodeDOMAdapter
+    let urlFactory: NodeURLFactory
 
     beforeAll(() => {
         parser = new EPUBParser()
-        domAdapter = new TestDOMAdapter()
-        urlFactory = new TestURLFactory()
+        domAdapter = new NodeDOMAdapter()
+        urlFactory = new NodeURLFactory()
     })
 
     describe('canParse', () => {

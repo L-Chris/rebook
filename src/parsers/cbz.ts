@@ -13,6 +13,7 @@ import type { DOMAdapter } from '../core/dom-adapter'
 import { createZipLoader, isZipFile } from '../loaders/zip-loader'
 import { UnsupportedInputError, ParseError, AdapterRequiredError } from '../core/errors'
 import { normalizeContributors } from '../core/metadata'
+import { getMimeTypeFromPath } from '../core/utils'
 
 // ============================================================================
 // Image extensions
@@ -27,21 +28,10 @@ const isImageFile = (filename: string): boolean => {
     return IMAGE_EXTENSIONS.some(ext => lower.endsWith(ext))
 }
 
-// ============================================================================
+// ---------------------------------------------------------------------------
 // MIME type detection for images
-// ============================================================================
-
-const getMimeType = (filename: string): string => {
-    const lower = filename.toLowerCase()
-    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
-    if (lower.endsWith('.png')) return 'image/png'
-    if (lower.endsWith('.gif')) return 'image/gif'
-    if (lower.endsWith('.bmp')) return 'image/bmp'
-    if (lower.endsWith('.webp')) return 'image/webp'
-    if (lower.endsWith('.svg')) return 'image/svg+xml'
-    if (lower.endsWith('.avif')) return 'image/avif'
-    return 'application/octet-stream'
-}
+// ---------------------------------------------------------------------------
+// Uses getMimeTypeFromPath from core/utils
 
 // ============================================================================
 // ComicInfo.xml metadata
@@ -243,7 +233,7 @@ export class CBZParser implements Parser {
                 }
                 const blob = await loader.loadBlob(filename)
                 if (!blob) throw new ParseError(`Failed to load ${filename}`, 'cbz')
-                const dataURI = await blobToDataURI(blob, getMimeType(filename))
+                const dataURI = await blobToDataURI(blob, getMimeTypeFromPath(filename))
                 dataCache.set(filename, dataURI)
                 return dataURI
             },

@@ -87,3 +87,46 @@ export const unescapeHTML = (str: string | undefined): string => {
         .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
         .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCharCode(parseInt(n, 16)))
 }
+
+/**
+ * Escape XML special characters in a string.
+ */
+export const escapeXML = (str: string): string =>
+    str.replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+
+// ---------------------------------------------------------------------------
+// MIME / extension helpers
+// ---------------------------------------------------------------------------
+
+export function extensionFromPath(path: string): string | null {
+    const clean = path.split(/[?#]/)[0]
+    const match = /\.(jpe?g|png|gif|webp|svg|avif|bmp)$/i.exec(clean)
+    return match ? `.${match[1].toLowerCase().replace('jpeg', 'jpg')}` : null
+}
+
+export function extensionFromMime(mimeType: string, path = ''): string {
+    switch (mimeType) {
+        case 'image/jpeg': return '.jpg'
+        case 'image/png': return '.png'
+        case 'image/gif': return '.gif'
+        case 'image/webp': return '.webp'
+        case 'image/svg+xml': return '.svg'
+        case 'image/avif': return '.avif'
+        default: return extensionFromPath(path) ?? '.bin'
+    }
+}
+
+export function getMimeTypeFromPath(path: string): string {
+    switch (extensionFromPath(path)) {
+        case '.jpg': return 'image/jpeg'
+        case '.png': return 'image/png'
+        case '.gif': return 'image/gif'
+        case '.webp': return 'image/webp'
+        case '.svg': return 'image/svg+xml'
+        case '.avif': return 'image/avif'
+        case '.bmp': return 'image/bmp'
+        default: return 'application/octet-stream'
+    }
+}

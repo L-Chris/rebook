@@ -8,6 +8,9 @@
 import type { BookMetadata, Contributor, LanguageMap, Section } from '../core/types'
 import type { ExportOptions } from '../core/exporter'
 import type { URLFactory } from '../core/url-factory'
+import { extensionFromMime, extensionFromPath, getMimeTypeFromPath, escapeXML, escapeAttr } from '../core/utils'
+
+export { extensionFromMime, extensionFromPath, getMimeTypeFromPath, escapeXML, escapeAttr }
 
 // ---------------------------------------------------------------------------
 // Data URI / Binary helpers
@@ -46,37 +49,7 @@ export async function toBytes(data: string | ArrayBuffer | Blob): Promise<Uint8A
 // ---------------------------------------------------------------------------
 // MIME / extension helpers
 // ---------------------------------------------------------------------------
-
-export function extensionFromMime(mimeType: string, path = ''): string {
-    switch (mimeType) {
-        case 'image/jpeg': return '.jpg'
-        case 'image/png': return '.png'
-        case 'image/gif': return '.gif'
-        case 'image/webp': return '.webp'
-        case 'image/svg+xml': return '.svg'
-        case 'image/avif': return '.avif'
-        default: return extensionFromPath(path) ?? '.bin'
-    }
-}
-
-export function extensionFromPath(path: string): string | null {
-    const clean = path.split(/[?#]/)[0]
-    const match = /\.(jpe?g|png|gif|webp|svg|avif|bmp)$/i.exec(clean)
-    return match ? `.${match[1].toLowerCase().replace('jpeg', 'jpg')}` : null
-}
-
-export function getMimeTypeFromPath(path: string): string {
-    switch (extensionFromPath(path)) {
-        case '.jpg': return 'image/jpeg'
-        case '.png': return 'image/png'
-        case '.gif': return 'image/gif'
-        case '.webp': return 'image/webp'
-        case '.svg': return 'image/svg+xml'
-        case '.avif': return 'image/avif'
-        case '.bmp': return 'image/bmp'
-        default: return 'application/octet-stream'
-    }
-}
+// (Re-exported from core/utils.ts)
 
 // ---------------------------------------------------------------------------
 // Resource loading
@@ -182,17 +155,7 @@ export function buildIdentifier(metadata: BookMetadata | undefined): string {
 // ---------------------------------------------------------------------------
 // XML / HTML escape helpers
 // ---------------------------------------------------------------------------
-
-export function escapeXML(value: string): string {
-    return value
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-}
-
-export function escapeAttr(value: string): string {
-    return escapeXML(value).replace(/"/g, '&quot;')
-}
+// (Re-exported from core/utils.ts)
 
 // ---------------------------------------------------------------------------
 // Plain-text extraction from HTML
