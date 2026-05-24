@@ -130,7 +130,15 @@ reader.on('load', (e) => {
 
 reader.on('relocate', (e) => {
     // Location changed
-    console.log('section:', e.sectionIndex, 'fraction:', e.fraction)
+    console.log('section index:', e.index)
+    console.log('fraction within section:', e.fraction)
+    console.log('overall progress fraction:', e.totalFraction)
+    console.log('CFI of current position:', e.cfi)
+    
+    // Automatically tracked active TOC item (chapter)
+    if (e.tocItem) {
+        console.log('active chapter:', e.tocItem.label, e.tocItem.href)
+    }
 })
 
 reader.on('link', (e) => {
@@ -145,7 +153,7 @@ reader.on('link', (e) => {
 ```typescript
 const metadata = reader.getMetadata()    // BookMetadata
 const toc = reader.getTOC()              // TOCItem[]
-const location = reader.getLocation()    // Current location
+const location = reader.getLocation()    // Current location (contains index, fraction, tocItem, cfi)
 const fractions = reader.getSectionFractions() // Per-section progress ticks
 ```
 
