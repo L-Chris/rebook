@@ -15,6 +15,13 @@ export interface TranslationOptions {
     mode?: 'replace' | 'bilingual'
     /** Max concurrency for translation requests (default: 3) */
     concurrency?: number
+    /** Number of blocks to translate in a single request (default: 5) */
+    batchSize?: number
+    /** 
+     * Rough approximation of maximum input tokens per translation request.
+     * Calculated using string length. (default: 10000)
+     */
+    maxTokensPerBatch?: number
 }
 
 /**
@@ -25,7 +32,9 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
         model, 
         targetLanguage = 'zh-CN', 
         mode = 'bilingual',
-        concurrency = 3 
+        concurrency = 3,
+        batchSize = 5,
+        maxTokensPerBatch = 10000
     } = options
 
     return (book: Book): Book => {
@@ -40,7 +49,7 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                 ...section,
                 getBlocks: async () => {
                     const blocks = await originalGetBlocks()
-                    return translateBlocks(blocks, model, targetLanguage, mode, concurrency)
+                    return translateBlocks(blocks, model, targetLanguage, mode, concurrency, batchSize, maxTokensPerBatch)
                 }
             }
         })
@@ -57,70 +66,112 @@ async function translateBlocks(
     model: LanguageModel, 
     targetLanguage: string, 
     mode: 'replace' | 'bilingual',
-    concurrency: number
+    concurrency: number,
+    batchSize: number,
+    maxTokensPerBatch: number
 ): Promise<TextBlock[]> {
     const result: (TextBlock | TextBlock[])[] = new Array(blocks.length)
     
-    // Simple concurrency queue
-    let currentIndex = 0
-    const active = new Set<Promise<void>>()
+    // 1. Separate translatable blocks from non-translatable
+    const translatableItems: { block: TextBlock, index: number }[] = []
 
-    const processBlock = async (block: TextBlock, index: number) => {
-        // Only translate text-heavy blocks
+    for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i]
         if (['paragraph', 'heading', 'listItem', 'blockquote'].includes(block.type) && block.segments.length > 0) {
-            // Combine text
             const fullText = block.segments.map(s => s.text).join('')
-            
-            // Skip short or empty text
-            if (fullText.trim().length < 2) {
-                result[index] = block
-                return
+            if (fullText.trim().length >= 2) {
+                translatableItems.push({ block, index: i })
+                continue
             }
+        }
+        // Non-translatable or too short
+        result[i] = block
+    }
 
-            try {
-                const { text: translatedText } = await generateText({
-                    model,
-                    system: `You are a professional translator. Translate the following text into ${targetLanguage}. Maintain the original tone and style. Return ONLY the translated text without any quotes or explanations.`,
-                    prompt: fullText
-                })
+    // 2. Group into batches
+    const batches: { block: TextBlock, index: number }[][] = []
+    let currentBatch: { block: TextBlock, index: number }[] = []
+    let currentBatchTokens = 0
 
-                const translatedSegments: TextSegment[] = [{ text: translatedText, style: block.segments[0]?.style }]
-                const translatedBlock: TextBlock = {
-                    ...block,
-                    id: `${block.id}-tr`,
-                    segments: translatedSegments
-                }
+    for (const item of translatableItems) {
+        const fullText = item.block.segments.map(s => s.text).join('')
+        const estimatedTokens = fullText.length
+        
+        if (currentBatch.length > 0 && 
+           (currentBatch.length >= batchSize || currentBatchTokens + estimatedTokens > maxTokensPerBatch)) {
+            batches.push(currentBatch)
+            currentBatch = []
+            currentBatchTokens = 0
+        }
+        
+        currentBatch.push(item)
+        currentBatchTokens += estimatedTokens
+    }
+    
+    if (currentBatch.length > 0) {
+        batches.push(currentBatch)
+    }
 
-                if (mode === 'bilingual') {
-                    // Push original then translated
-                    result[index] = [block, translatedBlock]
-                } else {
-                    // Replace original
-                    result[index] = {
+    // 3. Process batches concurrently
+    const active = new Set<Promise<void>>()
+    let currentBatchIndex = 0
+
+    const processBatch = async (batch: { block: TextBlock, index: number }[]) => {
+        const payload = batch.map(b => ({
+            id: b.block.id,
+            text: b.block.segments.map(s => s.text).join('')
+        }))
+
+        try {
+            const { text: responseText } = await generateText({
+                model,
+                system: `You are a professional translator. Translate the given JSON array of texts into ${targetLanguage}. Maintain the original tone and style.
+Return ONLY a JSON array with the exact same 'id' fields and the translated 'text' fields. Do not wrap with markdown blocks like \`\`\`json.`,
+                prompt: JSON.stringify(payload, null, 2)
+            })
+
+            // Attempt to parse JSON
+            const jsonStr = responseText.replace(/^```json\s*/, '').replace(/\s*```$/, '').trim()
+            const translations = JSON.parse(jsonStr) as { id: string, text: string }[]
+            const transMap = new Map(translations.map(t => [t.id, t.text]))
+
+            for (const { block, index } of batch) {
+                const translatedText = transMap.get(block.id)
+                if (translatedText) {
+                    const translatedSegments: TextSegment[] = [{ text: translatedText, style: block.segments[0]?.style }]
+                    const translatedBlock: TextBlock = {
                         ...block,
+                        id: `${block.id}-tr`,
                         segments: translatedSegments
                     }
+
+                    if (mode === 'bilingual') {
+                        result[index] = [block, translatedBlock]
+                    } else {
+                        result[index] = { ...block, segments: translatedSegments }
+                    }
+                } else {
+                    // Missing from translation response, fallback
+                    result[index] = block
                 }
-            } catch (error) {
-                console.error(`Translation failed for block ${block.id}:`, error)
-                // Fallback to original
+            }
+        } catch (error) {
+            console.error(`Batch translation failed:`, error)
+            // Fallback to original
+            for (const { block, index } of batch) {
                 result[index] = block
             }
-        } else {
-            // Unchanged
-            result[index] = block
         }
     }
 
-    while (currentIndex < blocks.length) {
+    while (currentBatchIndex < batches.length) {
         if (active.size >= concurrency) {
             await Promise.race(active)
             continue
         }
         
-        const index = currentIndex++
-        const block = blocks[index]
-        const promise = processBlock(block, index).then(() => {
+        const batch = batches[currentBatchIndex++]
+        const promise = processBatch(batch).then(() => {
             active.delete(promise)
         })
         active.add(promise)
