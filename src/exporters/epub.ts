@@ -1,5 +1,6 @@
 import type { Book, BookMetadata, Contributor, LanguageMap, Section, TOCItem } from '../core/types'
 import type { Exporter, ExportOptions, ExportSelection } from '../core/exporter'
+import type { URLFactory } from '../core/url-factory'
 import { selectSections } from './section-selection'
 
 export type { ExportOptions, ExportSelection } from '../core/exporter'
@@ -181,9 +182,7 @@ async function loadReferencedResource(url: string, options: ExportOptions): Prom
     const data = parseDataURI(url)
     if (data) return data
 
-    const urlFactory = options.parserOptions?.urlFactory as unknown as {
-        getData?(url: string): { data: string | ArrayBuffer | Blob; mimeType: string } | undefined
-    } | undefined
+    const urlFactory = options.parserOptions?.urlFactory as URLFactory | undefined
     const stored = urlFactory?.getData?.(url)
     if (stored) {
         return {

@@ -260,14 +260,23 @@ export class BrowserDOMAdapter implements DOMAdapter {
  * Browser implementation of URLFactory using URL.createObjectURL.
  */
 export class BrowserURLFactory implements URLFactory {
+  private urls = new Map<string, { data: string | ArrayBuffer | Blob; mimeType: string }>()
+
   createURL(data: string | ArrayBuffer | Blob, mimeType?: string): string {
     const blob = data instanceof Blob
       ? data
       : new Blob([data], { type: mimeType || 'application/octet-stream' })
-    return URL.createObjectURL(blob)
+    const url = URL.createObjectURL(blob)
+    this.urls.set(url, { data: blob, mimeType: blob.type || mimeType || 'application/octet-stream' })
+    return url
   }
 
   revokeURL(url: string): void {
+    this.urls.delete(url)
     URL.revokeObjectURL(url)
+  }
+
+  getData(url: string): { data: string | ArrayBuffer | Blob; mimeType: string } | undefined {
+    return this.urls.get(url)
   }
 }

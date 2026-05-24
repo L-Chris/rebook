@@ -581,7 +581,7 @@
 
             btnExport.disabled = true
             try {
-                const blob = await exportFirstPages(currentBook, count, { format: 'epub' })
+                const blob = await exportFirstPages(currentBook, count, { format: 'epub', parserOptions })
                 const baseName = (currentFile?.name || 'book').replace(/\.[^.]+$/, '')
                 const url = URL.createObjectURL(blob)
                 const a = document.createElement('a')

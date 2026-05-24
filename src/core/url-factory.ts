@@ -10,6 +10,14 @@
  */
 
 /**
+ * Data stored behind a generated resource URL.
+ */
+export interface ResourceURLData {
+  data: string | ArrayBuffer | Blob
+  mimeType: string
+}
+
+/**
  * Factory for creating and managing resource URLs.
  */
 export interface URLFactory {
@@ -25,4 +33,11 @@ export interface URLFactory {
    * Revoke a previously created URL to free resources.
    */
   revokeURL(url: string): void
+
+  /**
+   * Return the original data for a generated URL when available.
+   *
+   * Exporters use this to package parser-created blob URLs back into files.
+   */
+  getData?(url: string): ResourceURLData | undefined
 }

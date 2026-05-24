@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { describe, expect, it, beforeEach } from 'vitest'
 import { createTestEPUB } from '../fixtures/epub-fixture'
 import { createTestCBZ } from '../fixtures/cbz-fixture'
@@ -181,12 +182,18 @@ describe('EPUB first-pages exporter', () => {
         const chapter = await loader.loadText('OEBPS/text/page-1.xhtml')
         const image = await loader.loadBlob('OEBPS/images/resource-1.png')
         const opf = await loader.loadText('OEBPS/content.opf')
+        const parsed = await epub().parse(await exported.arrayBuffer(), parserOptions)
+        const blocks = await parsed.sections[0].getBlocks?.()
+        const imageBlock = blocks?.find(block => block.type === 'image')
 
         expect(chapter).toContain('../images/resource-1.png')
         expect(chapter).not.toContain('test://')
         expect(image?.size).toBe(tinyPNG.byteLength)
         expect(opf).toContain('href="images/resource-1.png"')
         expect(opf).toContain('media-type="image/png"')
+        expect(imageBlock?.image?.src.startsWith('test://resource-')).toBe(true)
+        expect(imageBlock?.image?.src).not.toContain('images/resource-1.png')
+        expect(imageBlock?.image?.originalSrc).toBe('OEBPS/images/resource-1.png')
     })
 
     it('can parse a raw supported source through the registry before exporting', async () => {
@@ -251,6 +258,28 @@ describe('EPUB first-pages exporter', () => {
 
         expect(parsed.sections).toHaveLength(1)
         expect(await parsed.sections[0].loadText?.()).toContain('MOBI first.')
+    })
+
+    it('keeps real MOBI/AZW3 exported images loadable after reopening the EPUB', async () => {
+        registry.register('mobi', mobi)
+
+        for (const filename of ['data/1.mobi', 'data/1.azw3']) {
+            const data = await readFile(filename)
+            const source = await mobi().parse(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength), parserOptions)
+            const exported = await exportFirstPages(source, 3, { format: 'epub', parserOptions })
+            const loader = await createZipLoader(await exported.arrayBuffer())
+            const imageEntries = loader.entries.filter(entry => entry.filename.startsWith('OEBPS/images/'))
+            const parsed = await epub().parse(await exported.arrayBuffer(), parserOptions)
+            const blocks = (await Promise.all(parsed.sections.map(section => section.getBlocks?.() ?? []))).flat()
+            const imageSources = blocks
+                .filter(block => block.type === 'image')
+                .map(block => block.image?.src ?? '')
+
+            expect(imageEntries.length, filename).toBeGreaterThan(0)
+            expect(imageSources.length, filename).toBeGreaterThan(0)
+            expect(imageSources.every(src => src.startsWith('test://resource-')), filename).toBe(true)
+            expect(imageSources.some(src => /(?:^|\/)images\/resource-\d+/i.test(src)), filename).toBe(false)
+        }
     })
 
     it('rejects invalid page counts', async () => {
