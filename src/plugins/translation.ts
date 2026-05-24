@@ -142,26 +142,23 @@ async function translateBlocks(
     let currentBatchIndex = 0
 
     const processBatch = async (batch: { block: TextBlock, index: number }[]) => {
-        const payload = batch.map(b => ({
-            id: b.block.id,
-            text: b.block.segments.map(s => s.text).join('')
-        }))
+        const payload = batch.map(b => b.block.segments.map(s => s.text).join(''))
 
         try {
             const { text: responseText } = await generateText({
                 model,
-                system: `You are a professional translator. Translate the given JSON array of texts into ${targetLanguage}. Maintain the original tone and style.
-Return ONLY a JSON array with the exact same 'id' fields and the translated 'text' fields. Do not wrap with markdown blocks like \`\`\`json.`,
+                system: `You are a professional translator. Translate the given JSON array of strings into ${targetLanguage}. Maintain the original tone and style.
+Return ONLY a JSON array of strings, where each string is the translation of the corresponding string in the input array. Maintain the exact same array length and order. Do not wrap with markdown blocks like \`\`\`json.`,
                 prompt: JSON.stringify(payload, null, 2)
             })
 
             // Attempt to parse JSON
             const jsonStr = responseText.replace(/^```json\s*/, '').replace(/\s*```$/, '').trim()
-            const translations = JSON.parse(jsonStr) as { id: string, text: string }[]
-            const transMap = new Map(translations.map(t => [t.id, t.text]))
+            const translations = JSON.parse(jsonStr) as string[]
 
-            for (const { block, index } of batch) {
-                const translatedText = transMap.get(block.id)
+            for (let i = 0; i < batch.length; i++) {
+                const { block, index } = batch[i]
+                const translatedText = translations[i]
                 if (translatedText) {
                     const translatedSegments: TextSegment[] = [{ text: translatedText, style: block.segments[0]?.style }]
                     const translatedBlock: TextBlock = {
