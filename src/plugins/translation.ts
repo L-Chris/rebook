@@ -15,13 +15,12 @@ export interface TranslationOptions {
     mode?: 'replace' | 'bilingual'
     /** Max concurrency for translation requests (default: 3) */
     concurrency?: number
-    /** Number of blocks to translate in a single request (default: 5) */
-    batchSize?: number
     /** 
-     * Rough approximation of maximum input tokens per translation request.
-     * Calculated using string length. (default: 10000)
+     * Approximate maximum tokens (or characters) per translation batch.
+     * The plugin will group as many blocks as possible until this limit is reached.
+     * (default: 10000)
      */
-    maxTokensPerBatch?: number
+    tokensPerBatch?: number
 }
 
 /**
@@ -33,8 +32,7 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
         targetLanguage = 'zh-CN', 
         mode = 'bilingual',
         concurrency = 3,
-        batchSize = 5,
-        maxTokensPerBatch = 10000
+        tokensPerBatch = 10000
     } = options
 
     return (book: Book): Book => {
@@ -49,7 +47,7 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                 ...section,
                 getBlocks: async () => {
                     const blocks = await originalGetBlocks()
-                    return translateBlocks(blocks, model, targetLanguage, mode, concurrency, batchSize, maxTokensPerBatch)
+                    return translateBlocks(blocks, model, targetLanguage, mode, concurrency, tokensPerBatch)
                 }
             }
         })
@@ -67,8 +65,7 @@ async function translateBlocks(
     targetLanguage: string, 
     mode: 'replace' | 'bilingual',
     concurrency: number,
-    batchSize: number,
-    maxTokensPerBatch: number
+    tokensPerBatch: number
 ): Promise<TextBlock[]> {
     const result: (TextBlock | TextBlock[])[] = new Array(blocks.length)
     
@@ -97,8 +94,7 @@ async function translateBlocks(
         const fullText = item.block.segments.map(s => s.text).join('')
         const estimatedTokens = fullText.length
         
-        if (currentBatch.length > 0 && 
-           (currentBatch.length >= batchSize || currentBatchTokens + estimatedTokens > maxTokensPerBatch)) {
+        if (currentBatch.length > 0 && currentBatchTokens + estimatedTokens > tokensPerBatch) {
             batches.push(currentBatch)
             currentBatch = []
             currentBatchTokens = 0
