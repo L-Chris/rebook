@@ -3,7 +3,7 @@
  * Provides a simple API for opening and reading books.
  */
 
-import type { Book, RelocateEvent, LoadEvent, TOCItem } from '../../core/types'
+import type { Book, RelocateEvent, LoadEvent, TOCItem, RebookPlugin } from '../../core/types'
 import type { ParserInput, ParserOptions } from '../../core/parser'
 import type { RendererConfig, RendererStyles, LayoutMode, Renderer } from '../../core/renderer'
 import { registry } from '../../core/parser'
@@ -26,6 +26,8 @@ export interface ReaderConfig extends Omit<RendererConfig, 'container'> {
     parserOptions?: ParserOptions
     /** Auto-register default parsers */
     autoRegister?: boolean
+    /** Plugins to transform the book before rendering */
+    plugins?: RebookPlugin[]
 }
 
 /**
@@ -61,7 +63,13 @@ export class ReaderView {
         }
 
         // Use registry to auto-detect and parse
-        const book = await registry.open(input, options)
+        let book = await registry.open(input, options)
+        
+        // Apply plugins
+        for (const plugin of this.config.plugins ?? []) {
+            book = await plugin(book)
+        }
+        
         this.book = book
 
         // Open in renderer
@@ -73,9 +81,16 @@ export class ReaderView {
     /**
      * Open an already-parsed book.
      */
-    async openBook(book: Book): Promise<void> {
+    async openBook(inputBook: Book): Promise<void> {
         this.close()
         this.resetRenderer()
+        
+        let book = inputBook
+        // Apply plugins
+        for (const plugin of this.config.plugins ?? []) {
+            book = await plugin(book)
+        }
+        
         this.book = book
         await this.renderer.open(book)
     }

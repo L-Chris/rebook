@@ -451,3 +451,13 @@ export interface LinkEvent {
     href: string
     external: boolean
 }
+
+// ============================================================================
+// Plugins
+// ============================================================================
+
+/**
+ * A plugin is a middleware that wraps the Book instance.
+ * It can intercept Book methods (e.g. section.getBlocks) to modify behavior or content.
+ */
+export type RebookPlugin = (book: Book) => Book | Promise<Book>

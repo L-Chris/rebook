@@ -286,7 +286,7 @@
             border-radius: 8px;
             padding: 16px;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-            z-index: 15;
+            z-index: 30;
             min-width: 220px;
             display: none;
         }
@@ -356,6 +356,19 @@
             <label>Hyphenate</label>
             <input type="checkbox" id="hyphenate-check" checked>
         </div>
+        <div class="setting-row">
+            <label>Translate (AI)</label>
+            <input type="checkbox" id="translate-check">
+        </div>
+        <div class="setting-row" id="api-key-row" style="display: none; flex-direction: column; align-items: stretch; gap: 8px;">
+            <input type="text" id="baseurl-input" placeholder="API Base URL (Optional)" style="padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">
+            <input type="password" id="api-key-input" placeholder="OpenAI API Key" style="padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">
+            <input type="text" id="model-input" placeholder="Model (Default: gpt-4o-mini)" style="padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">
+            <select id="translate-mode-select" style="padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">
+                <option value="bilingual">Bilingual (对照)</option>
+                <option value="replace">Replace (替换)</option>
+            </select>
+        </div>
     </div>
 
     <!-- Main -->
@@ -404,8 +417,10 @@
         } from '../src/index.ts'
         import { epub } from '../src/parsers/epub.ts'
         import { cbz } from '../src/parsers/cbz.ts'
-        import { fb2, fb2DefaultStyles } from '../src/parsers/fb2.ts'
-        import { mobi, mobi6DefaultStyles } from '../src/parsers/mobi.ts'
+        import { fb2 } from '../src/parsers/fb2.ts'
+        import { mobi } from '../src/parsers/mobi.ts'
+        import { withTranslation } from '../src/plugins/translation.ts'
+        import { createOpenAI } from '@ai-sdk/openai'
 
         // Create shared adapters for all parsers
         const domAdapter = new BrowserDOMAdapter()
@@ -436,6 +451,12 @@
         const settingsPanel = document.getElementById('settings-panel')
         const themeSelect = document.getElementById('theme-select')
         const hyphenateCheck = document.getElementById('hyphenate-check')
+        const translateCheck = document.getElementById('translate-check')
+        const apiKeyRow = document.getElementById('api-key-row')
+        const baseUrlInput = document.getElementById('baseurl-input')
+        const apiKeyInput = document.getElementById('api-key-input')
+        const modelInput = document.getElementById('model-input')
+        const translateModeSelect = document.getElementById('translate-mode-select')
         const progressBar = document.getElementById('progress-bar')
         const progressFill = document.getElementById('progress-fill')
         const progressText = document.getElementById('progress-text')
@@ -446,11 +467,33 @@
         let reader = createDemoReader()
 
         function createDemoReader() {
+            const plugins = []
+            
+            if (translateCheck.checked && apiKeyInput.value.trim()) {
+                const openaiOptions = { 
+                    apiKey: apiKeyInput.value.trim(),
+                    dangerouslyAllowBrowser: true
+                }
+                const baseUrl = baseUrlInput.value.trim()
+                if (baseUrl) {
+                    openaiOptions.baseURL = baseUrl
+                }
+                
+                const openai = createOpenAI(openaiOptions)
+                const modelName = modelInput.value.trim() || 'gpt-4o-mini'
+                plugins.push(withTranslation({
+                    model: openai(modelName),
+                    targetLanguage: 'zh-CN',
+                    mode: translateModeSelect.value
+                }))
+            }
+
             return createReader({
                 container: viewer,
                 layout: layoutSelect.value,
                 maxColumnCount: Number(spreadSelect.value),
                 parserOptions,
+                plugins,
                 styles: {
                     fontSize: fontSizeSelect.value,
                     lineHeight: 1.7,
@@ -521,17 +564,11 @@
                 if (!options.preserveFile) currentFile = file
                 dropTarget.classList.add('hidden')
 
-                // Detect FB2 files and apply default styles
+                // Detect FB2 files
                 const isFB2 = file.name.toLowerCase().match(/\.(fb2|fbz|fb2\.zip)$/)
-                if (isFB2) {
-                    reader.setStyles({ css: fb2DefaultStyles })
-                }
 
-                // Detect MOBI files and apply default styles (MOBI6 needs them; KF8 ignores)
+                // Detect MOBI files
                 const isMOBI = file.name.toLowerCase().match(/\.(mobi|azw|azw3)$/)
-                if (isMOBI) {
-                    reader.setStyles({ css: mobi6DefaultStyles })
-                }
 
                 const book = await reader.open(file)
                 currentBook = book
@@ -628,6 +665,27 @@
 
         hyphenateCheck.addEventListener('change', (e) => {
             reader.setStyles({ hyphenate: e.target.checked })
+        })
+
+        translateCheck.addEventListener('change', (e) => {
+            apiKeyRow.style.display = e.target.checked ? 'flex' : 'none'
+            recreateReader()
+        })
+
+        baseUrlInput.addEventListener('change', () => {
+            if (translateCheck.checked) recreateReader()
+        })
+
+        apiKeyInput.addEventListener('change', () => {
+            if (translateCheck.checked) recreateReader()
+        })
+
+        modelInput.addEventListener('change', () => {
+            if (translateCheck.checked) recreateReader()
+        })
+
+        translateModeSelect.addEventListener('change', () => {
+            if (translateCheck.checked) recreateReader()
         })
 
         // Progress bar click
