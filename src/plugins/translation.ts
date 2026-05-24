@@ -18,7 +18,7 @@ export interface TranslationOptions {
     /** 
      * Approximate maximum tokens (or characters) per translation batch.
      * The plugin will group as many blocks as possible until this limit is reached.
-     * (default: 10000)
+     * (default: 2000)
      */
     tokensPerBatch?: number
 }
@@ -32,22 +32,51 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
         targetLanguage = 'zh-CN', 
         mode = 'bilingual',
         concurrency = 3,
-        tokensPerBatch = 10000
+        tokensPerBatch = 2000
     } = options
 
     return (book: Book): Book => {
-        const wrappedSections = book.sections.map(section => {
+        const fetchers = new Map<number, () => Promise<TextBlock[]>>()
+
+        const wrappedSections = book.sections.map((section, index) => {
             const originalGetBlocks = section.getBlocks?.bind(section)
 
             if (!originalGetBlocks) {
                 return section
             }
 
+            let cachedPromise: Promise<TextBlock[]> | null = null
+
+            const fetchAndTranslate = () => {
+                if (!cachedPromise) {
+                    cachedPromise = originalGetBlocks().then(blocks => 
+                        translateBlocks(blocks, model, targetLanguage, mode, concurrency, tokensPerBatch)
+                    ).catch(err => {
+                        cachedPromise = null // Reset on error so we can retry
+                        throw err
+                    })
+                }
+                return cachedPromise
+            }
+
+            fetchers.set(index, fetchAndTranslate)
+
             return {
                 ...section,
-                getBlocks: async () => {
-                    const blocks = await originalGetBlocks()
-                    return translateBlocks(blocks, model, targetLanguage, mode, concurrency, tokensPerBatch)
+                getBlocks: () => {
+                    const promise = fetchAndTranslate()
+
+                    // Aggressively prefetch the next section in the background 
+                    // after a short delay to allow current layout/render to prioritize
+                    setTimeout(() => {
+                        const nextFetcher = fetchers.get(index + 1)
+                        if (nextFetcher) {
+                            // Fire and forget
+                            nextFetcher().catch(console.error)
+                        }
+                    }, 500)
+
+                    return promise
                 }
             }
         })
