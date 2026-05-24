@@ -3,13 +3,14 @@ import { withTranslation } from '../../src/plugins/translation'
 import type { Book, Section, TextBlock } from '../../src/core/types'
 
 vi.mock('ai', () => ({
-    generateText: async (options: any) => {
+    generateObject: async (options: any) => {
         const payload = JSON.parse(options.prompt)
         const translatedPayload = payload.map((text: string) => `[Translated] ${text}`)
         return {
-            text: JSON.stringify(translatedPayload)
+            object: translatedPayload
         }
-    }
+    },
+    jsonSchema: (schema: any) => schema
 }))
 
 const mockModel = {}

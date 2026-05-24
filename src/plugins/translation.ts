@@ -1,4 +1,4 @@
-import { generateText, type LanguageModel } from 'ai'
+import { generateObject, jsonSchema, type LanguageModel } from 'ai'
 import type { Book, RebookPlugin, TextBlock, TextSegment } from '../core/types'
 
 export interface TranslationOptions {
@@ -145,16 +145,16 @@ async function translateBlocks(
         const payload = batch.map(b => b.block.segments.map(s => s.text).join(''))
 
         try {
-            const { text: responseText } = await generateText({
+            const { object: translations } = await generateObject({
                 model,
                 system: `You are a professional translator. Translate the given JSON array of strings into ${targetLanguage}. Maintain the original tone and style.
-Return ONLY a JSON array of strings, where each string is the translation of the corresponding string in the input array. Maintain the exact same array length and order. Do not wrap with markdown blocks like \`\`\`json.`,
-                prompt: JSON.stringify(payload, null, 2)
+Return ONLY a JSON array of strings, where each string is the translation of the corresponding string in the input array. Maintain the exact same array length and order.`,
+                prompt: JSON.stringify(payload, null, 2),
+                schema: jsonSchema({
+                    type: 'array',
+                    items: { type: 'string' }
+                })
             })
-
-            // Attempt to parse JSON
-            const jsonStr = responseText.replace(/^```json\s*/, '').replace(/\s*```$/, '').trim()
-            const translations = JSON.parse(jsonStr) as string[]
 
             for (let i = 0; i < batch.length; i++) {
                 const { block, index } = batch[i]
