@@ -2,22 +2,24 @@ import { describe, it, expect, vi } from 'vitest'
 import { withTranslation } from '../../src/plugins/translation'
 import type { Book, Section, TextBlock } from '../../src/core/types'
 
-const { generateTextMock, outputArrayMock, createTranslationResponse } = vi.hoisted(() => ({
+const { generateTextMock, outputObjectMock, createTranslationResponse } = vi.hoisted(() => ({
     createTranslationResponse: async (options: any) => {
         const payload = JSON.parse(options.prompt)
-        const translatedPayload = payload.map((text: string) => `[Translated] ${text}`)
+        const translatedPayload = Object.fromEntries(
+            Object.entries(payload).map(([key, text]) => [key, `[Translated] ${text}`])
+        )
         return {
             output: translatedPayload
         }
     },
     generateTextMock: vi.fn(),
-    outputArrayMock: vi.fn((options: any) => options)
+    outputObjectMock: vi.fn((options: any) => options)
 }))
 
 vi.mock('ai', () => ({
     generateText: generateTextMock,
     Output: {
-        array: outputArrayMock
+        object: outputObjectMock
     },
     jsonSchema: (schema: any) => schema
 }))
@@ -36,7 +38,7 @@ describe('Translation Plugin', () => {
     beforeEach(() => {
         generateTextMock.mockReset()
         generateTextMock.mockImplementation(createTranslationResponse)
-        outputArrayMock.mockClear()
+        outputObjectMock.mockClear()
     })
 
     const mockBlocks: TextBlock[] = [
@@ -91,15 +93,19 @@ describe('Translation Plugin', () => {
 
         expect(generateTextMock).toHaveBeenCalled()
         expect(generateTextMock.mock.calls[0][0].system).not.toContain('elements')
-        expect(outputArrayMock).toHaveBeenCalled()
+        expect(outputObjectMock).toHaveBeenCalled()
+        expect(JSON.parse(generateTextMock.mock.calls[0][0].prompt)).toEqual({
+            '0': 'Hello world.',
+            '1': 'Title'
+        })
 
-        // b1 (orig), b1-tr (trans), b2 (image), b3 (orig), b3-tr (trans)
+        // b1 (orig), t0 (trans), b2 (image), b3 (orig), t2 (trans)
         expect(translatedBlocks).toHaveLength(5)
         
         expect(translatedBlocks[0].id).toBe('b1')
         expect(translatedBlocks[0].segments[0].text).toBe('Hello world.')
         
-        expect(translatedBlocks[1].id).toBe('b1-tr')
+        expect(translatedBlocks[1].id).toBe('t0')
         expect(translatedBlocks[1].segments[0].text).toBe('[Translated] Hello world.')
         
         expect(translatedBlocks[2].id).toBe('b2') // Image untouched
@@ -107,7 +113,7 @@ describe('Translation Plugin', () => {
         expect(translatedBlocks[3].id).toBe('b3')
         expect(translatedBlocks[3].segments[0].text).toBe('Title')
         
-        expect(translatedBlocks[4].id).toBe('b3-tr')
+        expect(translatedBlocks[4].id).toBe('t2')
         expect(translatedBlocks[4].segments[0].text).toBe('[Translated] Title')
     })
 
@@ -194,6 +200,28 @@ describe('Translation Plugin', () => {
 
         expect(generateTextMock).toHaveBeenCalledTimes(2)
         expect(translatedBlocks[0].segments[0].text).toBe('[Translated] Hello world.')
+    })
+
+    it('retries once when translation output misses an input key', async () => {
+        const update = waitForUpdate()
+        generateTextMock
+            .mockResolvedValueOnce({ output: { '0': '[Translated] Hello world.' } })
+            .mockImplementationOnce(createTranslationResponse)
+
+        const plugin = withTranslation({
+            model: mockModel as any,
+            mode: 'replace',
+            onUpdate: update.resolve
+        })
+
+        const wrappedBook = await plugin(mockBook)
+        await wrappedBook.sections[0].getBlocks!()
+        await update.promise
+        const translatedBlocks = await wrappedBook.sections[0].getBlocks!()
+
+        expect(generateTextMock).toHaveBeenCalledTimes(2)
+        expect(translatedBlocks[0].segments[0].text).toBe('[Translated] Hello world.')
+        expect(translatedBlocks[2].segments[0].text).toBe('[Translated] Title')
     })
 
     it('switches display mode without requesting translations again', async () => {

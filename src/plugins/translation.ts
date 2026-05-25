@@ -270,7 +270,7 @@ function renderTranslatedBlocks(
         } else {
             rendered.push(cloneTextBlock(block), {
                 ...block,
-                id: `${block.id}-tr`,
+                id: `t${index.toString(36)}`,
                 segments: translatedSegments
             })
         }
@@ -329,27 +329,38 @@ async function requestTranslations(
     payload: string[],
 ): Promise<string[]> {
     let lastError: unknown
+    const entries = payload.map((text, index) => ({ key: index.toString(36), text }))
+    const input = Object.fromEntries(entries.map(({ key, text }) => [key, text]))
+    const schema = {
+        type: 'object',
+        properties: Object.fromEntries(entries.map(({ key }) => [key, { type: 'string' }])),
+        required: entries.map(({ key }) => key),
+        additionalProperties: false,
+    }
 
     for (let attempt = 1; attempt <= MAX_TRANSLATION_ATTEMPTS; attempt++) {
         try {
             const { output } = await generateText({
                 model,
-                output: Output.array({
-                    element: jsonSchema<string>({ type: 'string' }),
-                    description: 'Translations in the same order as the input strings.',
+                output: Output.object({
+                    schema: jsonSchema<Record<string, string>>(schema),
+                    description: 'Translations keyed by the same short block ids as the input.',
                 }),
-                system: `You are a professional translator. Translate the input strings into ${targetLanguage}. Maintain the original tone, style, count, and order.`,
-                prompt: JSON.stringify(payload),
+                system: `You are a professional translator. Translate each value into ${targetLanguage}. Preserve the original tone and style. Keep the exact same keys.`,
+                prompt: JSON.stringify(input),
             })
 
-            if (!Array.isArray(output)) {
-                throw new TranslationFormatError('Translation output was not an array.')
-            }
-            if (output.length !== payload.length) {
-                throw new TranslationFormatError(`Translation output length ${output.length} did not match input length ${payload.length}.`)
+            if (!output || typeof output !== 'object' || Array.isArray(output)) {
+                throw new TranslationFormatError('Translation output was not an object.')
             }
 
-            return output
+            const translations = entries.map(({ key }) => output[key])
+            const missingKey = entries.find(({ key }, index) => typeof translations[index] !== 'string')
+            if (missingKey) {
+                throw new TranslationFormatError(`Translation output missed key "${missingKey.key}".`)
+            }
+
+            return translations
         } catch (error) {
             lastError = error
             if (attempt < MAX_TRANSLATION_ATTEMPTS && isRetryableTranslationError(error)) {
