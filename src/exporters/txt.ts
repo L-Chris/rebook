@@ -10,12 +10,12 @@ import type { Book } from '../core/types'
 import type { Exporter, ExportOptions, ExportSelection } from '../core/exporter'
 import { selectSections } from './section-selection'
 import {
-    extractDocumentTitle,
-    sectionTitleFromId,
+    resolveSectionTitle,
     stringifyLanguageMap,
     stringifyContributor,
     buildExportTitle,
     htmlToText,
+    canExportFirstSectionsSelection,
 } from './utils'
 
 export type { ExportOptions, ExportSelection } from '../core/exporter'
@@ -28,7 +28,7 @@ export class TXTExporter implements Exporter {
     readonly extension = '.txt'
 
     canExport(_book: Book, selection: ExportSelection): boolean {
-        return selection.type === 'first-sections' && (!selection.unit || selection.unit === 'section')
+        return canExportFirstSectionsSelection(selection)
     }
 
     async exportBook(book: Book, selection: ExportSelection, options: ExportOptions = {}): Promise<Blob> {
@@ -65,23 +65,17 @@ async function createTXT(
 
         if (section.format === 'image') {
             // Image section: emit a descriptive placeholder
-            const label = entry.title ?? sectionTitleFromId(section) ?? `Image ${i + 1}`
+            const label = resolveSectionTitle(section, i, undefined, entry.title, 'Image')
             parts.push(`\n\n${'─'.repeat(60)}\n`)
             parts.push(`[${label}]\n`)
             continue
         }
 
-        // Text section: prefer loadText(), fall back to stripping HTML
-        let text: string
-        if (typeof section.loadText === 'function') {
-            text = String(await section.loadText())
-        } else {
-            const html = String(await section.load())
-            text = htmlToText(html)
-        }
-
         const html = String(await section.load())
-        const title = entry.title ?? extractDocumentTitle(html) ?? sectionTitleFromId(section) ?? `Section ${i + 1}`
+        const text = typeof section.loadText === 'function'
+            ? String(await section.loadText())
+            : htmlToText(html)
+        const title = resolveSectionTitle(section, i, html, entry.title)
 
         // Chapter divider + title
         parts.push(`\n\n${'═'.repeat(60)}\n`)

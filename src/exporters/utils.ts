@@ -6,7 +6,7 @@
  */
 
 import type { BookMetadata, Contributor, LanguageMap, Section } from '../core/types'
-import type { ExportOptions } from '../core/exporter'
+import type { ExportOptions, ExportSelection } from '../core/exporter'
 import type { URLFactory } from '../core/url-factory'
 import { extensionFromMime, extensionFromPath, getMimeTypeFromPath, escapeXML, escapeAttr } from '../core/utils'
 
@@ -44,6 +44,14 @@ export async function toBytes(data: string | ArrayBuffer | Blob): Promise<Uint8A
     if (typeof data === 'string') return new TextEncoder().encode(data)
     if (data instanceof Blob) return new Uint8Array(await data.arrayBuffer())
     return new Uint8Array(data)
+}
+
+// ---------------------------------------------------------------------------
+// Selection / section helpers
+// ---------------------------------------------------------------------------
+
+export function canExportFirstSectionsSelection(selection: ExportSelection): boolean {
+    return selection.type === 'first-sections' && (!selection.unit || selection.unit === 'section')
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +113,19 @@ export function sectionTitleFromId(section: Section): string | null {
     const id = String(section.id).split(/[\/\\]/).pop()?.replace(/\.[^.]+$/, '')
     const text = normalizeTitleText(id?.replace(/[-_]+/g, ' '))
     return text || null
+}
+
+export function resolveSectionTitle(
+    section: Section,
+    index: number,
+    html: string | undefined,
+    preferredTitle: string | undefined,
+    fallbackPrefix = 'Section',
+): string {
+    return preferredTitle
+        ?? (html ? extractDocumentTitle(html) : null)
+        ?? sectionTitleFromId(section)
+        ?? `${fallbackPrefix} ${index + 1}`
 }
 
 export function normalizeTitleText(value: string | undefined): string {
@@ -186,4 +207,76 @@ export function htmlToText(html: string): string {
         // Collapse excessive blank lines
         .replace(/\n{3,}/g, '\n\n')
         .trim()
+}
+
+// ---------------------------------------------------------------------------
+// HTML fragment / resource attribute helpers
+// ---------------------------------------------------------------------------
+
+export function extractBodyContent(html: string): string {
+    const bodyMatch = /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(html)
+    if (bodyMatch) return bodyMatch[1]
+    return stripDocumentShell(html)
+}
+
+export function stripDocumentShell(html: string): string {
+    return html
+        .replace(/<\?xml[^>]*>/gi, '')
+        .replace(/<!DOCTYPE[^>]*>/gi, '')
+        .replace(/<\/?html\b[^>]*>/gi, '')
+        .replace(/<head\b[^>]*>[\s\S]*?<\/head>/gi, '')
+        .replace(/<body\b[^>]*>/gi, '')
+        .replace(/<\/body>/gi, '')
+}
+
+export function normalizeHTMLFragment(html: string): string {
+    return stripDocumentShell(html)
+        .replace(
+            /<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)\b([^<>]*?)(?<!\/)>/gi,
+            '<$1$2/>',
+        )
+}
+
+export type ResourceAttributeRewriter = (
+    url: string,
+    attr: string,
+    rawAttribute: string,
+) => Promise<string | null> | string | null
+
+export async function rewriteResourceAttributes(
+    html: string,
+    rewrite: ResourceAttributeRewriter,
+): Promise<string> {
+    let result = await rewriteResourceAttributePattern(
+        html,
+        /\s(src|poster|data)=["']([^"']+)["']/gi,
+        rewrite,
+    )
+    result = await rewriteResourceAttributePattern(
+        result,
+        /\s((?:xlink:)?href)=["']([^"']+)["']/gi,
+        rewrite,
+    )
+    return result
+}
+
+async function rewriteResourceAttributePattern(
+    html: string,
+    regex: RegExp,
+    rewrite: ResourceAttributeRewriter,
+): Promise<string> {
+    let result = ''
+    let lastIndex = 0
+    let match: RegExpExecArray | null
+
+    while ((match = regex.exec(html)) !== null) {
+        const attr = match[1]
+        const url = match[2]
+        result += html.slice(lastIndex, match.index)
+        const replacement = await rewrite(url, attr, match[0])
+        result += replacement ?? match[0]
+        lastIndex = regex.lastIndex
+    }
+
+    return result + html.slice(lastIndex)
 }

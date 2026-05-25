@@ -189,7 +189,7 @@ Current test coverage is good but has gaps:
 
 ### Why Not Improve Now?
 
-1. **Diminishing returns**: Current 208 tests cover main use cases
+1. **Diminishing returns**: Current 299 tests cover main use cases
 2. **Fixture complexity**: Encrypted EPUBs and HUFF-compressed MOBIs are hard to generate programmatically
 3. **Browser testing**: Requires jsdom or Playwright setup (significant infrastructure)
 

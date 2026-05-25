@@ -11,19 +11,17 @@ import type { Book } from '../core/types'
 import type { Exporter, ExportOptions, ExportSelection } from '../core/exporter'
 import { selectSections } from './section-selection'
 import {
-    parseDataURI,
-    extensionFromMime,
     shouldPackageResource,
     loadReferencedResource,
-    extractDocumentTitle,
-    sectionTitleFromId,
-    stringifyLanguageMap,
+    resolveSectionTitle,
     stringifyContributor,
     buildExportTitle,
     normalizeLanguage,
     escapeXML,
     escapeAttr,
-    htmlToText,
+    canExportFirstSectionsSelection,
+    extractBodyContent,
+    rewriteResourceAttributes,
 } from './utils'
 
 export type { ExportOptions, ExportSelection } from '../core/exporter'
@@ -36,7 +34,7 @@ export class HTMLExporter implements Exporter {
     readonly extension = '.html'
 
     canExport(_book: Book, selection: ExportSelection): boolean {
-        return selection.type === 'first-sections' && (!selection.unit || selection.unit === 'section')
+        return canExportFirstSectionsSelection(selection)
     }
 
     async exportBook(book: Book, selection: ExportSelection, options: ExportOptions = {}): Promise<Blob> {
@@ -71,7 +69,7 @@ async function createHTML(
 
         if (section.format === 'image') {
             const src = String(await section.load())
-            const title = entry.title ?? sectionTitleFromId(section) ?? `Image ${i + 1}`
+            const title = resolveSectionTitle(section, i, undefined, entry.title, 'Image')
             const inlinedSrc = await inlineImageSrc(src, options)
             sections.push({
                 id: sectionId,
@@ -82,7 +80,7 @@ async function createHTML(
         }
 
         const html = String(await section.load())
-        const title = entry.title ?? extractDocumentTitle(html) ?? sectionTitleFromId(section) ?? `Section ${i + 1}`
+        const title = resolveSectionTitle(section, i, html, entry.title)
         const content = await inlineHTMLResources(extractBodyContent(html), options)
 
         sections.push({
@@ -121,63 +119,13 @@ async function inlineImageSrc(src: string, options: ExportOptions): Promise<stri
 }
 
 async function inlineHTMLResources(html: string, options: ExportOptions): Promise<string> {
-    // Inline src / poster attributes
-    let result = await replaceAttributes(
-        html,
-        /\s(src|poster|data)=["']([^"']+)["']/gi,
-        options,
-    )
-    // Inline href attributes (for images in SVG etc.)
-    result = await replaceAttributes(
-        result,
-        /\s(?:xlink:)?href=["']([^"']+)["']/gi,
-        options,
-        'href',
-    )
-    return result
-}
-
-async function replaceAttributes(
-    html: string,
-    regex: RegExp,
-    options: ExportOptions,
-    fixedAttr?: string,
-): Promise<string> {
-    let result = ''
-    let lastIndex = 0
-    let match: RegExpExecArray | null
-
-    while ((match = regex.exec(html)) !== null) {
-        const attr = fixedAttr ?? match[1]
-        const url = fixedAttr ? match[1] : match[2]
-
-        result += html.slice(lastIndex, match.index)
-
+    return rewriteResourceAttributes(html, async (url, attr) => {
         if (shouldPackageResource(url)) {
             const inlined = await inlineImageSrc(url, options)
-            result += ` ${attr}="${escapeAttr(inlined)}"`
-        } else {
-            result += match[0]
+            return ` ${attr}="${escapeAttr(inlined)}"`
         }
-
-        lastIndex = regex.lastIndex
-    }
-
-    return result + html.slice(lastIndex)
-}
-
-function extractBodyContent(html: string): string {
-    const bodyMatch = /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(html)
-    if (bodyMatch) return bodyMatch[1]
-
-    // Strip xml/doctype/html/head if no body tag found
-    return html
-        .replace(/<\?xml[^>]*>/gi, '')
-        .replace(/<!DOCTYPE[^>]*>/gi, '')
-        .replace(/<\/?html\b[^>]*>/gi, '')
-        .replace(/<head\b[^>]*>[\s\S]*?<\/head>/gi, '')
-        .replace(/<body\b[^>]*>/gi, '')
-        .replace(/<\/body>/gi, '')
+        return null
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -316,7 +316,7 @@ describe('FB2Parser', () => {
 
         it('should work without urlFactory (FB2 uses data URIs)', async () => {
             const buffer = createTestFB2Buffer()
-            // FB2 no longer requires urlFactory 鈥?sections return content strings
+            // FB2 no longer requires urlFactory - sections return content strings
             const book = await parser.parse(buffer, { domAdapter: new NodeDOMAdapter() })
             expect(book.sections.length).toBeGreaterThan(0)
         })

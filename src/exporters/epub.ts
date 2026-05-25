@@ -10,8 +10,7 @@ import {
     getMimeTypeFromPath,
     shouldPackageResource,
     loadReferencedResource,
-    extractDocumentTitle,
-    sectionTitleFromId,
+    resolveSectionTitle,
     stringifyLanguageMap,
     normalizeLanguage,
     stringifyContributor,
@@ -19,6 +18,10 @@ import {
     buildIdentifier,
     escapeXML,
     escapeAttr,
+    canExportFirstSectionsSelection,
+    extractBodyContent,
+    normalizeHTMLFragment,
+    rewriteResourceAttributes,
 } from './utils'
 
 export type { ExportOptions, ExportSelection } from '../core/exporter'
@@ -58,7 +61,7 @@ export class EPUBExporter implements Exporter {
     readonly extension = '.epub'
 
     canExport(_book: Book, selection: ExportSelection): boolean {
-        return selection.type === 'first-sections' && (!selection.unit || selection.unit === 'section')
+        return canExportFirstSectionsSelection(selection)
     }
 
     async exportBook(book: Book, selection: ExportSelection, options: ExportOptions = {}): Promise<Blob> {
@@ -86,7 +89,7 @@ async function createEPUB(
 
         if (section.format === 'image') {
             const image = await readImageSection(section, i)
-            const title = entry.title ?? sectionTitleFromId(section) ?? `Image ${i + 1}`
+            const title = resolveSectionTitle(section, i, undefined, entry.title, 'Image')
             if (image) resources.push(image)
             chapters.push({
                 id: chapterId,
@@ -98,7 +101,7 @@ async function createEPUB(
         }
 
         const html = await loadSectionDocument(section)
-        const title = entry.title ?? extractDocumentTitle(html) ?? sectionTitleFromId(section) ?? `Section ${i + 1}`
+        const title = resolveSectionTitle(section, i, html, entry.title)
         const content = await inlineReferencedResources(
             normalizeXHTML(html, title),
             resources,
@@ -135,35 +138,10 @@ async function inlineReferencedResources(
     resourceBySource: Map<string, ExportResource>,
     options: ExportOptions,
 ): Promise<string> {
-    let result = await replaceResourceAttributes(html, /\s(src|poster|data)=["']([^"']+)["']/gi, resources, resourceBySource, options)
-    result = await replaceResourceAttributes(result, /\s(?:xlink:)?href=["']([^"']+)["']/gi, resources, resourceBySource, options, 'href')
-    return result
-}
-
-async function replaceResourceAttributes(
-    html: string,
-    regex: RegExp,
-    resources: ExportResource[],
-    resourceBySource: Map<string, ExportResource>,
-    options: ExportOptions,
-    fixedAttr?: string,
-): Promise<string> {
-    let result = ''
-    let lastIndex = 0
-    let match: RegExpExecArray | null
-
-    while ((match = regex.exec(html)) !== null) {
-        const attr = fixedAttr ?? match[1]
-        const url = fixedAttr ? match[1] : match[2]
-        result += html.slice(lastIndex, match.index)
+    return rewriteResourceAttributes(html, async (url, attr) => {
         const resource = await getOrCreateReferencedResource(url, resources, resourceBySource, options)
-        result += resource
-            ? ` ${attr}="../${escapeAttr(resource.href)}"`
-            : match[0]
-        lastIndex = regex.lastIndex
-    }
-
-    return result + html.slice(lastIndex)
+        return resource ? ` ${attr}="../${escapeAttr(resource.href)}"` : null
+    })
 }
 
 async function getOrCreateReferencedResource(
@@ -205,8 +183,7 @@ async function readImageSection(section: Section, index: number): Promise<Export
 
 function normalizeXHTML(html: string, title: string): string {
     const trimmed = html.trim()
-    const body = extractBody(trimmed)
-    const content = body ?? trimmed
+    const content = extractBodyContent(trimmed)
     return `<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head><title>${escapeXML(title)}</title></head>
@@ -214,25 +191,6 @@ function normalizeXHTML(html: string, title: string): string {
 ${normalizeHTMLFragment(content)}
 </body>
 </html>`
-}
-
-function extractBody(html: string): string | null {
-    const match = /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(html)
-    return match?.[1] ?? null
-}
-
-function normalizeHTMLFragment(html: string): string {
-    return html
-        .replace(/<\?xml[^>]*>/gi, '')
-        .replace(/<!DOCTYPE[^>]*>/gi, '')
-        .replace(/<\/?html\b[^>]*>/gi, '')
-        .replace(/<head\b[^>]*>[\s\S]*?<\/head>/gi, '')
-        .replace(/<body\b[^>]*>/gi, '')
-        .replace(/<\/body>/gi, '')
-        .replace(
-            /<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)\b([^<>]*?)(?<!\/)>/gi,
-            '<$1$2/>',
-        )
 }
 
 function createImageXHTML(title: string, src: string, pageNumber: number): string {
@@ -403,5 +361,4 @@ function renderNavItems(items: readonly ExportNavItem[], depth: number): string 
         return `${indent}<li><a href="${escapeAttr(item.href)}">${escapeXML(item.label)}</a>${nested}</li>`
     }).join('\n')
 }
-
 

@@ -194,7 +194,7 @@ describe('CBZParser', () => {
             const buffer = await createTestCBZ({ pages: 1 })
             await expect(parser.parse(buffer)).rejects.toThrow(AdapterRequiredError)
             await expect(parser.parse(buffer, {})).rejects.toThrow(AdapterRequiredError)
-            // urlFactory alone is not sufficient 鈥?domAdapter is required
+            // urlFactory alone is not sufficient - domAdapter is required
             await expect(parser.parse(buffer, { urlFactory: new NodeURLFactory() })).rejects.toThrow(AdapterRequiredError)
         })
 

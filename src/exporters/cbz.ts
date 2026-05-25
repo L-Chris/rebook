@@ -12,15 +12,14 @@ import { selectSections } from './section-selection'
 import {
     parseDataURI,
     extensionFromMime,
-    extensionFromPath,
     loadReferencedResource,
-    sectionTitleFromId,
-    extractDocumentTitle,
+    resolveSectionTitle,
     normalizeTitleText,
     stringifyLanguageMap,
     stringifyContributor,
     htmlToText,
     escapeXML,
+    canExportFirstSectionsSelection,
 } from './utils'
 
 export type { ExportOptions, ExportSelection } from '../core/exporter'
@@ -33,7 +32,7 @@ export class CBZExporter implements Exporter {
     readonly extension = '.cbz'
 
     canExport(_book: Book, selection: ExportSelection): boolean {
-        return selection.type === 'first-sections' && (!selection.unit || selection.unit === 'section')
+        return canExportFirstSectionsSelection(selection)
     }
 
     async exportBook(book: Book, selection: ExportSelection, options: ExportOptions = {}): Promise<Blob> {
@@ -94,7 +93,7 @@ async function createCBZ(
 
         // Text section: load HTML and extract embedded images or plain text
         const html = String(await section.load())
-        const title = entry.title ?? extractDocumentTitle(html) ?? sectionTitleFromId(section) ?? `Section ${i + 1}`
+        const title = resolveSectionTitle(section, i, html, entry.title)
 
         // Extract inline images from the HTML first
         const imageEntries = await extractInlineImages(html, pageNum, options)

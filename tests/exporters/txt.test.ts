@@ -175,13 +175,17 @@ describe('TXT exporter', () => {
 
     it('uses loadText() when available for text extraction', async () => {
         const loadTextCalls: string[] = []
+        const loadCalls: string[] = []
         const book = {
             sections: [
                 {
                     id: 'ch1',
                     size: 50,
                     format: 'xhtml' as const,
-                    load: () => '<html><body><p>Raw HTML.</p></body></html>',
+                    load: () => {
+                        loadCalls.push('called')
+                        return '<html><body><p>Raw HTML.</p></body></html>'
+                    },
                     loadText: () => {
                         loadTextCalls.push('called')
                         return 'Extracted plain text.'
@@ -194,6 +198,7 @@ describe('TXT exporter', () => {
         const text = await exported.text()
 
         expect(loadTextCalls).toContain('called')
+        expect(loadCalls).toHaveLength(1)
         expect(text).toContain('Extracted plain text.')
     })
 

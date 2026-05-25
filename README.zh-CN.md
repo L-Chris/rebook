@@ -2,22 +2,22 @@
 
 [English](./README.md) | [API 参考](./docs/API.md) | [架构设计](./docs/ARCHITECTURE.md) | [经验总结](./docs/EXPERIENCE.md)
 
-模块化、可扩展的 Web 电子书解析与渲染库。
+面向 EPUB、MOBI/AZW3、FB2、CBZ 的 TypeScript 电子书工具库，覆盖解析、浏览器渲染、文档模型处理和导出。
 
-灵感来自 [foliate-js](https://github.com/johnfactotum/foliate-js)，但对其架构进行了重构——**解析器**（文件格式处理）与**渲染器**（平台相关展示）完全解耦。
+核心设计把**解析器**（文件格式处理）、**渲染器**（平台相关展示）和**导出器**（输出封装）分离。解析器统一产出 `Book`，浏览器阅读、文档模型工作流以及 EPUB/CBZ/TXT/HTML 导出都消费同一个契约。
 
 ## 特性
 
-- **模块化架构**：解析器与渲染器相互独立，可自由组合
+- **模块化架构**：解析器、渲染器、导出器相互独立，可自由组合
 - **TypeScript**：完整的类型安全，提供全面的接口定义
 - **多格式支持**：EPUB 2.x/3.x、MOBI/AZW/AZW3、FictionBook 2、CBZ
 - **AI 友好的文档模型**：受 SlateJS 启发的树形结构，提供查询和修改 API，支持内容操作（翻译、标注、重构）
 - **Pretext 排版管线**：EPUB 章节可输出带样式文本片段，支持一次测量、多次纯内存行切片
 - **环境无关的解析器**：所有解析器通过适配器注入，可在浏览器、Node.js 或 Worker 中运行
-- **可插拔导出器**：通过格式无关的 exporter registry 导出已解析书籍，内置 EPUB 输出
+- **可插拔导出器**：通过格式无关的 exporter registry 导出已解析书籍，内置 EPUB、CBZ、TXT、HTML 输出
 - **浏览器渲染器**：默认使用高性能的 AST/Pretext 虚拟文本渲染器
 - **畸形 EPUB 容错**：多层回退策略处理损坏的 zip 归档
-- **框架无关**：核心库兼容任意框架；React/Vue 封装计划中
+- **框架无关**：核心库兼容任意框架
 
 ## 安装
 
@@ -37,7 +37,7 @@ npm install rebook
 ## 快速开始
 
 ```typescript
-import { registry, createReader, UnsupportedFormatError } from 'rebook'
+import { registry, createReader } from 'rebook'
 import { epub } from 'rebook/parsers/epub'
 import { mobi } from 'rebook/parsers/mobi'
 import { fb2 } from 'rebook/parsers/fb2'
@@ -76,7 +76,7 @@ const blob = await exportFirstSections(file, 5, {
 })
 ```
 
-导出格式通过 `exporterRegistry` 注册，后续新增输出格式不需要改解析器或渲染器。按数量导出使用线性阅读 section：CBZ 的 section 对应图片页，EPUB/MOBI/FB2 对应 spine 或解析器切出的阅读段，不是排版后的视觉页。
+导出格式通过 `exporterRegistry` 注册。内置格式包括 `epub`、`cbz`、`txt`、`html`，后续新增输出格式不需要改解析器或渲染器。按数量导出使用线性阅读 section：CBZ 的 section 对应图片页，EPUB/MOBI/FB2 对应 spine 或解析器切出的阅读段，不是排版后的视觉页。
 
 ### 浏览器渲染
 
@@ -125,7 +125,7 @@ const lines = layout(prepared, { inlineSize: 680, lineHeight: 32 })
 const visible = getVisibleLines(lines, scrollTop, viewportHeight)
 ```
 
-`prepare()` 内部使用 `@chenglou/pretext` 做一次性 Canvas 测量，`layout()` 遍历 Pretext 行范围并映射回 EPUB 的 segment/style 来源。输出的 `LineRange` 包含文本片段范围、宽度和行位置，虚拟列表或 Canvas 渲染器可以只渲染可视区内容。
+`prepareBlocks()` 内部使用 `@chenglou/pretext` 做一次性 Canvas 测量，`layout()` 遍历 Pretext 行范围并映射回 EPUB 的 segment/style 来源。输出的 `LineRange` 包含文本片段范围、宽度和行位置，虚拟列表或 Canvas 渲染器可以只渲染可视区内容。
 
 浏览器包也导出了 `VirtualTextRenderer` / `createVirtualTextRenderer`，它基于这条管线只把可视行渲染为简单 DOM spans。
 
@@ -154,7 +154,7 @@ npm test          # 运行测试
 | 浏览器耦合 | 解析器使用 DOM API | 解析器环境无关（适配器） |
 | 文档模型 | 无 | SlateJS 启发的树形结构，支持修改 |
 | 格式支持 | EPUB、MOBI、FB2、CBZ、PDF | EPUB、MOBI/AZW3、FB2、CBZ |
-| 测试 | 无 | Vitest（208 个测试） |
+| 测试 | 无 | Vitest（299 个测试） |
 | 畸形 EPUB 容错 | 无（仅 zip.js） | CD 校正 + 逐条目 LFH 扫描 |
 
 ## 许可证

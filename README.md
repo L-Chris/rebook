@@ -2,22 +2,22 @@
 
 [中文文档](./README.zh-CN.md) | [API Reference](./docs/API.md) | [Architecture](./docs/ARCHITECTURE.md) | [Experience & Lessons](./docs/EXPERIENCE.md)
 
-A modular, extensible e-book parsing and rendering library for the web.
+A TypeScript e-book toolkit for parsing, rendering, inspecting, and exporting EPUB, MOBI/AZW3, FB2, and CBZ books.
 
-Inspired by [foliate-js](https://github.com/johnfactotum/foliate-js), but restructured with a clean separation between **parsers** (file format handling) and **renderers** (platform-specific display).
+The core design separates **parsers** (file format handling), **renderers** (platform display), and **exporters** (output packaging). Parsers produce a normalized `Book`; browser rendering, document-model workflows, and EPUB/CBZ/TXT/HTML export all consume that same contract.
 
 ## Features
 
-- **Modular architecture**: Parsers and renderers are independent — mix and match
+- **Modular architecture**: Parsers, renderers, and exporters are independent
 - **TypeScript**: Full type safety with comprehensive interfaces
 - **Multi-format support**: EPUB 2.x/3.x, MOBI/AZW/AZW3, FictionBook 2, and CBZ
 - **AI-friendly Document Model**: SlateJS-inspired tree structure with query and mutation APIs for content manipulation (translation, annotation, restructuring)
 - **Pretext layout pipeline**: EPUB sections can expose styled text segments for one-time measurement and pure in-memory line slicing
 - **Environment-agnostic parsers**: All parsers run in browser, Node.js, or workers via adapter injection
-- **Pluggable exporters**: Export parsed books through a format-neutral exporter registry, with EPUB output built in
+- **Pluggable exporters**: Export parsed books through a format-neutral exporter registry, with EPUB, CBZ, TXT, and HTML output built in
 - **Browser renderer**: Fast AST/Pretext virtual text renderer built-in
 - **Malformed EPUB recovery**: Multi-layer fallback for broken zip archives
-- **Framework-agnostic**: Core library works with any framework; React/Vue wrappers coming
+- **Framework-agnostic**: Core library works with any framework
 
 ## Installation
 
@@ -37,7 +37,7 @@ npm install rebook
 ## Quick Start
 
 ```typescript
-import { registry, createReader, UnsupportedFormatError } from 'rebook'
+import { registry, createReader } from 'rebook'
 import { epub } from 'rebook/parsers/epub'
 import { mobi } from 'rebook/parsers/mobi'
 import { fb2 } from 'rebook/parsers/fb2'
@@ -76,7 +76,7 @@ const blob = await exportFirstSections(file, 5, {
 })
 ```
 
-Exporters are registered through `exporterRegistry`, so future output formats can be added without changing parser or renderer code. Exporting by count uses linear reading sections: CBZ maps sections to image pages, while EPUB/MOBI/FB2 map them to spine or parser-split sections rather than visual pages after layout.
+Exporters are registered through `exporterRegistry`. Built-in formats are `epub`, `cbz`, `txt`, and `html`; future output formats can be added without changing parser or renderer code. Exporting by count uses linear reading sections: CBZ maps sections to image pages, while EPUB/MOBI/FB2 map them to spine or parser-split sections rather than visual pages after layout.
 
 ### Browser Rendering
 
@@ -114,7 +114,7 @@ This enables AI-powered workflows: translation, content summarization, annotatio
 For renderers that need fast style changes or virtualized text, EPUB sections expose structural blocks and styled segments that can be measured once and laid out repeatedly without reflowing a full chapter DOM:
 
 ```typescript
-import { prepare, layout, getVisibleLines } from 'rebook'
+import { prepareBlocks, layout, getVisibleLines } from 'rebook'
 
 const blocks = await book.sections[0].getBlocks!()
 const prepared = prepareBlocks(blocks, {
@@ -125,7 +125,7 @@ const lines = layout(prepared, { inlineSize: 680, lineHeight: 32 })
 const visible = getVisibleLines(lines, scrollTop, viewportHeight)
 ```
 
-`prepare()` delegates to `@chenglou/pretext` for one-time Canvas measurement, while `layout()` walks Pretext line ranges and maps every visible fragment back to its EPUB segment/style source. The resulting `LineRange` objects can feed a virtual list or Canvas renderer while keeping the live DOM minimal.
+`prepareBlocks()` delegates to `@chenglou/pretext` for one-time Canvas measurement, while `layout()` walks Pretext line ranges and maps every visible fragment back to its EPUB segment/style source. The resulting `LineRange` objects can feed a virtual list or Canvas renderer while keeping the live DOM minimal.
 
 The browser package also exports `VirtualTextRenderer` / `createVirtualTextRenderer`, which uses this pipeline to render only visible line rows as simple DOM spans.
 
@@ -154,7 +154,7 @@ npm test          # Run tests
 | Browser coupling | Parser uses DOM APIs | Parser is env-agnostic (adapters) |
 | Document Model | None | SlateJS-inspired tree with mutations |
 | Format support | EPUB, MOBI, FB2, CBZ, PDF | EPUB, MOBI/AZW3, FB2, CBZ |
-| Testing | None | Vitest (208 tests) |
+| Testing | None | Vitest (299 tests) |
 | Malformed EPUB recovery | None | CD correction + per-entry LFH scan |
 
 ## License

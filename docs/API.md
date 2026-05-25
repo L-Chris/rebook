@@ -64,7 +64,7 @@ Returns an array of registered parser names.
 
 ## First Sections Export
 
-Exporters convert a normalized `Book` back into a downloadable file. The default registered exporter is `epub`, but the API is format-neutral so additional output formats can be added later without changing call sites.
+Exporters convert a normalized `Book` back into a downloadable file. Built-in formats are `epub`, `cbz`, `txt`, and `html`, and the API is format-neutral so additional output formats can be added later without changing call sites.
 
 `exportFirstSections()` parses any registered supported input format and exports the first N linear reading sections using the requested exporter format. The API works in browsers and Node-compatible runtimes.
 
@@ -91,7 +91,7 @@ const blob = await exportFirstSections(file, 5, {
     parserOptions: { domAdapter, urlFactory },
 })
 
-exporterRegistry.list() // ['epub']
+exporterRegistry.list() // ['epub', 'cbz', 'txt', 'html']
 ```
 
 For an already parsed `Book`, use `exportBook()` with an explicit selection:
@@ -157,7 +157,7 @@ const reader = createReader({
 })
 ```
 
-The default browser backend is `VirtualTextRenderer`: XHTML AST 鈫?structural blocks 鈫?preset styles 鈫?Pretext line ranges 鈫?visible DOM rows.
+The default browser backend is `VirtualTextRenderer`: XHTML AST -> structural blocks -> preset styles -> Pretext line ranges -> visible DOM rows.
 
 ### Opening
 
@@ -192,8 +192,8 @@ reader.setSpread(1) // Force single page
 
 In the default virtual text renderer, wide containers display two text columns side-by-side using the Pretext line list.
 
-- **Container width 鈮?2 脳 `maxInlineSize` + `gap`**: Shows 2 pages (spread)
-- **Container width < 2 脳 `maxInlineSize` + `gap`**: Shows 1 page (single)
+- **Container width >=2 x `maxInlineSize` + `gap`**: Shows 2 pages (spread)
+- **Container width < 2 x `maxInlineSize` + `gap`**: Shows 1 page (single)
 - **Resizing**: Recomputes the grid span and switches between spread and single-page
 
 The `maxColumnCount` config option (default: `2`) controls the maximum number of visible pages. Set to `1` to always use single-page layout.
@@ -335,7 +335,7 @@ interface Section {
 
 ### `load()`
 
-Returns a **content string** 鈥?the renderer decides how to display it:
+Returns a **content string** - the renderer decides how to display it:
 - `'xhtml'`/`'html'`: Full HTML/XHTML document or fragment
 - `'image'`: Data URI or base64 string
 
@@ -424,7 +424,7 @@ interface DocumentResource {
 
 #### Mutation Operations
 
-All mutations are **immutable** 鈥?they return a new `SectionDocument` without modifying the original.
+All mutations are **immutable** - they return a new `SectionDocument` without modifying the original.
 
 ```typescript
 import { textNode, elementNode } from 'rebook'
@@ -492,13 +492,13 @@ The Document Model enables these AI-powered workflows:
 
 | Use Case | How |
 |----------|-----|
-| Translation | `getText()` 鈫?translate 鈫?`replaceText()` per text node |
-| Content summary | `getText()` 鈫?summarize |
+| Translation | `getText()` -> translate -> `replaceText()` per text node |
+| Content summary | `getText()` -> summarize |
 | Annotation | `setNode([path], { class: 'annotation' })` |
 | Accessibility | Walk tree, add `alt` attrs to images via `setNode()` |
 | Content injection | `insertNode()` to add AI-generated content |
 | Restructuring | `removeNode()` + `insertNode()` to reorder sections |
-| Image enhancement | `getImages()` 鈫?process 鈫?replace via `setNode()` |
+| Image enhancement | `getImages()` -> process -> replace via `setNode()` |
 
 ---
 
@@ -920,7 +920,7 @@ import { mobi6DefaultStyles } from 'rebook'
 reader.setStyles({ css: mobi6DefaultStyles })
 ```
 
-Modern KF8/AZW3 files (`.azw3`) have embedded styles 鈥?`mobi6DefaultStyles` won't conflict.
+Modern KF8/AZW3 files (`.azw3`) have embedded styles - `mobi6DefaultStyles` won't conflict.
 
 ---
 

@@ -1,4 +1,4 @@
-# Coding Standards 鈥?rebook
+# Coding Standards - rebook
 
 ## 1. TypeScript Conventions
 
@@ -31,7 +31,7 @@
 
 ### Module Structure
 - One public class/interface per file, or a cohesive group of related types
-- Barrel files (`index.ts`) re-export only 鈥?no logic
+- Barrel files (`index.ts`) re-export only - no logic
 - Co-locate private helpers with their consumer
 - Group related files in subdirectories (`parsers/`, `adapters/`, `renderers/`)
 
@@ -66,14 +66,14 @@ toc?: TOCItem[]
 ### Mutation Pattern
 Mutation methods return new instances (SlateJS pattern):
 ```typescript
-// Correct 鈥?immutable
+// Correct - immutable
 insertNode(path: number[], node: DocumentNode): SectionDocument {
     const newNodes = cloneNodes(this.nodes)
     // ... modify newNodes ...
     return new SectionDocumentImpl(newNodes, this.domAdapter)
 }
 
-// Incorrect 鈥?mutable
+// Incorrect - mutable
 insertNode(path: number[], node: DocumentNode): void {
     this.nodes.splice(path[0], 0, node)
 }
@@ -116,15 +116,15 @@ throw new TypeError('Invalid input')
 ## 5. Utility Functions
 
 ### Single Source of Truth
-All shared utilities live in `core/utils.ts` 鈥?ONE canonical definition.
+All shared utilities live in `core/utils.ts` - ONE canonical definition.
 
 ### No Duplicates
 ```typescript
-// Correct 鈥?import from utils
+// Correct - import from utils
 import { escapeHTML } from '../core/utils'
 const html = escapeHTML(text)
 
-// Incorrect 鈥?local duplicate
+// Incorrect - local duplicate
 function escapeHTML(str: string): string {
     return str.replace(/&/g, '&amp;')...
 }
@@ -141,16 +141,16 @@ Parser-specific helpers (e.g., `findByTag`, `parseDate`) may stay local if not s
 
 ### Test Adapter Imports
 ```typescript
-// Correct 鈥?direct import
+// Correct - direct import
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 
-// Incorrect 鈥?barrel import (test adapters not in production barrel)
+// Incorrect - barrel import (test adapters not in production barrel)
 import { NodeDOMAdapter } from '../../src/adapters'
 ```
 
 ### Test Coverage
-- Parser happy path (valid file 鈫?correct `Book` structure)
-- Error paths (malformed file 鈫?typed error)
+- Parser happy path (valid file -> correct `Book` structure)
+- Error paths (malformed file -> typed error)
 - Metadata extraction (title, author, language)
 - Content loading (`section.load()` returns expected content)
 
@@ -206,14 +206,14 @@ async parse(input: ParserInput, options?: ParserOptions): Promise<Book>
 - Only types, classes, and functions intended for external use
 
 ### Barrel Files
-- `src/core/index.ts` 鈥?re-exports core types and utilities
-- `src/parsers/index.ts` 鈥?re-exports parser factories
-- `src/adapters/index.ts` 鈥?re-exports production adapters only
+- `src/core/index.ts` - re-exports core types and utilities
+- `src/parsers/index.ts` - re-exports parser factories
+- `src/adapters/index.ts` - re-exports production adapters only
 
 ### Test Code Isolation
 Test adapters MUST NOT be exported from production barrel files:
 ```typescript
-// src/adapters/index.ts 鈥?Correct
+// src/adapters/index.ts - Correct
 export { BrowserDOMAdapter, BrowserURLFactory } from './browser'
 // Test adapters: import from 'rebook/adapters/node'
 
@@ -222,25 +222,25 @@ export { BrowserDOMAdapter, NodeDOMAdapter } from './adapters'
 ```
 
 ### Export Style
-- Use explicit named exports 鈥?no `export *` except in internal barrel files
+- Use explicit named exports - no `export *` except in internal barrel files
 - Use `export type` for type-only exports
 
 ## 9. Dependency Injection
 
 ### DOM Operations
 All DOM operations go through `DOMAdapter` interface (`core/dom-adapter.ts`):
-- `parseXML(str)` 鈥?parse XML string
-- `parseHTML(str, mimeType?)` 鈥?parse HTML string
-- `serialize(doc)` 鈥?serialize document to string
+- `parseXML(str)` - parse XML string
+- `parseHTML(str, mimeType?)` - parse HTML string
+- `serialize(doc)` - serialize document to string
 - Optional: `getChildNodes`, `createDocument`, `createElement`, `createTextNode`, `appendChild`
 
 ### URL Creation
 All URL creation goes through `URLFactory` interface (`core/url-factory.ts`):
-- `createURL(data, mimeType?)` 鈥?create blob URL
-- `revokeURL(url)` 鈥?revoke blob URL
+- `createURL(data, mimeType?)` - create blob URL
+- `revokeURL(url)` - revoke blob URL
 
 ### Injection Pattern
-Both injected via `ParserOptions` 鈥?never imported directly:
+Both injected via `ParserOptions` - never imported directly:
 ```typescript
 // Correct
 const book = await parser.parse(file, {
@@ -248,22 +248,22 @@ const book = await parser.parse(file, {
     urlFactory: new BrowserURLFactory(),
 })
 
-// Incorrect 鈥?direct browser API usage
+// Incorrect - direct browser API usage
 const url = URL.createObjectURL(blob)
 const doc = new DOMParser().parseFromString(str, 'text/html')
 ```
 
 ### Browser Implementations
-- `adapters/browser.ts` 鈥?`BrowserDOMAdapter`, `BrowserURLFactory`
+- `adapters/browser.ts` - `BrowserDOMAdapter`, `BrowserURLFactory`
 
 ### Test Implementations
-- `adapters/node.ts` 鈥?`NodeDOMAdapter` (uses `@xmldom/xmldom`), `NodeURLFactory` (fake URLs)
+- `adapters/node.ts` - `NodeDOMAdapter` (uses `@xmldom/xmldom`), `NodeURLFactory` (fake URLs)
 
 ## 10. Code Review Checklist
 
 Before merging, verify:
 
-- [ ] No raw `throw new Error(...)` 鈥?use typed error hierarchy
+- [ ] No raw `throw new Error(...)` - use typed error hierarchy
 - [ ] No duplicate utility definitions (check `core/utils.ts` first)
 - [ ] `readonly` on all core type properties (Book, Section, TOCItem, etc.)
 - [ ] No test-only exports in production barrel files
