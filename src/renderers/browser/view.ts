@@ -3,7 +3,7 @@
  * Provides a simple API for opening and reading books.
  */
 
-import type { Book, RelocateEvent, LoadEvent, TOCItem, RebookPlugin } from '../../core/types'
+import type { Book, RelocateEvent, LoadEvent, TOCItem, RebookPlugin, BlockWindowEvent } from '../../core/types'
 import type { ParserInput, ParserOptions } from '../../core/parser'
 import type { RendererConfig, RendererStyles, LayoutMode, Renderer } from '../../core/renderer'
 import { registry } from '../../core/parser'
@@ -260,6 +260,7 @@ export class ReaderView {
     on(event: 'load', listener: (e: LoadEvent) => void): void
     on(event: 'relocate', listener: (e: RelocateEvent) => void): void
     on(event: 'link', listener: (e: { href: string; external: boolean }) => void): void
+    on(event: 'block-window', listener: (e: BlockWindowEvent) => void): void
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     on(event: string, listener: (e: any) => void): void {
         let wrappedListener = listener

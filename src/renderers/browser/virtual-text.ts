@@ -4,7 +4,7 @@
  * This renderer keeps the DOM small by rendering only visible line ranges.
  */
 
-import type { Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
+import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
 import type { LayoutMode, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
 import { SectionProgress } from '../../utils/progress'
 import {
@@ -23,6 +23,7 @@ interface RendererEventMap {
     load: LoadEvent
     relocate: RelocateEvent
     link: LinkEvent
+    'block-window': BlockWindowEvent
 }
 
 type Listener<T> = (event: T) => void
@@ -91,6 +92,7 @@ export class VirtualTextRenderer implements Renderer {
     private tocPositions: TOCPosition[] = []
     private pendingTOCItem: TOCItem | null = null
     private suppressNextScrollRelocate = false
+    private prefetchPageCount = 0
 
     constructor(config: RendererConfig) {
         this.container = config.container
@@ -126,6 +128,7 @@ export class VirtualTextRenderer implements Renderer {
                 return
             }
             this.emitRelocate('scroll')
+            this.emitBlockWindow('scroll')
         }, { passive: true })
         this.scroller.addEventListener('wheel', (event) => {
             if (this.layoutMode !== 'paginated') return
@@ -139,6 +142,7 @@ export class VirtualTextRenderer implements Renderer {
             this.relayout()
             this.restoreSectionFraction(fraction)
             this.emitRelocate('resize')
+            this.emitBlockWindow('resize')
         }, RESIZE_DEBOUNCE_MS))
         this.resizeObserver.observe(this.container)
     }
@@ -148,6 +152,7 @@ export class VirtualTextRenderer implements Renderer {
         this.sections = book.sections
         this.progress = new SectionProgress(this.sections)
         this.tocPositions = []
+        this.prefetchPageCount = getTranslationPrefetchPageCount(book)
     }
 
     async goTo(target: number | string): Promise<void> {
@@ -231,6 +236,7 @@ export class VirtualTextRenderer implements Renderer {
         this.scroller.scrollTop = maxScroll * sectionFraction
         this.renderVisibleLines()
         this.emitRelocate('fraction')
+        this.emitBlockWindow('fraction')
     }
 
     setStyles(styles: RendererStyles): void {
@@ -251,6 +257,7 @@ export class VirtualTextRenderer implements Renderer {
         this.relayout()
         this.restoreSectionFraction(fraction)
         this.emitRelocate('layout')
+        this.emitBlockWindow('layout')
     }
 
     setSpread(maxColumns: number): void {
@@ -259,6 +266,7 @@ export class VirtualTextRenderer implements Renderer {
         this.relayout()
         this.restoreSectionFraction(fraction)
         this.emitRelocate('spread')
+        this.emitBlockWindow('spread')
     }
 
     getLocation(): RelocateEvent | null {
@@ -331,6 +339,7 @@ export class VirtualTextRenderer implements Renderer {
 
         this.renderVisibleLines()
         this.emit('load', { doc: { lines: this.lines, segments }, index })
+        this.emitBlockWindow('load')
         this.emitRelocate('snap')
     }
 
@@ -510,6 +519,44 @@ export class VirtualTextRenderer implements Renderer {
         this.lastLocation = event
         this.emit('relocate', event)
         this.pendingTOCItem = null
+    }
+
+    private emitBlockWindow(reason: string): void {
+        if (this.currentIndex < 0 || this.prefetchPageCount <= 0) return
+        const blockIds = this.getPrefetchBlockIds()
+        if (!blockIds.length) return
+        this.emit('block-window', {
+            index: this.currentIndex,
+            blockIds,
+            pageIndex: this.layoutMode === 'paginated' ? this.pageIndex : undefined,
+            pageCount: this.prefetchPageCount,
+            reason,
+        })
+    }
+
+    private getPrefetchBlockIds(): string[] {
+        const ids: string[] = []
+        const seen = new Set<string>()
+        const sourceStart = this.getSourceScrollTop()
+        const sourceEnd = sourceStart + this.getSourceViewportHeight() + this.getSourceHeightForPages(this.prefetchPageCount)
+
+        for (const line of this.lines) {
+            if (line.top + line.height < sourceStart) continue
+            if (line.top > sourceEnd) break
+            const blockId = line.block?.id
+            if (!blockId || seen.has(blockId)) continue
+            seen.add(blockId)
+            ids.push(blockId)
+        }
+
+        return ids
+    }
+
+    private getSourceHeightForPages(pageCount: number): number {
+        const safePageCount = Math.max(1, pageCount)
+        return this.layoutMode === 'paginated'
+            ? this.columnLayout.columnHeight * this.columnLayout.columns * safePageCount
+            : this.scroller.clientHeight * safePageCount
     }
 
     private resolveHrefFallback(href: string): ResolvedNavigation | null {
@@ -693,6 +740,7 @@ export class VirtualTextRenderer implements Renderer {
         }
         this.renderVisibleLines()
         this.emitRelocate(reason)
+        this.emitBlockWindow(reason)
     }
 
     private applyOverflowMode(): void {
@@ -764,6 +812,13 @@ function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
             ? [item, ...flattenTOC(item.subitems)]
             : [item]
     )
+}
+
+function getTranslationPrefetchPageCount(book: Book): number {
+    const value = (book as { translationPrefetchPageCount?: unknown }).translationPrefetchPageCount
+    return typeof value === 'number' && Number.isFinite(value)
+        ? Math.max(0, Math.floor(value))
+        : 0
 }
 
 function compareTOCPosition(a: TOCPosition, b: TOCPosition): number {

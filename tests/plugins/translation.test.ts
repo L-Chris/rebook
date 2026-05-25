@@ -2,6 +2,11 @@ import { describe, it, expect, vi } from 'vitest'
 import { withTranslation } from '../../src/plugins/translation'
 import type { Book, Section, TextBlock } from '../../src/core/types'
 
+type TestTranslationBook = Book & {
+    requestBlockTranslations?: (sectionIndex: number, blockIds: readonly string[]) => void
+    refreshTranslatedTOC?: () => void
+}
+
 const { generateTextMock, outputObjectMock, createTranslationResponse } = vi.hoisted(() => ({
     createTranslationResponse: async (options: any) => {
         const payload = JSON.parse(options.prompt)
@@ -81,6 +86,7 @@ describe('Translation Plugin', () => {
         })
 
         const wrappedBook = await plugin(mockBook)
+        const translationBook = wrappedBook as TestTranslationBook
         const wrappedSection = wrappedBook.sections[0]
         const initialBlocks = await wrappedSection.getBlocks!()
 
@@ -88,6 +94,7 @@ describe('Translation Plugin', () => {
         expect(initialBlocks[0].id).toBe('b1')
         expect(initialBlocks[0].segments[0].text).toBe('Hello world.')
 
+        translationBook.requestBlockTranslations?.(0, ['b1', 'b3'])
         await update.promise
         const translatedBlocks = await wrappedSection.getBlocks!()
 
@@ -127,12 +134,14 @@ describe('Translation Plugin', () => {
         })
 
         const wrappedBook = await plugin(mockBook)
+        const translationBook = wrappedBook as TestTranslationBook
         const wrappedSection = wrappedBook.sections[0]
         const initialBlocks = await wrappedSection.getBlocks!()
 
         expect(initialBlocks).toHaveLength(3)
         expect(initialBlocks[0].segments[0].text).toBe('Hello world.')
 
+        translationBook.requestBlockTranslations?.(0, ['b1', 'b3'])
         await update.promise
         const translatedBlocks = await wrappedSection.getBlocks!()
 
@@ -164,17 +173,46 @@ describe('Translation Plugin', () => {
         })
 
         const wrappedBook = await plugin({ sections: [shortBlockSection] })
+        const translationBook = wrappedBook as TestTranslationBook
         const initialBlocks = await wrappedBook.sections[0].getBlocks!()
 
         expect(initialBlocks).toHaveLength(1)
         expect(initialBlocks[0].id).toBe('b4')
 
+        translationBook.requestBlockTranslations?.(0, ['b4'])
         await new Promise(resolve => setTimeout(resolve, 0))
         const translatedBlocks = await wrappedBook.sections[0].getBlocks!()
 
         expect(generateTextMock).not.toHaveBeenCalled()
         expect(translatedBlocks).toHaveLength(1)
         expect(translatedBlocks[0].id).toBe('b4')
+    })
+
+    it('skips blocks made only of numbers, whitespace, and punctuation', async () => {
+        const nonTextBlocks: TextBlock[] = [
+            { id: 'n1', type: 'paragraph', segments: [{ text: '12345' }] },
+            { id: 'n2', type: 'paragraph', segments: [{ text: ' \t\n ' }] },
+            { id: 'n3', type: 'paragraph', segments: [{ text: '.,?!，。！？' }] },
+            { id: 'n4', type: 'paragraph', segments: [{ text: ' 123, 456.\t ' }] },
+        ]
+        const section: Section = {
+            id: 's3',
+            size: 20,
+            load: () => '',
+            getBlocks: async () => nonTextBlocks,
+        }
+        const plugin = withTranslation({
+            model: mockModel as any,
+            mode: 'bilingual',
+        })
+
+        const wrappedBook = await plugin({ sections: [section] })
+        await wrappedBook.sections[0].getBlocks!()
+        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, nonTextBlocks.map(block => block.id))
+        await new Promise(resolve => setTimeout(resolve, 0))
+
+        expect(generateTextMock).not.toHaveBeenCalled()
+        expect(await wrappedBook.sections[0].getBlocks!()).toEqual(nonTextBlocks)
     })
 
     it('retries once when structured translation output is invalid', async () => {
@@ -194,6 +232,7 @@ describe('Translation Plugin', () => {
 
         const wrappedBook = await plugin(mockBook)
         await wrappedBook.sections[0].getBlocks!()
+        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1', 'b3'])
         await update.promise
         const translatedBlocks = await wrappedBook.sections[0].getBlocks!()
 
@@ -215,6 +254,7 @@ describe('Translation Plugin', () => {
 
         const wrappedBook = await plugin(mockBook)
         await wrappedBook.sections[0].getBlocks!()
+        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1', 'b3'])
         await update.promise
         const translatedBlocks = await wrappedBook.sections[0].getBlocks!()
 
@@ -242,6 +282,7 @@ describe('Translation Plugin', () => {
 
         const wrappedBook = await plugin(mockBook)
         await wrappedBook.sections[0].getBlocks!()
+        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1', 'b3'])
         await updatesPromise
 
         expect(generateTextMock).toHaveBeenCalledTimes(2)
@@ -250,6 +291,28 @@ describe('Translation Plugin', () => {
         expect(updates[0][3].segments[0].text).toBe('Title')
         expect(updates[1]).toHaveLength(5)
         expect(updates[1][4].segments[0].text).toBe('[Translated] Title')
+    })
+
+    it('translates only block ids requested by the renderer window', async () => {
+        const update = waitForUpdate()
+        const plugin = withTranslation({
+            model: mockModel as any,
+            mode: 'bilingual',
+            onUpdate: update.resolve
+        })
+
+        const wrappedBook = await plugin(mockBook)
+        const wrappedSection = wrappedBook.sections[0]
+        await wrappedSection.getBlocks!()
+
+        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1'])
+        await update.promise
+        const translatedBlocks = await wrappedSection.getBlocks!()
+
+        expect(JSON.parse(generateTextMock.mock.calls[0][0].prompt)).toEqual({ '0': 'Hello world.' })
+        expect(translatedBlocks).toHaveLength(4)
+        expect(translatedBlocks[1].segments[0].text).toBe('[Translated] Hello world.')
+        expect(translatedBlocks[3].segments[0].text).toBe('Title')
     })
 
     it('switches display mode without requesting translations again', async () => {
@@ -264,6 +327,7 @@ describe('Translation Plugin', () => {
         const wrappedBook = await plugin(mockBook)
         const wrappedSection = wrappedBook.sections[0]
         await wrappedSection.getBlocks!()
+        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1', 'b3'])
         await update.promise
 
         const bilingualBlocks = await wrappedSection.getBlocks!()

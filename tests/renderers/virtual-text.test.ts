@@ -120,6 +120,50 @@ describe('VirtualTextRenderer', () => {
         reader.destroy()
     })
 
+    it('emits block ids for the current viewport plus configured prefetch pages', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '72')
+        document.body.appendChild(container)
+
+        const blocks = Array.from({ length: 10 }, (_, index) => ({
+            id: `b${index}`,
+            type: 'paragraph' as const,
+            segments: [{ text: `Block ${index} has enough text to translate.` }],
+        }))
+        const book: Book & { translationPrefetchPageCount: number } = {
+            translationPrefetchPageCount: 1,
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 300,
+                format: 'xhtml',
+                load: () => '',
+                getBlocks: () => blocks,
+            }],
+        }
+
+        const renderer = new VirtualTextRenderer({
+            container,
+            layout: 'paginated',
+            maxColumnCount: 1,
+            styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '260px', margin: '16px' },
+        })
+        let blockIds: string[] = []
+        renderer.on('block-window', event => {
+            blockIds = event.blockIds
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+
+        expect(blockIds.length).toBeGreaterThan(0)
+        expect(blockIds.length).toBeLessThan(blocks.length)
+        expect(blockIds[0]).toBe('b0')
+        expect(blockIds).not.toContain('b9')
+
+        renderer.destroy()
+    })
+
     it('replaces the renderer DOM when opening another book through ReaderView', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')

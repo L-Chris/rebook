@@ -5,7 +5,11 @@ const MAX_TRANSLATION_ATTEMPTS = 2
 type TranslationMode = 'replace' | 'bilingual'
 type ValueOrGetter<T> = T | (() => T)
 type TranslationUpdate = { sectionIndex: number; blocks: TextBlock[] }
-type TranslationBook = Book & { refreshTranslatedTOC?: () => void }
+type TranslationBook = Book & {
+    refreshTranslatedTOC?: () => void
+    requestBlockTranslations?: (sectionIndex: number, blockIds: readonly string[]) => void
+    readonly translationPrefetchPageCount?: number
+}
 
 class TranslationFormatError extends Error {
     constructor(message: string) {
@@ -33,9 +37,11 @@ export interface TranslationOptions {
     /**
      * Approximate maximum tokens (or characters) per translation batch.
      * The plugin will group as many blocks as possible until this limit is reached.
-     * (default: 1000)
+     * (default: 2000)
      */
     tokensPerBatch?: number
+    /** Number of pages ahead for renderer-driven block prefetching. Defaults to 2. */
+    prefetchPages?: ValueOrGetter<number>
     /**
      * Called when a background translation has updated a section.
      * Readers can use this to refresh the current section without blocking
@@ -55,14 +61,15 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
         targetLanguage = 'zh-CN',
         mode = 'bilingual',
         concurrency = 2,
-        tokensPerBatch = 1000,
+        tokensPerBatch = 2000,
+        prefetchPages = 2,
         onUpdate,
         translateTOC = false,
         onTOCUpdate
     } = options
 
     return (book: Book): Book => {
-        const starters = new Map<number, () => void>()
+        const sectionTranslators = new Map<number, (blockIds: readonly string[]) => void>()
         let translatedTOCLabels: string[] | null = null
         let tocTranslationPromise: Promise<string[] | null> | null = null
 
@@ -95,8 +102,8 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
 
             let originalBlocksPromise: Promise<TextBlock[]> | null = null
             let translatedTextByIndex = new Map<number, string>()
-            let translationPromise: Promise<Map<number, string>> | null = null
-            let translationComplete = false
+            const queuedBlockIds = new Set<string>()
+            const inFlightBlockIds = new Set<string>()
 
             const getOriginalBlocks = () => {
                 if (!originalBlocksPromise) {
@@ -105,27 +112,51 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                 return originalBlocksPromise
             }
 
-            const startTranslation = () => {
-                if (translationPromise || translationComplete) return
-                translationPromise = getOriginalBlocks()
-                    .then(blocks => translateBlockTexts(blocks, model, targetLanguage, concurrency, tokensPerBatch, (translations) => {
-                        translatedTextByIndex = translations
-                        const renderedBlocks = renderTranslatedBlocks(blocks, translations, getMode())
-                        onUpdate?.({ sectionIndex: index, blocks: renderedBlocks })
-                    }))
-                    .then(translations => {
-                        translatedTextByIndex = translations
-                        translationComplete = true
-                        return translations
+            const requestTranslationsForBlocks = (blockIds: readonly string[]) => {
+                void getOriginalBlocks()
+                    .then(blocks => {
+                        const indexById = new Map(blocks.map((block, blockIndex) => [block.id, blockIndex]))
+                        const requestedIndexes = [...new Set(blockIds)]
+                            .map(id => indexById.get(id))
+                            .filter((blockIndex): blockIndex is number => blockIndex != null)
+                            .filter(blockIndex =>
+                                !translatedTextByIndex.has(blockIndex)
+                                && !queuedBlockIds.has(blocks[blockIndex].id)
+                                && !inFlightBlockIds.has(blocks[blockIndex].id)
+                            )
+
+                        const requestedItems = requestedIndexes
+                            .map(blockIndex => ({ block: blocks[blockIndex], index: blockIndex }))
+                            .filter(isTranslatableItem)
+
+                        if (!requestedItems.length) return
+                        for (const item of requestedItems) queuedBlockIds.add(item.block.id)
+
+                        return translateBlockItems(requestedItems, model, targetLanguage, concurrency, tokensPerBatch, {
+                            onBatchStart: batch => {
+                                for (const item of batch) {
+                                    queuedBlockIds.delete(item.block.id)
+                                    inFlightBlockIds.add(item.block.id)
+                                }
+                            },
+                            onBatchComplete: (translations, batch) => {
+                                for (const item of batch) inFlightBlockIds.delete(item.block.id)
+                                translatedTextByIndex = new Map([...translatedTextByIndex, ...translations])
+                                const renderedBlocks = renderTranslatedBlocks(blocks, translatedTextByIndex, getMode())
+                                onUpdate?.({ sectionIndex: index, blocks: renderedBlocks })
+                            },
+                            onBatchError: batch => {
+                                for (const item of batch) {
+                                    queuedBlockIds.delete(item.block.id)
+                                    inFlightBlockIds.delete(item.block.id)
+                                }
+                            },
+                        })
                     })
-                    .catch(err => {
-                        translationPromise = null
-                        throw err
-                    })
-                translationPromise.catch(console.error)
+                    .catch(console.error)
             }
 
-            starters.set(index, startTranslation)
+            sectionTranslators.set(index, requestTranslationsForBlocks)
 
             return {
                 ...section,
@@ -134,14 +165,6 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                     const blocks = translatedTextByIndex.size > 0
                         ? renderTranslatedBlocks(originalBlocks, translatedTextByIndex, getMode())
                         : originalBlocks
-                    startTranslation()
-
-                    // Aggressively prefetch the next section in the background
-                    // after a short delay to allow current layout/render to prioritize
-                    setTimeout(() => {
-                        starters.get(index + 1)?.()
-                    }, 500)
-
                     return blocks
                 }
             }
@@ -159,6 +182,12 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                 startTOCTranslation()
                 onTOCUpdate?.(getTOC())
             },
+            requestBlockTranslations(sectionIndex: number, blockIds: readonly string[]) {
+                sectionTranslators.get(sectionIndex)?.(blockIds)
+            },
+            get translationPrefetchPageCount() {
+                return getSafePageCount(prefetchPages)
+            },
             sections: wrappedSections
         }
 
@@ -174,8 +203,24 @@ async function translateBlockTexts(
     tokensPerBatch: number,
     onBatch?: (translations: Map<number, string>) => void
 ): Promise<Map<number, string>> {
+    return translateBlockItems(getTranslatableItems(blocks), model, targetLanguage, concurrency, tokensPerBatch, {
+        onBatchComplete: onBatch,
+    })
+}
+
+async function translateBlockItems(
+    translatableItems: { block: TextBlock, index: number }[],
+    model: LanguageModel,
+    targetLanguage: string,
+    concurrency: number,
+    tokensPerBatch: number,
+    callbacks: {
+        onBatchStart?: (batch: { block: TextBlock, index: number }[]) => void
+        onBatchComplete?: (translations: Map<number, string>, batch: { block: TextBlock, index: number }[]) => void
+        onBatchError?: (batch: { block: TextBlock, index: number }[], error: unknown) => void
+    } = {},
+): Promise<Map<number, string>> {
     const translations = new Map<number, string>()
-    const translatableItems = getTranslatableItems(blocks)
 
     const batches: { block: TextBlock, index: number }[][] = []
     let currentBatch: { block: TextBlock, index: number }[] = []
@@ -206,6 +251,7 @@ async function translateBlockTexts(
         const payload = batch.map(b => b.block.segments.map(s => s.text).join(''))
 
         try {
+            callbacks.onBatchStart?.(batch)
             const batchTranslations = await requestTranslations(model, targetLanguage, payload)
 
             for (let i = 0; i < batch.length; i++) {
@@ -215,8 +261,9 @@ async function translateBlockTexts(
                     translations.set(index, translatedText)
                 }
             }
-            onBatch?.(new Map(translations))
+            callbacks.onBatchComplete?.(new Map(translations), batch)
         } catch (error) {
+            callbacks.onBatchError?.(batch, error)
             console.error(`Batch translation failed:`, error)
         }
     }
@@ -239,16 +286,23 @@ async function translateBlockTexts(
     return translations
 }
 
+function isTranslatableItem(item: { block: TextBlock, index: number }): boolean {
+    const { block } = item
+    if (!['paragraph', 'heading', 'listItem', 'blockquote'].includes(block.type) || block.segments.length === 0) return false
+    const fullText = block.segments.map(s => s.text).join('')
+    return fullText.trim().length >= 2 && hasTranslatableText(fullText)
+}
+
+function hasTranslatableText(text: string): boolean {
+    return /[^\p{Number}\p{Punctuation}\p{Separator}\s]/u.test(text)
+}
+
 function getTranslatableItems(blocks: readonly TextBlock[]): { block: TextBlock, index: number }[] {
     const items: { block: TextBlock, index: number }[] = []
     for (let i = 0; i < blocks.length; i++) {
         const block = blocks[i]
-        if (['paragraph', 'heading', 'listItem', 'blockquote'].includes(block.type) && block.segments.length > 0) {
-            const fullText = block.segments.map(s => s.text).join('')
-            if (fullText.trim().length >= 2) {
-                items.push({ block, index: i })
-            }
-        }
+        const item = { block, index: i }
+        if (isTranslatableItem(item)) items.push(item)
     }
     return items
 }
@@ -387,4 +441,9 @@ function isRetryableTranslationError(error: unknown): boolean {
 
 function getValue<T>(value: ValueOrGetter<T>): T {
     return typeof value === 'function' ? (value as () => T)() : value
+}
+
+function getSafePageCount(value: ValueOrGetter<number>): number {
+    const pageCount = getValue(value)
+    return Number.isFinite(pageCount) ? Math.max(0, Math.floor(pageCount)) : 0
 }

@@ -452,6 +452,23 @@ export interface LinkEvent {
     external: boolean
 }
 
+/**
+ * Event emitted when a renderer knows which blocks are near the current viewport.
+ * Consumers can use this to prefetch expensive block-level work such as AI translation.
+ */
+export interface BlockWindowEvent {
+    /** Section index */
+    index: number
+    /** Block ids in reading order within the current prefetch window */
+    blockIds: string[]
+    /** Current renderer page index when available */
+    pageIndex?: number
+    /** Number of pages ahead included after the current viewport */
+    pageCount?: number
+    /** Reason for the window update */
+    reason?: string
+}
+
 // ============================================================================
 // Plugins
 // ============================================================================
