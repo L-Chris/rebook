@@ -1,4 +1,4 @@
-import { generateObject, jsonSchema, type LanguageModel } from 'ai'
+import { generateText, jsonSchema, Output, type LanguageModel } from 'ai'
 import type { Book, RebookPlugin, TextBlock, TextSegment } from '../core/types'
 
 export interface TranslationOptions {
@@ -21,6 +21,12 @@ export interface TranslationOptions {
      * (default: 2000)
      */
     tokensPerBatch?: number
+    /**
+     * Called when a background translation has updated a section.
+     * Readers can use this to refresh the current section without blocking
+     * initial rendering on the translation request.
+     */
+    onUpdate?: (event: { sectionIndex: number; blocks: TextBlock[] }) => void
 }
 
 /**
@@ -32,11 +38,12 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
         targetLanguage = 'zh-CN', 
         mode = 'bilingual',
         concurrency = 3,
-        tokensPerBatch = 2000
+        tokensPerBatch = 2000,
+        onUpdate
     } = options
 
     return (book: Book): Book => {
-        const fetchers = new Map<number, () => Promise<TextBlock[]>>()
+        const starters = new Map<number, () => void>()
 
         const wrappedSections = book.sections.map((section, index) => {
             const originalGetBlocks = section.getBlocks?.bind(section)
@@ -45,38 +52,48 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                 return section
             }
 
-            let cachedPromise: Promise<TextBlock[]> | null = null
+            let originalBlocksPromise: Promise<TextBlock[]> | null = null
+            let translatedBlocks: TextBlock[] | null = null
+            let translationPromise: Promise<TextBlock[]> | null = null
 
-            const fetchAndTranslate = () => {
-                if (!cachedPromise) {
-                    cachedPromise = originalGetBlocks().then(blocks => 
-                        translateBlocks(blocks, model, targetLanguage, mode, concurrency, tokensPerBatch)
-                    ).catch(err => {
-                        cachedPromise = null // Reset on error so we can retry
-                        throw err
-                    })
+            const getOriginalBlocks = () => {
+                if (!originalBlocksPromise) {
+                    originalBlocksPromise = Promise.resolve(originalGetBlocks()).then(blocks => [...blocks])
                 }
-                return cachedPromise
+                return originalBlocksPromise
             }
 
-            fetchers.set(index, fetchAndTranslate)
+            const startTranslation = () => {
+                if (translationPromise || translatedBlocks) return
+                translationPromise = getOriginalBlocks()
+                    .then(blocks => translateBlocks(blocks, model, targetLanguage, mode, concurrency, tokensPerBatch))
+                    .then(blocks => {
+                        translatedBlocks = blocks
+                        onUpdate?.({ sectionIndex: index, blocks })
+                        return blocks
+                    })
+                    .catch(err => {
+                        translationPromise = null
+                        throw err
+                    })
+                translationPromise.catch(console.error)
+            }
+
+            starters.set(index, startTranslation)
 
             return {
                 ...section,
-                getBlocks: () => {
-                    const promise = fetchAndTranslate()
+                getBlocks: async () => {
+                    const blocks = translatedBlocks ?? await getOriginalBlocks()
+                    startTranslation()
 
                     // Aggressively prefetch the next section in the background 
                     // after a short delay to allow current layout/render to prioritize
                     setTimeout(() => {
-                        const nextFetcher = fetchers.get(index + 1)
-                        if (nextFetcher) {
-                            // Fire and forget
-                            nextFetcher().catch(console.error)
-                        }
+                        starters.get(index + 1)?.()
                     }, 500)
 
-                    return promise
+                    return blocks
                 }
             }
         })
@@ -145,16 +162,16 @@ async function translateBlocks(
         const payload = batch.map(b => b.block.segments.map(s => s.text).join(''))
 
         try {
-            const { object: translations } = await generateObject({
+            const { output } = await generateText({
                 model,
+                output: Output.array({
+                    element: jsonSchema<string>({ type: 'string' }),
+                }),
                 system: `You are a professional translator. Translate the given JSON array of strings into ${targetLanguage}. Maintain the original tone and style.
 Return ONLY a JSON array of strings, where each string is the translation of the corresponding string in the input array. Maintain the exact same array length and order.`,
                 prompt: JSON.stringify(payload, null, 2),
-                schema: jsonSchema({
-                    type: 'array',
-                    items: { type: 'string' }
-                })
             })
+            const translations = Array.isArray(output) ? output : []
 
             for (let i = 0; i < batch.length; i++) {
                 const { block, index } = batch[i]

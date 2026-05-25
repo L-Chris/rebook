@@ -174,6 +174,13 @@ export class ReaderView {
     }
 
     /**
+     * Reload the current section while preserving the current reading position.
+     */
+    async refresh(): Promise<void> {
+        await this.renderer.refresh()
+    }
+
+    /**
      * Get current reading location.
      */
     getLocation(): RelocateEvent | null {

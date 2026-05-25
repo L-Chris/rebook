@@ -269,6 +269,12 @@ export class VirtualTextRenderer implements Renderer {
         return this.progress?.getFractions() ?? []
     }
 
+    async refresh(): Promise<void> {
+        if (this.currentIndex < 0) return
+        const fraction = this.getSectionFraction()
+        await this.loadSection(this.currentIndex, undefined, this.scrollTopForFraction(fraction))
+    }
+
     on<K extends keyof RendererEventMap>(event: K, listener: Listener<RendererEventMap[K]>): void
     on(event: string, listener: Listener<unknown>): void
     on(event: string, listener: Listener<unknown>): void {

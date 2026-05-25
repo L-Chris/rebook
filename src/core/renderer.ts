@@ -129,6 +129,11 @@ export interface Renderer {
     getSectionFractions(): number[]
 
     /**
+     * Reload the current section while preserving the current reading position.
+     */
+    refresh(): Promise<void>
+
+    /**
      * Register an event listener.
      */
     on(event: string, listener: EventListener): void

@@ -526,7 +526,12 @@
                 plugins.push(withTranslation({
                     model: openai(modelName),
                     targetLanguage: 'zh-CN',
-                    mode: translateModeSelect.value
+                    mode: translateModeSelect.value,
+                    onUpdate: ({ sectionIndex }) => {
+                        if (reader?.getLocation()?.index === sectionIndex) {
+                            reader.refresh()
+                        }
+                    }
                 }))
             }
 
