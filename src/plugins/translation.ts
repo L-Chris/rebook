@@ -166,9 +166,9 @@ async function translateBlocks(
                 model,
                 output: Output.array({
                     element: jsonSchema<string>({ type: 'string' }),
+                    description: 'Translations in the same order as the input strings.',
                 }),
-                system: `You are a professional translator. Translate the given JSON array of strings into ${targetLanguage}. Maintain the original tone and style.
-Return ONLY a JSON array of strings, where each string is the translation of the corresponding string in the input array. Maintain the exact same array length and order.`,
+                system: `You are a professional translator. Translate the input strings into ${targetLanguage}. Maintain the original tone, style, count, and order.`,
                 prompt: JSON.stringify(payload, null, 2),
             })
             const translations = Array.isArray(output) ? output : []

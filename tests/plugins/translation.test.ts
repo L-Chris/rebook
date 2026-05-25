@@ -2,16 +2,21 @@ import { describe, it, expect, vi } from 'vitest'
 import { withTranslation } from '../../src/plugins/translation'
 import type { Book, Section, TextBlock } from '../../src/core/types'
 
-vi.mock('ai', () => ({
-    generateText: async (options: any) => {
+const { generateTextMock, outputArrayMock } = vi.hoisted(() => ({
+    generateTextMock: vi.fn(async (options: any) => {
         const payload = JSON.parse(options.prompt)
         const translatedPayload = payload.map((text: string) => `[Translated] ${text}`)
         return {
             output: translatedPayload
         }
-    },
+    }),
+    outputArrayMock: vi.fn((options: any) => options)
+}))
+
+vi.mock('ai', () => ({
+    generateText: generateTextMock,
     Output: {
-        array: (options: any) => options
+        array: outputArrayMock
     },
     jsonSchema: (schema: any) => schema
 }))
@@ -27,6 +32,11 @@ const waitForUpdate = () => {
 }
 
 describe('Translation Plugin', () => {
+    beforeEach(() => {
+        generateTextMock.mockClear()
+        outputArrayMock.mockClear()
+    })
+
     const mockBlocks: TextBlock[] = [
         {
             id: 'b1',
@@ -76,6 +86,10 @@ describe('Translation Plugin', () => {
 
         await update.promise
         const translatedBlocks = await wrappedSection.getBlocks!()
+
+        expect(generateTextMock).toHaveBeenCalled()
+        expect(generateTextMock.mock.calls[0][0].system).not.toContain('elements')
+        expect(outputArrayMock).toHaveBeenCalled()
 
         // b1 (orig), b1-tr (trans), b2 (image), b3 (orig), b3-tr (trans)
         expect(translatedBlocks).toHaveLength(5)
