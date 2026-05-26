@@ -291,6 +291,99 @@ describe('VirtualTextRenderer', () => {
         renderer.destroy()
     })
 
+    it('skips fully empty paginated pages caused by large source gaps', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '120')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 200,
+                format: 'xhtml',
+                load: () => '<p>First</p><p>Second</p>',
+                getBlocks: () => [
+                    {
+                        id: 'first',
+                        type: 'paragraph',
+                        segments: [{ text: 'First page text' }],
+                    },
+                    {
+                        id: 'second',
+                        type: 'paragraph',
+                        blockGapBefore: 160,
+                        segments: [{ text: 'Second page text after a gap' }],
+                    },
+                ],
+            }],
+        }
+
+        const renderer = new VirtualTextRenderer({
+            container,
+            layout: 'paginated',
+            maxColumnCount: 1,
+            styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '280px', margin: '16px' },
+        })
+        const fractions: number[] = []
+        renderer.on('relocate', event => {
+            fractions.push(event.fraction)
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+        expect(container.textContent).toContain('First page text')
+
+        await renderer.next()
+        expect(container.textContent).toContain('Second page text')
+        expect(container.textContent).not.toBe('')
+        expect(fractions.at(-1)).toBe(1)
+
+        renderer.destroy()
+    })
+
+    it('does not render an empty page at the end of Hidden Tools chapter 2', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '620')
+        container.setAttribute('data-height', '600')
+        document.body.appendChild(container)
+
+        const data = await readFile('data/The Hidden Tools of Comed.epub')
+        const book = await epub().parse(data.buffer.slice(
+            data.byteOffset,
+            data.byteOffset + data.byteLength,
+        ), {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+        const chapter2Index = book.sections.findIndex(section => String(section.id).endsWith('part0009.html'))
+        expect(chapter2Index).toBeGreaterThanOrEqual(0)
+
+        const renderer = new VirtualTextRenderer({
+            container,
+            layout: 'paginated',
+            maxColumnCount: 2,
+            styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '720px', margin: '32px' },
+        })
+        let currentIndex = -1
+        renderer.on('relocate', event => {
+            currentIndex = event.index
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(chapter2Index)
+
+        for (let i = 0; i < 40 && currentIndex === chapter2Index; i++) {
+            expect(container.querySelectorAll('[data-block-type]').length).toBeGreaterThan(0)
+            expect(container.textContent?.trim()).not.toBe('')
+            await renderer.next()
+        }
+
+        expect(currentIndex).toBe(chapter2Index + 1)
+
+        renderer.destroy()
+    })
+
     it('renders image blocks and marks covers', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')

@@ -174,8 +174,9 @@ export class VirtualTextRenderer implements Renderer {
 
     async next(): Promise<void> {
         if (this.layoutMode === 'paginated') {
-            if (this.pageIndex < this.columnLayout.pageCount - 1) {
-                this.pageIndex++
+            const nextPage = this.findReadablePage(this.pageIndex + 1, 1)
+            if (nextPage != null) {
+                this.pageIndex = nextPage
                 this.applyPageScroll('page')
                 return
             }
@@ -197,8 +198,9 @@ export class VirtualTextRenderer implements Renderer {
 
     async prev(): Promise<void> {
         if (this.layoutMode === 'paginated') {
-            if (this.pageIndex > 0) {
-                this.pageIndex--
+            const previousPage = this.findReadablePage(this.pageIndex - 1, -1)
+            if (previousPage != null) {
+                this.pageIndex = previousPage
                 this.applyPageScroll('page')
                 return
             }
@@ -229,6 +231,7 @@ export class VirtualTextRenderer implements Renderer {
                 this.columnLayout.pageCount - 1,
                 Math.floor(sectionFraction * this.columnLayout.pageCount),
             )
+            this.pageIndex = this.findReadablePage(this.pageIndex, 0) ?? this.pageIndex
             this.applyPageScroll('fraction')
             return
         }
@@ -331,6 +334,7 @@ export class VirtualTextRenderer implements Renderer {
         if (this.layoutMode === 'paginated') {
             this.pageIndex = Math.max(0, Math.floor(targetScrollTop / Math.max(1, this.columnLayout.pageHeight)))
             this.pageIndex = Math.min(this.pageIndex, this.columnLayout.pageCount - 1)
+            this.pageIndex = this.findReadablePage(this.pageIndex, 0) ?? this.pageIndex
             this.suppressNextScrollRelocate = true
             this.scroller.scrollTop = this.pageIndex * this.columnLayout.pageHeight
         } else {
@@ -386,7 +390,7 @@ export class VirtualTextRenderer implements Renderer {
         })
         const contentHeight = this.lines[this.lines.length - 1]?.top + this.lines[this.lines.length - 1]?.height || 0
         const pageCount = this.layoutMode === 'paginated'
-            ? Math.max(1, Math.ceil(contentHeight / (columnHeight * columns)))
+            ? getReadablePageCount(this.lines, columnHeight, columns)
             : 1
         const totalHeight = columns > 1
             ? pageCount * pageHeight
@@ -405,7 +409,7 @@ export class VirtualTextRenderer implements Renderer {
             totalHeight,
             pageCount,
         }
-        this.pageIndex = Math.min(this.pageIndex, pageCount - 1)
+        this.pageIndex = this.findReadablePage(Math.min(this.pageIndex, pageCount - 1), 0) ?? 0
         const contentWidth = inlineSize * columns + gap * (columns - 1)
         const contentLeft = Math.max(0, (this.scroller.clientWidth - contentWidth) / 2)
         this.spacer.style.height = `${totalHeight}px`
@@ -791,6 +795,7 @@ export class VirtualTextRenderer implements Renderer {
 
     private applyPageScroll(reason: string): void {
         if (this.layoutMode === 'paginated') {
+            this.pageIndex = this.findReadablePage(this.pageIndex, 0) ?? this.pageIndex
             this.pageIndex = Math.min(Math.max(0, this.pageIndex), this.columnLayout.pageCount - 1)
             this.suppressNextScrollRelocate = true
             this.scroller.scrollTop = this.pageIndex * this.columnLayout.pageHeight
@@ -826,6 +831,7 @@ export class VirtualTextRenderer implements Renderer {
                 this.columnLayout.pageCount - 1,
                 Math.round(safe * Math.max(0, this.columnLayout.pageCount - 1)),
             )
+            this.pageIndex = this.findReadablePage(this.pageIndex, 0) ?? this.pageIndex
             this.suppressNextScrollRelocate = true
             this.scroller.scrollTop = this.pageIndex * this.columnLayout.pageHeight
         } else {
@@ -852,6 +858,46 @@ export class VirtualTextRenderer implements Renderer {
             return parseCSSPixels(lineHeight, fontSize * 1.6)
         }
         return fontSize * getLineHeightMultiplier(lineHeight, fontSize)
+    }
+
+    private findReadablePage(pageIndex: number, direction: -1 | 0 | 1): number | null {
+        if (this.layoutMode !== 'paginated') return 0
+        const pageCount = this.columnLayout.pageCount
+        if (pageCount <= 0) return null
+        if (direction > 0 && pageIndex >= pageCount) return null
+        if (direction < 0 && pageIndex < 0) return null
+        const start = Math.min(Math.max(0, pageIndex), pageCount - 1)
+        if (this.hasReadableLinesOnPage(start)) return start
+
+        if (direction > 0) {
+            for (let page = start + 1; page < pageCount; page++) {
+                if (this.hasReadableLinesOnPage(page)) return page
+            }
+            return null
+        }
+
+        if (direction < 0) {
+            for (let page = start - 1; page >= 0; page--) {
+                if (this.hasReadableLinesOnPage(page)) return page
+            }
+            return null
+        }
+
+        for (let distance = 1; distance < pageCount; distance++) {
+            const previous = start - distance
+            const next = start + distance
+            if (previous >= 0 && this.hasReadableLinesOnPage(previous)) return previous
+            if (next < pageCount && this.hasReadableLinesOnPage(next)) return next
+        }
+        return null
+    }
+
+    private hasReadableLinesOnPage(pageIndex: number): boolean {
+        const { columns, columnHeight } = this.columnLayout
+        const pageSourceHeight = Math.max(1, columnHeight * columns)
+        const sourceStart = pageIndex * pageSourceHeight
+        const sourceEnd = sourceStart + pageSourceHeight
+        return this.lines.some(line => line.top + line.height > sourceStart && line.top < sourceEnd)
     }
 
     private emit<K extends keyof RendererEventMap>(event: K, data: RendererEventMap[K]): void {
@@ -971,6 +1017,17 @@ function getColumnCount(
 ): number {
     if (mode !== 'paginated' || maxColumnCount < 2) return 1
     return availableWidth >= minColumnWidth * 2 + gap ? 2 : 1
+}
+
+function getReadablePageCount(lines: readonly LineRange[], columnHeight: number, columns: number): number {
+    const pageSourceHeight = Math.max(1, columnHeight * columns)
+    let lastReadablePage = 0
+    for (const line of lines) {
+        if (line.height <= 0) continue
+        const lineEnd = Math.max(0, line.top + line.height - 0.001)
+        lastReadablePage = Math.max(lastReadablePage, Math.floor(lineEnd / pageSourceHeight))
+    }
+    return Math.max(1, lastReadablePage + 1)
 }
 
 function getPagePaddingBlock(mode: LayoutMode, pageHeight: number, margin: number): number {
