@@ -16,6 +16,7 @@ import {
     type PreparedText,
     type TextBlock,
     type TextImage,
+    type TextTable,
     type TextStyle,
 } from '../../core/pretext'
 
@@ -430,6 +431,10 @@ export class VirtualTextRenderer implements Renderer {
                 this.content.appendChild(this.createImageLine(line, position))
                 continue
             }
+            if (line.kind === 'table' && line.table) {
+                this.content.appendChild(this.createTableLine(line, position))
+                continue
+            }
             const lineEl = document.createElement('div')
             lineEl.style.cssText = `
                 position: absolute;
@@ -493,6 +498,58 @@ export class VirtualTextRenderer implements Renderer {
             object-fit: ${image.style?.objectFit ?? 'contain'};
         `
         wrapper.appendChild(img)
+        return wrapper
+    }
+
+    private createTableLine(line: LineRange, position: { top: number; left: number }): HTMLElement {
+        const layout = this.columnLayout
+        const table = line.table!
+        const wrapper = document.createElement('div')
+        wrapper.style.cssText = `
+            position: absolute;
+            top: ${position.top}px;
+            left: ${position.left}px;
+            width: ${layout.columnWidth}px;
+            height: ${line.height}px;
+            overflow: hidden;
+            font-family: ${this.styles.fontFamily ?? 'system-ui, -apple-system, Georgia, serif'};
+            font-size: ${parseCSSPixels(this.styles.fontSize, 16)}px;
+            line-height: ${this.getLineHeightPixels()}px;
+            color: ${this.styles.color ?? 'inherit'};
+        `
+        wrapper.dataset.blockId = line.block?.id ?? `table-row-${table.rowIndex}`
+        wrapper.dataset.blockType = 'table'
+        wrapper.setAttribute('role', 'row')
+
+        const row = document.createElement('div')
+        row.style.cssText = `
+            display: grid;
+            grid-template-columns: ${getTableGridTemplate(table)};
+            width: 100%;
+            min-height: 100%;
+            border-top: ${table.rowIndex === 0 ? '1px solid #8a8a8a' : '0'};
+            border-left: 1px solid #8a8a8a;
+            background: #fff;
+        `
+
+        for (const cell of table.rows[0]?.cells ?? []) {
+            const cellEl = document.createElement(cell.header ? 'strong' : 'span')
+            cellEl.textContent = cell.text
+            cellEl.style.cssText = `
+                display: block;
+                min-width: 0;
+                padding: 4px 6px;
+                border-right: 1px solid #8a8a8a;
+                border-bottom: 1px solid #8a8a8a;
+                white-space: normal;
+                overflow-wrap: anywhere;
+                text-align: ${getTableTextAlign(cell.align)};
+                ${cell.colspan ? `grid-column: span ${cell.colspan};` : ''}
+            `
+            row.appendChild(cellEl)
+        }
+
+        wrapper.appendChild(row)
         return wrapper
     }
 
@@ -871,6 +928,19 @@ function getImageJustifyContent(image: TextImage): string {
     if (image.style?.align === 'start') return 'flex-start'
     if (image.style?.align === 'end') return 'flex-end'
     return 'center'
+}
+
+function getTableGridTemplate(table: TextTable): string {
+    const weights = table.columnWeights?.length === table.columnCount
+        ? table.columnWeights
+        : Array.from({ length: table.columnCount }, () => 1)
+    return weights.map(weight => `minmax(0, ${Math.max(0.1, weight)}fr)`).join(' ')
+}
+
+function getTableTextAlign(align: 'start' | 'center' | 'end' | undefined): string {
+    if (align === 'center') return 'center'
+    if (align === 'end') return 'right'
+    return 'left'
 }
 
 function parseCSSPixels(value: string | undefined, fallback: number): number {

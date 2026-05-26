@@ -339,6 +339,57 @@ describe('VirtualTextRenderer', () => {
         renderer.destroy()
     })
 
+    it('renders table blocks as visible grid rows', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '420')
+        container.setAttribute('data-height', '180')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [{
+                id: 'table.xhtml',
+                size: 120,
+                format: 'xhtml',
+                load: () => '<table><tr><td>Figure 1.1</td><td>Terms in a synonym ring</td></tr></table>',
+                getBlocks: () => [{
+                    id: 'figures-row-1',
+                    type: 'table',
+                    table: {
+                        columnCount: 2,
+                        columnWeights: [20, 80],
+                        rowIndex: 0,
+                        rowCount: 1,
+                        rows: [{
+                            cells: [
+                                { text: 'Figure 1.1', align: 'start' },
+                                { text: 'Terms in a synonym ring' },
+                            ],
+                        }],
+                    },
+                    segments: [],
+                }],
+            }],
+        }
+
+        const renderer = new VirtualTextRenderer({
+            container,
+            layout: 'paginated',
+            styles: { margin: '20px', fontSize: '16px', lineHeight: 1.5 },
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+
+        const tableRow = container.querySelector('[data-block-type="table"]') as HTMLElement
+        expect(tableRow).toBeTruthy()
+        expect(tableRow.textContent).toContain('Figure 1.1')
+        expect(tableRow.textContent).toContain('Terms in a synonym ring')
+        expect((tableRow.firstElementChild as HTMLElement).style.gridTemplateColumns).toContain('20fr')
+        expect((tableRow.firstElementChild as HTMLElement).style.gridTemplateColumns).toContain('80fr')
+
+        renderer.destroy()
+    })
+
     it('navigates to anchors inside a virtual text section and reports the active TOC item', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')

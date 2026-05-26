@@ -50,6 +50,9 @@ export type {
     TextSegment,
     ImageStyle,
     TextImage,
+    TextTable,
+    TextTableRow,
+    TextTableCell,
     TextBlock,
     TextBlockType,
 } from './core/types'

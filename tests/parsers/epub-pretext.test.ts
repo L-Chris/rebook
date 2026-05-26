@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { EPUBParser } from '../../src/parsers/epub'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
-import { layout, prepare, type TextSegment } from '../../src/core/pretext'
+import { layout, prepare, prepareBlocks, type TextSegment } from '../../src/core/pretext'
 import { createTestEPUB } from '../fixtures/epub-fixture'
 
 beforeAll(() => {
@@ -121,6 +121,60 @@ describe('EPUB Pretext segments', () => {
         }
 
         expect(blockCount).toBeGreaterThan(0)
+    })
+
+    it('extracts tables and figure blocks from The Accidental Taxonomist', async () => {
+        const parser = new EPUBParser()
+        const data = await readFile('data/The Accidental Taxonomist.epub')
+        const book = await parser.parse(data.buffer.slice(
+            data.byteOffset,
+            data.byteOffset + data.byteLength,
+        ), {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+
+        const chapter1 = book.sections.find(section => String(section.id).endsWith('Chapter01.xhtml'))
+        const figuresAndTables = book.sections.find(section => String(section.id).endsWith('List.xhtml'))
+        expect(chapter1).toBeDefined()
+        expect(figuresAndTables).toBeDefined()
+
+        const chapterBlocks = await chapter1!.getBlocks?.()
+        const listBlocks = await figuresAndTables!.getBlocks?.()
+        const chapterTableRows = chapterBlocks?.filter(block => block.type === 'table') ?? []
+        const listTableRows = listBlocks?.filter(block => block.type === 'table') ?? []
+        const chapterImages = chapterBlocks?.filter(block => block.type === 'image') ?? []
+
+        expect(chapterTableRows.length).toBeGreaterThan(5)
+        expect(chapterTableRows[0].table?.columnCount).toBe(4)
+        expect(chapterTableRows[0].table?.columnWeights).toEqual([25, 25, 25, 25])
+        expect(chapterTableRows[0].table?.rows[0]?.cells.map(cell => cell.text)).toEqual([
+            'Year',
+            '“taxonomies” in article titles',
+            '“taxonomies” in article text',
+            '“controlled vocabularies” Subject',
+        ])
+
+        expect(listTableRows.length).toBeGreaterThan(20)
+        expect(listTableRows[0].table?.columnCount).toBe(2)
+        expect(listTableRows[0].table?.columnWeights).toEqual([20, 80])
+        expect(listTableRows[0].table?.rows[0]?.cells.map(cell => cell.text)).toEqual([
+            'Figure 1.1',
+            'Terms in a synonym ring',
+        ])
+
+        const alphaNumericImage = chapterImages.find(block => block.image?.originalSrc?.endsWith('f0011-01.jpg'))
+        expect(alphaNumericImage?.image?.width).toBe(297)
+        expect(alphaNumericImage?.image?.height).toBe(330)
+
+        const prepared = prepareBlocks([
+            ...chapterTableRows.slice(0, 2),
+            alphaNumericImage!,
+        ], { baseStyle: { fontSize: 16, lineHeight: 1.5 } })
+        const lines = layout(prepared, { inlineSize: 360, maxBlockHeight: 420 })
+        expect(lines.some(line => line.kind === 'table')).toBe(true)
+        expect(lines.some(line => line.kind === 'image')).toBe(true)
+        expect(lines.every(line => (line.top % 420) + line.height <= 420)).toBe(true)
     })
 
     it('exposes image blocks with renderable URLs and cover hints', async () => {

@@ -92,6 +92,68 @@ describe('Pretext pipeline', () => {
         expect(lines[0].height).toBeLessThanOrEqual(300)
     })
 
+    it('extracts table rows as paginatable table blocks', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('table', {}, [
+                elementNode('colgroup', {}, [
+                    elementNode('col', { width: '25%' }),
+                    elementNode('col', { width: '75%' }),
+                ]),
+                elementNode('tr', {}, [
+                    elementNode('td', { class: 'center' }, [elementNode('b', {}, [textNode('Year')])]),
+                    elementNode('td', {}, [textNode('Article count')]),
+                ]),
+                elementNode('tr', {}, [
+                    elementNode('td', { class: 'center' }, [textNode('2000')]),
+                    elementNode('td', {}, [textNode('92')]),
+                ]),
+            ]),
+        ], { fontSize: 16, lineHeight: 1.5 })
+
+        expect(blocks.map(block => block.type)).toEqual(['table', 'table'])
+        expect(blocks[0].table?.columnCount).toBe(2)
+        expect(blocks[0].table?.columnWeights).toEqual([25, 75])
+        expect(blocks[0].table?.rows[0]?.cells.map(cell => cell.text)).toEqual(['Year', 'Article count'])
+        expect(blocks[0].table?.rows[0]?.cells[0]?.header).toBe(true)
+        expect(blocks[0].table?.rows[0]?.cells[0]?.align).toBe('center')
+
+        const prepared = prepareBlocks(blocks, { baseStyle: { fontSize: 16, lineHeight: 1.5 } })
+        const lines = layout(prepared, { inlineSize: 320, maxBlockHeight: 240 })
+        expect(lines.map(line => line.kind)).toEqual(['table', 'table'])
+        expect(lines[0].table?.rows[0]?.cells[1]?.text).toBe('Article count')
+    })
+
+    it('moves atomic image and table blocks to the next page column when they would overflow', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('p', {}, [
+                elementNode('img', {
+                    src: 'blob:figure',
+                    width: '80',
+                    height: '60',
+                }),
+            ]),
+            elementNode('table', {}, [
+                elementNode('tr', {}, [
+                    elementNode('td', {}, [textNode('A long table cell that needs room')]),
+                    elementNode('td', {}, [textNode('Value')]),
+                ]),
+            ]),
+        ], { fontSize: 10, lineHeight: 1 })
+
+        const prepared = prepareBlocks(blocks, { baseStyle: { fontSize: 10, lineHeight: 1 } })
+        const imageLines = layout(prepared, { inlineSize: 120, blockStart: 55, maxBlockHeight: 100 })
+        expect(imageLines[0].kind).toBe('image')
+        expect(imageLines[0].top).toBe(100)
+
+        const tableLines = layout(prepareBlocks([blocks[1]], { baseStyle: { fontSize: 10, lineHeight: 1 } }), {
+            inlineSize: 120,
+            blockStart: 82,
+            maxBlockHeight: 100,
+        })
+        expect(tableLines[0].kind).toBe('table')
+        expect(tableLines[0].top).toBe(100)
+    })
+
     it('delegates preparation and line layout to Pretext while preserving segment ranges', () => {
         const segments = [
             { text: 'one two three four' },

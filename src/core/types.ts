@@ -138,9 +138,33 @@ export interface TextImage {
 }
 
 /**
+ * Normalized table payload for virtual reading blocks.
+ */
+export interface TextTableCell {
+    text: string
+    header?: boolean
+    colspan?: number
+    rowspan?: number
+    align?: 'start' | 'center' | 'end'
+    attrs?: Readonly<Record<string, string>>
+}
+
+export interface TextTableRow {
+    cells: readonly TextTableCell[]
+}
+
+export interface TextTable {
+    columnCount: number
+    columnWeights?: readonly number[]
+    rowIndex: number
+    rowCount: number
+    rows: readonly TextTableRow[]
+}
+
+/**
  * Normalized reading block extracted from the HTML AST.
  */
-export type TextBlockType = 'container' | 'chapter' | 'heading' | 'paragraph' | 'listItem' | 'blockquote' | 'pre' | 'image'
+export type TextBlockType = 'container' | 'chapter' | 'heading' | 'paragraph' | 'listItem' | 'blockquote' | 'pre' | 'image' | 'table'
 
 export interface TextBlock {
     id: string
@@ -151,6 +175,7 @@ export interface TextBlock {
     blockGapBefore?: number
     blockGapAfter?: number
     image?: TextImage
+    table?: TextTable
     segments: readonly TextSegment[]
 }
 

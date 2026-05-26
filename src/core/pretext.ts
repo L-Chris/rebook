@@ -14,10 +14,21 @@ import {
     type RichInlineItem,
     type RichInlineLineRange,
 } from '@chenglou/pretext/rich-inline'
-import type { DocumentNode, ImageStyle, TextBlock, TextBlockType, TextImage, TextSegment, TextStyle } from './types'
+import type {
+    DocumentNode,
+    ImageStyle,
+    TextBlock,
+    TextBlockType,
+    TextImage,
+    TextSegment,
+    TextStyle,
+    TextTable,
+    TextTableCell,
+    TextTableRow,
+} from './types'
 import { isTextNode } from './document'
 
-export type { ImageStyle, TextBlock, TextBlockType, TextImage, TextSegment, TextStyle } from './types'
+export type { ImageStyle, TextBlock, TextBlockType, TextImage, TextSegment, TextStyle, TextTable, TextTableCell, TextTableRow } from './types'
 
 export interface PreparedTextBlock {
     prepared?: PreparedRichInline
@@ -65,9 +76,10 @@ export interface LineSegmentRange {
 
 export interface LineRange {
     index: number
-    kind: 'text' | 'image'
+    kind: 'text' | 'image' | 'table'
     block?: TextBlock
     image?: TextImage
+    table?: TextTable
     start: LinePosition | null
     end: LinePosition | null
     text: string
@@ -160,6 +172,34 @@ export function extractDocumentBlocks(
         })
     }
 
+    const pushTableBlocks = (node: DocumentNode) => {
+        const table = getTableData(node)
+        if (!table || table.rows.length === 0) return
+        const fontSize = baseStyle.fontSize ?? DEFAULT_STYLE.fontSize
+        const lineHeight = baseStyle.lineHeight ?? DEFAULT_STYLE.lineHeight
+        const tableId = node.attrs?.id ?? `table-${nextId++}`
+
+        table.rows.forEach((row, rowIndex) => {
+            blocks.push({
+                id: rowIndex === 0 ? tableId : `${tableId}-row-${rowIndex + 1}`,
+                type: 'table',
+                attrs: {
+                    ...node.attrs,
+                    'data-rebook-table-row': String(rowIndex),
+                },
+                style: { fontSize, lineHeight },
+                blockGapBefore: rowIndex === 0 ? fontSize * 0.75 : 0,
+                blockGapAfter: rowIndex === table.rows.length - 1 ? fontSize * 0.75 : 0,
+                table: {
+                    ...table,
+                    rowIndex,
+                    rows: [row],
+                },
+                segments: [],
+            })
+        })
+    }
+
     const walkBlock = (node: DocumentNode, inherited: TextStyle) => {
         if (isTextNode(node)) {
             if (node.text.trim()) {
@@ -173,6 +213,11 @@ export function extractDocumentBlocks(
 
         if (isImageNode(type, node)) {
             pushImageBlock(node)
+            return
+        }
+
+        if (type === 'table') {
+            pushTableBlocks(node)
             return
         }
 
@@ -231,10 +276,10 @@ export function prepareBlocks(
     const segments = textBlocks.flatMap(block => block.segments)
     let nextSegmentIndex = 0
     const blocks = textBlocks
-        .filter(block => block.type === 'image' || block.segments.some(segment => segment.text.trim()))
+        .filter(block => block.type === 'image' || block.type === 'table' || block.segments.some(segment => segment.text.trim()))
         .map(block => {
         const itemSegmentIndexes = block.segments.map(() => nextSegmentIndex++)
-        if (block.type === 'image') {
+        if (block.type === 'image' || block.type === 'table') {
             return {
                 itemSegmentIndexes,
                 block,
@@ -270,6 +315,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
         if (blockStartCount > 0) top += block.block.blockGapBefore ?? 0
         if (block.block.type === 'image' && block.block.image) {
             const metrics = getImageBlockMetrics(block.block.image, inlineSize, lineHeight, options.maxBlockHeight)
+            top = avoidAtomicBlockPageBreak(top, metrics.height, options.maxBlockHeight, lineHeight)
             lines.push({
                 index: lines.length,
                 kind: 'image',
@@ -278,6 +324,32 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
                 start: null,
                 end: null,
                 text: block.block.image.alt ?? block.block.image.title ?? '',
+                width: metrics.width,
+                top,
+                height: metrics.height,
+                segments: [],
+            })
+            top += metrics.height
+            top += block.block.blockGapAfter ?? blockGap
+            continue
+        }
+        if (block.block.type === 'table' && block.block.table) {
+            const metrics = getTableBlockMetrics(
+                block.block.table,
+                inlineSize,
+                lineHeight,
+                prepared.baseStyle.fontSize,
+                options.maxBlockHeight,
+            )
+            top = avoidAtomicBlockPageBreak(top, metrics.height, options.maxBlockHeight, lineHeight)
+            lines.push({
+                index: lines.length,
+                kind: 'table',
+                block: block.block,
+                table: block.block.table,
+                start: null,
+                end: null,
+                text: block.block.table.rows[0]?.cells.map(cell => cell.text).join(' ') ?? '',
                 width: metrics.width,
                 top,
                 height: metrics.height,
@@ -413,6 +485,117 @@ function collectImageNodes(node: DocumentNode): DocumentNode[] {
     return images
 }
 
+function getTableData(node: DocumentNode): TextTable | null {
+    const rows = collectTableRows(node)
+    if (rows.length === 0) return null
+    const columnCount = Math.max(
+        1,
+        ...rows.map(row => row.cells.reduce((sum, cell) => sum + (cell.colspan ?? 1), 0)),
+    )
+    const columnWeights = getTableColumnWeights(node, rows, columnCount)
+    return {
+        columnCount,
+        columnWeights,
+        rowIndex: 0,
+        rowCount: rows.length,
+        rows,
+    }
+}
+
+function collectTableRows(table: DocumentNode): TextTableRow[] {
+    const rows: TextTableRow[] = []
+    const walk = (node: DocumentNode) => {
+        if (isTextNode(node)) return
+        const type = node.type.toLowerCase()
+        if (type === 'tr') {
+            const cells = (node.children ?? [])
+                .filter(child => !isTextNode(child) && isTableCellNode(child.type.toLowerCase()))
+                .map(cell => getTableCellData(cell as DocumentNode))
+                .filter((cell): cell is TextTableCell => Boolean(cell?.text))
+            if (cells.length > 0) rows.push({ cells })
+            return
+        }
+        for (const child of node.children ?? []) walk(child)
+    }
+    for (const child of table.children ?? []) walk(child)
+    return rows
+}
+
+function getTableCellData(node: DocumentNode): TextTableCell | null {
+    if (isTextNode(node)) return null
+    const text = normalizeTableCellText(collectInlineSegments(node, {}).map(segment => segment.text).join(''))
+    if (!text) return null
+    const type = node.type.toLowerCase()
+    return {
+        text,
+        header: type === 'th' || Boolean(node.children?.some(child => isElementOfType(child, 'b') || isElementOfType(child, 'strong'))),
+        colspan: parsePositiveInteger(node.attrs?.colspan),
+        rowspan: parsePositiveInteger(node.attrs?.rowspan),
+        align: getTableCellAlign(node),
+        attrs: node.attrs,
+    }
+}
+
+function getTableColumnWeights(
+    table: DocumentNode,
+    rows: readonly TextTableRow[],
+    columnCount: number,
+): readonly number[] | undefined {
+    const fromColgroup = getColgroupWeights(table, columnCount)
+    if (fromColgroup) return fromColgroup
+
+    const firstCompleteRow = rows.find(row => row.cells.length === columnCount && row.cells.every(cell => !cell.colspan || cell.colspan === 1))
+    const weights = firstCompleteRow?.cells.map(cell => parsePercentWidth(cell.attrs?.style) ?? parsePercentWidth(cell.attrs?.width))
+    return weights?.every((value): value is number => typeof value === 'number' && value > 0) ? weights : undefined
+}
+
+function getColgroupWeights(table: DocumentNode, columnCount: number): readonly number[] | undefined {
+    const cols: number[] = []
+    const walk = (node: DocumentNode) => {
+        if (isTextNode(node)) return
+        if (node.type.toLowerCase() === 'col') {
+            const weight = parsePercentWidth(node.attrs?.style) ?? parsePercentWidth(node.attrs?.width)
+            if (weight) cols.push(weight)
+            return
+        }
+        for (const child of node.children ?? []) walk(child)
+    }
+    for (const child of table.children ?? []) walk(child)
+    return cols.length === columnCount ? cols : undefined
+}
+
+function isTableCellNode(type: string): boolean {
+    return type === 'td' || type === 'th'
+}
+
+function isElementOfType(node: DocumentNode, type: string): boolean {
+    return !isTextNode(node) && node.type.toLowerCase() === type
+}
+
+function normalizeTableCellText(value: string): string {
+    return value
+        .replace(/\s+/g, ' ')
+        .trim()
+}
+
+function parsePositiveInteger(value?: string): number | undefined {
+    if (!value) return undefined
+    const parsed = Number.parseInt(value, 10)
+    return Number.isFinite(parsed) && parsed > 1 ? parsed : undefined
+}
+
+function getTableCellAlign(node: DocumentNode): TextTableCell['align'] | undefined {
+    if (isTextNode(node)) return undefined
+    const styleAlign = parseTextAlignFromStyle(node.attrs?.style)
+    if (styleAlign) return styleAlign
+    const align = node.attrs?.align?.toLowerCase()
+    if (align) return parseTextAlign(align)
+    const className = node.attrs?.class?.toLowerCase()
+    if (className?.split(/\s+/).includes('center')) return 'center'
+    if (className?.split(/\s+/).includes('right')) return 'end'
+    return undefined
+}
+
 function isImageNode(type: string, node: DocumentNode): boolean {
     if (type === 'img') return Boolean(node.attrs?.src)
     if (type === 'image') return Boolean(node.attrs?.href ?? node.attrs?.src)
@@ -483,6 +666,64 @@ function getImageBlockMetrics(
         : styleMaxHeight
     const height = Math.max(lineHeight * 2, Math.min(maxHeight, preferredHeight))
     return { width, height }
+}
+
+function getTableBlockMetrics(
+    table: TextTable,
+    inlineSize: number,
+    lineHeight: number,
+    fontSize: number,
+    maxBlockHeight?: number,
+): { width: number; height: number } {
+    const cellPadding = fontSize * 0.45
+    const columnWidths = getResolvedColumnWidths(table, inlineSize)
+    const row = table.rows[0]
+    const contentHeight = row?.cells.reduce((max, cell, cellIndex) => {
+        const colspan = Math.max(1, cell.colspan ?? 1)
+        const columnWidth = columnWidths
+            .slice(cellIndex, cellIndex + colspan)
+            .reduce((sum, width) => sum + width, 0)
+        const textWidth = Math.max(fontSize * 2, columnWidth - cellPadding * 2)
+        const estimatedLineCount = Math.max(1, Math.ceil(estimateTextWidth(cell.text, fontSize) / textWidth))
+        return Math.max(max, estimatedLineCount * lineHeight + cellPadding * 2)
+    }, lineHeight + cellPadding * 2) ?? lineHeight + cellPadding * 2
+    const maxHeight = maxBlockHeight
+        ? Math.max(lineHeight * 1.5, maxBlockHeight)
+        : Number.POSITIVE_INFINITY
+    return {
+        width: inlineSize,
+        height: Math.min(maxHeight, Math.max(lineHeight * 1.5, contentHeight)),
+    }
+}
+
+function getResolvedColumnWidths(table: TextTable, inlineSize: number): number[] {
+    const weights = table.columnWeights?.length === table.columnCount
+        ? table.columnWeights
+        : Array.from({ length: table.columnCount }, () => 1)
+    const total = weights.reduce((sum, width) => sum + Math.max(0, width), 0) || table.columnCount
+    return weights.map(weight => inlineSize * (Math.max(0, weight) / total))
+}
+
+function estimateTextWidth(text: string, fontSize: number): number {
+    return Array.from(text).reduce((sum, char) => {
+        if (char === ' ') return sum + fontSize * 0.32
+        if (/[\u4e00-\u9fff]/.test(char)) return sum + fontSize
+        return sum + fontSize * 0.54
+    }, 0)
+}
+
+function avoidAtomicBlockPageBreak(
+    top: number,
+    height: number,
+    maxBlockHeight: number | undefined,
+    lineHeight: number,
+): number {
+    if (!maxBlockHeight || height >= maxBlockHeight) return top
+    const offset = top % maxBlockHeight
+    if (offset === 0) return top
+    return offset + height > maxBlockHeight
+        ? top + Math.max(lineHeight, maxBlockHeight - offset)
+        : top
 }
 
 function segmentsToBlocks(segments: readonly TextSegment[]): TextBlock[] {
@@ -653,6 +894,21 @@ function parseImageStyle(style: string | undefined): ImageStyle {
         else if (name === 'margin-right' && value === 'auto' && result.align === 'center') result.align = 'center'
     }
     return result
+}
+
+function parsePercentWidth(value?: string): number | undefined {
+    if (!value) return undefined
+    const styleWidth = parseStyleDeclarations(value).find(([name]) => name === 'width')?.[1]
+    const width = styleWidth ?? value
+    const match = width.match(/([\d.]+)%/)
+    if (!match) return undefined
+    const amount = Number(match[1])
+    return Number.isFinite(amount) && amount > 0 ? amount : undefined
+}
+
+function parseTextAlignFromStyle(style?: string): ImageStyle['align'] | undefined {
+    const textAlign = parseStyleDeclarations(style).find(([name]) => name === 'text-align')?.[1]
+    return textAlign ? parseTextAlign(textAlign) : undefined
 }
 
 function parseStyleDeclarations(style?: string): Array<[string, string]> {
