@@ -342,7 +342,7 @@ describe('VirtualTextRenderer', () => {
         renderer.destroy()
     })
 
-    it('does not render an empty page at the end of Hidden Tools chapter 2', async () => {
+    it('keeps Hidden Tools chapter 2 pages non-empty in the simulated layout', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '620')
         container.setAttribute('data-height', '600')
@@ -380,6 +380,49 @@ describe('VirtualTextRenderer', () => {
         }
 
         expect(currentIndex).toBe(chapter2Index + 1)
+
+        renderer.destroy()
+    })
+
+    it('does not treat carry-over line height as a readable page', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '760')
+        container.setAttribute('data-height', '664')
+        document.body.appendChild(container)
+
+        const renderer = new VirtualTextRenderer({
+            container,
+            layout: 'paginated',
+            maxColumnCount: 2,
+            styles: { fontSize: '16px', lineHeight: 1.7, maxInlineSize: '320px', margin: '32px' },
+        })
+        const internal = renderer as unknown as VirtualTextRenderer & {
+            lines: Array<{ top: number; height: number }>
+            columnLayout: { pageCount: number; columnHeight: number; columns: number }
+            findReadablePage(pageIndex: number, direction: -1 | 0 | 1): number | null
+        }
+
+        internal.lines = [{
+            index: 0,
+            kind: 'text',
+            start: null,
+            end: null,
+            text: 'line that visually belongs to the previous spread',
+            width: 280,
+            top: 1190,
+            height: 27.2,
+            segments: [],
+        }]
+        internal.columnLayout = {
+            ...internal.columnLayout,
+            columnHeight: 600,
+            columns: 2,
+            pageCount: 2,
+        }
+
+        expect(internal.findReadablePage(0, 0)).toBe(0)
+        expect(internal.findReadablePage(1, 0)).toBe(0)
+        expect(internal.findReadablePage(1, 1)).toBeNull()
 
         renderer.destroy()
     })

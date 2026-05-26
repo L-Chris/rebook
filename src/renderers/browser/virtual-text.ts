@@ -894,10 +894,7 @@ export class VirtualTextRenderer implements Renderer {
 
     private hasReadableLinesOnPage(pageIndex: number): boolean {
         const { columns, columnHeight } = this.columnLayout
-        const pageSourceHeight = Math.max(1, columnHeight * columns)
-        const sourceStart = pageIndex * pageSourceHeight
-        const sourceEnd = sourceStart + pageSourceHeight
-        return this.lines.some(line => line.top + line.height > sourceStart && line.top < sourceEnd)
+        return this.lines.some(line => getLinePageIndex(line, columnHeight, columns) === pageIndex)
     }
 
     private emit<K extends keyof RendererEventMap>(event: K, data: RendererEventMap[K]): void {
@@ -1020,14 +1017,19 @@ function getColumnCount(
 }
 
 function getReadablePageCount(lines: readonly LineRange[], columnHeight: number, columns: number): number {
-    const pageSourceHeight = Math.max(1, columnHeight * columns)
     let lastReadablePage = 0
     for (const line of lines) {
         if (line.height <= 0) continue
-        const lineEnd = Math.max(0, line.top + line.height - 0.001)
-        lastReadablePage = Math.max(lastReadablePage, Math.floor(lineEnd / pageSourceHeight))
+        lastReadablePage = Math.max(lastReadablePage, getLinePageIndex(line, columnHeight, columns))
     }
     return Math.max(1, lastReadablePage + 1)
+}
+
+function getLinePageIndex(line: LineRange, columnHeight: number, columns: number): number {
+    const safeColumnHeight = Math.max(1, columnHeight)
+    const safeColumns = Math.max(1, columns)
+    const sourceColumn = Math.floor(Math.max(0, line.top) / safeColumnHeight)
+    return Math.floor(sourceColumn / safeColumns)
 }
 
 function getPagePaddingBlock(mode: LayoutMode, pageHeight: number, margin: number): number {
