@@ -236,10 +236,13 @@ describe('EPUB Pretext segments', () => {
             segment.source?.nodeType === 'img'
             && segment.source.attrs?.class?.includes('epub-footnote')
         ) ?? []
+        const visibleText = blocks?.flatMap(block => block.segments).map(segment => segment.text).join('') ?? ''
 
         expect(footnoteImages).toHaveLength(0)
         expect(inlineFootnoteMarkers.length).toBeGreaterThan(0)
         expect(inlineFootnoteMarkers[0].source?.attrs?.['data-rebook-inline-image-width']).toBe('11')
+        expect(inlineFootnoteMarkers[0].source?.attrs?.['data-rebook-footnote-content']).toContain('Locked In, Logged Out')
+        expect(visibleText).not.toContain('Locked In, Logged Out')
         expect(inlineFigure?.image?.width).toBe(150)
     })
 })

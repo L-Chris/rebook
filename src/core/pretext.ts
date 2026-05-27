@@ -212,6 +212,7 @@ export function extractDocumentBlocks(
 
         const type = node.type.toLowerCase()
         if (type === 'script' || type === 'style' || type === 'head') return
+        if (isFootnoteContentNode(node)) return
 
         if (isImageNode(type, node)) {
             pushImageBlock(node)
@@ -454,6 +455,7 @@ function collectInlineSegments(node: DocumentNode, inherited: TextStyle): TextSe
 
         const type = current.type.toLowerCase()
         if (type === 'script' || type === 'style' || type === 'head') return
+        if (isFootnoteContentNode(current)) return
         if (type === 'br') {
             segments.push({ text: '\n', style, source: { nodeType: 'br', attrs: current.attrs } })
             return
@@ -472,6 +474,7 @@ function collectInlineSegments(node: DocumentNode, inherited: TextStyle): TextSe
                         nodeType: 'img',
                         attrs: {
                             ...(current.attrs ?? {}),
+                            ...getFootnoteMarkerDataAttrs(image, current.attrs),
                             'data-rebook-inline-image-width': String(dimensions.width),
                             'data-rebook-inline-image-height': String(dimensions.height),
                         },
@@ -499,6 +502,7 @@ function collectImageNodes(node: DocumentNode): DocumentNode[] {
     const images: DocumentNode[] = []
     const walk = (current: DocumentNode) => {
         if (isTextNode(current)) return
+        if (isFootnoteContentNode(current)) return
         const type = current.type.toLowerCase()
         if (isImageNode(type, current)) {
             images.push(current)
@@ -677,6 +681,41 @@ function isFootnoteMarkerImage(image: TextImage): boolean {
         || token === 'epub-footnote1'
         || token === 'noteref'
         || token === 'footnote-ref')
+}
+
+function isFootnoteContentNode(node: DocumentNode): boolean {
+    if (isTextNode(node)) return false
+    const role = [
+        node.attrs?.['epub:type'],
+        node.attrs?.type,
+        node.attrs?.role,
+        node.attrs?.class,
+    ].filter(Boolean).join(' ').toLowerCase()
+    const tokens = role.split(/\s+/)
+    return tokens.includes('footnote')
+        || tokens.includes('endnote')
+        || tokens.includes('rearnote')
+        || tokens.includes('duokan-footnote-content')
+}
+
+function getFootnoteMarkerDataAttrs(
+    image: TextImage,
+    attrs?: Readonly<Record<string, string>>,
+): Record<string, string> {
+    const content = imageFromFootnoteText(image, attrs)
+    return content ? { 'data-rebook-footnote-content': content } : {}
+}
+
+function imageFromFootnoteText(
+    image: TextImage,
+    attrs?: Readonly<Record<string, string>>,
+): string | undefined {
+    return normalizeFootnoteText(attrs?.['zy-footnote'] ?? image.alt ?? image.title)
+}
+
+function normalizeFootnoteText(value?: string): string | undefined {
+    const normalized = value?.replace(/\s+/g, ' ').trim()
+    return normalized || undefined
 }
 
 function getFootnoteMarkerDimensions(image: TextImage): { width: number; height: number } {

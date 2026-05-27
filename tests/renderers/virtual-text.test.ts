@@ -553,6 +553,7 @@ describe('VirtualTextRenderer', () => {
                                     src: 'test://note.png',
                                     alt: 'note',
                                     class: 'epub-footnote',
+                                    'data-rebook-footnote-content': 'Hidden note text',
                                     'data-rebook-inline-image-width': '11',
                                     'data-rebook-inline-image-height': '11',
                                 },
@@ -577,6 +578,7 @@ describe('VirtualTextRenderer', () => {
         expect(marker).toBeTruthy()
         expect(marker.src).toBe('test://note.png')
         expect(marker.style.width).toBe('11px')
+        expect(container.textContent).not.toContain('Hidden note text')
         expect(container.querySelector('[data-block-type="image"]')).toBeNull()
 
         renderer.destroy()
