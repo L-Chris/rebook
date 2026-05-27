@@ -701,6 +701,45 @@ describe('VirtualTextRenderer', () => {
         renderer.destroy()
     })
 
+    it('activates current section TOC entries without explicit anchors', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '120')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 100,
+                load: () => '<p>Chapter text</p>',
+                getBlocks: async () => [{
+                    id: 'chapter',
+                    type: 'paragraph',
+                    segments: [{ text: 'Chapter text' }],
+                }],
+            }],
+            toc: [{ label: 'Chapter', href: 'chapter.xhtml' }],
+            splitTOCHref: href => [href.split('#')[0], href.split('#')[1] ?? null],
+        }
+
+        const renderer = new VirtualTextRenderer({
+            container,
+            layout: 'paginated',
+            styles: { fontSize: '16px', lineHeight: 1.5 },
+        })
+        let activeHref: string | null = null
+        renderer.on('relocate', event => {
+            activeHref = event.tocItem?.href ?? null
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+
+        expect(activeHref).toBe('chapter.xhtml')
+
+        renderer.destroy()
+    })
+
     it('reports the clicked TOC item for explicit paginated anchor navigation', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '760')

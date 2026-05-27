@@ -653,9 +653,13 @@ export class VirtualTextRenderer implements Renderer {
             if (index == null || index < 0) continue
             let sourceTop = 0
             if (index === this.currentIndex) {
-                const anchorTop = this.getAnchorSourceTop(resolved?.anchor)
-                if (anchorTop == null) continue
-                sourceTop = anchorTop
+                if (resolved?.anchor == null && !this.getTOCFragment(item.href)) {
+                    sourceTop = 0
+                } else {
+                    const anchorTop = this.getAnchorSourceTop(resolved?.anchor)
+                    if (anchorTop == null) continue
+                    sourceTop = anchorTop
+                }
             }
             this.tocPositions.push({ index, sourceTop, order, item })
         }
@@ -668,6 +672,12 @@ export class VirtualTextRenderer implements Renderer {
         const [id] = result
         const index = this.sections.findIndex(section => section.id === id)
         return index >= 0 ? index : null
+    }
+
+    private getTOCFragment(href: string): string | number | null {
+        const result = this.book?.splitTOCHref?.(href)
+        if (result) return result[1]
+        return href.includes('#') ? href.split('#')[1] : null
     }
 
     private findTOCItem(href: string): TOCItem | null {

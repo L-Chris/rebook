@@ -739,6 +739,56 @@
         const refreshCurrentTOC = () => {
             tocList.innerHTML = ''
             renderTOC(currentBook?.toc, tocList)
+            applyActiveTOC(activeTOCHref)
+        }
+
+        const applyActiveTOC = (href) => {
+            document.querySelectorAll('.toc-item.active').forEach(el => el.classList.remove('active'))
+            if (!href) return false
+
+            const activeEls = Array.from(document.querySelectorAll('.toc-item')).filter(el => el.dataset.href === href)
+            const activeEl = activeEls[0]
+            if (!activeEl) return false
+
+            activeEl.classList.add('active')
+            let parent = activeEl.parentElement
+            while (parent && parent.id !== 'toc-list') {
+                if (parent.tagName === 'DETAILS') {
+                    parent.open = true
+                }
+                parent = parent.parentElement
+            }
+            activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+            return true
+        }
+
+        const flattenTOCItems = (items = []) => {
+            const result = []
+            for (const item of items) {
+                result.push(item)
+                if (item.subitems?.length) result.push(...flattenTOCItems(item.subitems))
+            }
+            return result
+        }
+
+        const getTOCSectionIndex = (href) => {
+            const resolved = currentBook?.resolveHref?.(href)
+            if (resolved) return resolved.index
+            const [id] = currentBook?.splitTOCHref?.(href) ?? href.split('#')
+            return currentBook?.sections.findIndex(section => section.id === id) ?? -1
+        }
+
+        const getActiveTOCHrefForSection = (sectionIndex) => {
+            let activeHref = null
+            let activeIndex = -1
+            for (const item of flattenTOCItems(currentBook?.toc)) {
+                const index = getTOCSectionIndex(item.href)
+                if (index >= 0 && index <= sectionIndex && index >= activeIndex) {
+                    activeHref = item.href
+                    activeIndex = index
+                }
+            }
+            return activeHref
         }
 
         // Open a file
@@ -937,30 +987,15 @@
                 progressText.textContent = `${percent}%`
 
                 // Highlight current TOC item
-                const href = e.tocItem?.href ?? null
-                if (href === activeTOCHref) return
-                if (!href) return
-                activeTOCHref = href
-
-                document.querySelectorAll('.toc-item.active').forEach(el => el.classList.remove('active'))
-                if (e.tocItem) {
-                    // Find the exact item matching the href
-                    const activeEls = Array.from(document.querySelectorAll('.toc-item')).filter(el => el.dataset.href === e.tocItem.href)
-                    const activeEl = activeEls[0]
-                    if (activeEl) {
-                        activeEl.classList.add('active')
-                        // Ensure all parent details are open
-                        let parent = activeEl.parentElement
-                        while (parent && parent.id !== 'toc-list') {
-                            if (parent.tagName === 'DETAILS') {
-                                parent.open = true
-                            }
-                            parent = parent.parentElement
-                        }
-                        // Optionally scroll into view in sidebar
-                        activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-                    }
+                const href = e.tocItem?.href ?? getActiveTOCHrefForSection(e.index)
+                if (!href) {
+                    activeTOCHref = null
+                    applyActiveTOC(null)
+                    return
                 }
+                if (href === activeTOCHref && document.querySelector('.toc-item.active')) return
+                activeTOCHref = href
+                applyActiveTOC(href)
             })
 
             reader.on('link', (e) => {
