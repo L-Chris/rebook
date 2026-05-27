@@ -1,12 +1,14 @@
 import { generateText, jsonSchema, Output, type LanguageModel } from 'ai'
-import type { Book, RebookPlugin, TextBlock, TextSegment } from '../core/types'
+import type { Book, RebookPlugin, TextBlock, TextSegment, TextTable, TextTableCell } from '../core/types'
 
 const MAX_TRANSLATION_ATTEMPTS = 2
 const TRANSLATION_REQUEST_DEBOUNCE_MS = 300
 type TranslationMode = 'replace' | 'bilingual'
 type ValueOrGetter<T> = T | (() => T)
 type TranslationUpdate = { sectionIndex: number; blocks: TextBlock[] }
-type TranslationItem = { block: TextBlock, index: number }
+type TranslationItem = { block: TextBlock, index: number, text: string, tableCell?: { rowIndex: number, cellIndex: number } }
+type TableCellTranslations = Map<string, string>
+type BlockTranslation = string | { tableCells: TableCellTranslations }
 type TranslationBook = Book & {
     refreshTranslatedTOC?: () => void
     requestBlockTranslations?: (sectionIndex: number, blockIds: readonly string[]) => void
@@ -14,9 +16,14 @@ type TranslationBook = Book & {
 }
 
 class TranslationFormatError extends Error {
-    constructor(message: string) {
+    readonly translations?: Array<string | null>
+    readonly untranslatedTexts: string[]
+
+    constructor(message: string, options: { translations?: Array<string | null>, untranslatedTexts?: string[] } = {}) {
         super(message)
         this.name = 'TranslationFormatError'
+        this.translations = options.translations
+        this.untranslatedTexts = options.untranslatedTexts ?? []
     }
 }
 
@@ -103,7 +110,7 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
             }
 
             let originalBlocksPromise: Promise<TextBlock[]> | null = null
-            let translatedTextByIndex = new Map<number, string>()
+            let translatedTextByIndex = new Map<number, BlockTranslation>()
             const pendingBlockIds = new Set<string>()
             const queuedBlockIds = new Set<string>()
             const inFlightBlockIds = new Set<string>()
@@ -135,7 +142,7 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                         const requestedItems = pendingIds
                             .map(id => indexById.get(id))
                             .filter((blockIndex): blockIndex is number => blockIndex != null)
-                            .map(blockIndex => ({ block: blocks[blockIndex], index: blockIndex }))
+                            .flatMap(blockIndex => getTranslatableItemsForBlock(blocks[blockIndex], blockIndex))
                             .filter(item =>
                                 !translatedTextByIndex.has(item.index)
                                 && !queuedBlockIds.has(item.block.id)
@@ -184,13 +191,12 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                             const blockIndex = indexById.get(id)
                             if (blockIndex == null) continue
                             const block = blocks[blockIndex]
-                            const item = { block, index: blockIndex }
                             if (
                                 translatedTextByIndex.has(blockIndex)
                                 || pendingBlockIds.has(id)
                                 || queuedBlockIds.has(id)
                                 || inFlightBlockIds.has(id)
-                                || !isTranslatableItem(item)
+                                || !isTranslatableBlock(block)
                             ) continue
 
                             pendingBlockIds.add(id)
@@ -246,8 +252,8 @@ async function translateBlockTexts(
     targetLanguage: string,
     concurrency: number,
     tokensPerBatch: number,
-    onBatch?: (translations: Map<number, string>) => void
-): Promise<Map<number, string>> {
+    onBatch?: (translations: Map<number, BlockTranslation>) => void
+): Promise<Map<number, BlockTranslation>> {
     return translateBlockItems(getTranslatableItems(blocks), model, targetLanguage, concurrency, tokensPerBatch, {
         onBatchComplete: onBatch,
     })
@@ -261,19 +267,18 @@ async function translateBlockItems(
     tokensPerBatch: number,
     callbacks: {
         onBatchStart?: (batch: TranslationItem[]) => void
-        onBatchComplete?: (translations: Map<number, string>, batch: TranslationItem[]) => void
+        onBatchComplete?: (translations: Map<number, BlockTranslation>, batch: TranslationItem[]) => void
         onBatchError?: (batch: TranslationItem[], error: unknown) => void
     } = {},
-): Promise<Map<number, string>> {
-    const translations = new Map<number, string>()
+): Promise<Map<number, BlockTranslation>> {
+    const translations = new Map<number, BlockTranslation>()
 
     const batches: TranslationItem[][] = []
     let currentBatch: TranslationItem[] = []
     let currentBatchTokens = 0
 
     for (const item of translatableItems) {
-        const fullText = item.block.segments.map(s => s.text).join('')
-        const estimatedTokens = fullText.length
+        const estimatedTokens = item.text.length
 
         if (currentBatch.length > 0 && currentBatchTokens + estimatedTokens > tokensPerBatch) {
             batches.push(currentBatch)
@@ -293,17 +298,17 @@ async function translateBlockItems(
     let currentBatchIndex = 0
 
     const processBatch = async (batch: TranslationItem[]) => {
-        const payload = batch.map(b => b.block.segments.map(s => s.text).join(''))
+        const payload = batch.map(item => item.text)
 
         try {
             callbacks.onBatchStart?.(batch)
             const batchTranslations = await requestTranslations(model, targetLanguage, payload)
 
             for (let i = 0; i < batch.length; i++) {
-                const { block, index } = batch[i]
+                const { index } = batch[i]
                 const translatedText = batchTranslations[i]
                 if (translatedText) {
-                    translations.set(index, translatedText)
+                    setBlockTranslation(translations, index, translatedText, batch[i].tableCell)
                 }
             }
             callbacks.onBatchComplete?.(new Map(translations), batch)
@@ -332,10 +337,11 @@ async function translateBlockItems(
 }
 
 function isTranslatableItem(item: TranslationItem): boolean {
-    const { block } = item
-    if (!['paragraph', 'heading', 'listItem', 'blockquote'].includes(block.type) || block.segments.length === 0) return false
-    const fullText = block.segments.map(s => s.text).join('')
-    return fullText.trim().length >= 2 && hasTranslatableText(fullText)
+    return item.text.trim().length >= 2 && hasTranslatableText(item.text)
+}
+
+function isTranslatableBlock(block: TextBlock): boolean {
+    return getTranslatableItemsForBlock(block, 0).length > 0
 }
 
 function hasTranslatableText(text: string): boolean {
@@ -345,28 +351,73 @@ function hasTranslatableText(text: string): boolean {
 function getTranslatableItems(blocks: readonly TextBlock[]): TranslationItem[] {
     const items: TranslationItem[] = []
     for (let i = 0; i < blocks.length; i++) {
-        const block = blocks[i]
-        const item = { block, index: i }
-        if (isTranslatableItem(item)) items.push(item)
+        items.push(...getTranslatableItemsForBlock(blocks[i], i))
     }
     return items
 }
 
+function getTranslatableItemsForBlock(block: TextBlock, index: number): TranslationItem[] {
+    if (['paragraph', 'heading', 'listItem', 'blockquote'].includes(block.type) && block.segments.length > 0) {
+        const item = { block, index, text: block.segments.map(s => s.text).join('') }
+        return isTranslatableItem(item) ? [item] : []
+    }
+
+    if (block.type !== 'table' || !block.table) return []
+    const items: TranslationItem[] = []
+    block.table.rows.forEach((row, rowIndex) => {
+        row.cells.forEach((cell, cellIndex) => {
+            const item = { block, index, text: cell.text, tableCell: { rowIndex, cellIndex } }
+            if (isTranslatableItem(item)) items.push(item)
+        })
+    })
+    return items
+}
+
+function setBlockTranslation(
+    translations: Map<number, BlockTranslation>,
+    index: number,
+    translatedText: string,
+    tableCell?: TranslationItem['tableCell'],
+): void {
+    if (!tableCell) {
+        translations.set(index, translatedText)
+        return
+    }
+
+    const existing = translations.get(index)
+    const tableCells = typeof existing === 'object' && existing
+        ? new Map(existing.tableCells)
+        : new Map<string, string>()
+    tableCells.set(getTableCellKey(tableCell.rowIndex, tableCell.cellIndex), translatedText)
+    translations.set(index, { tableCells })
+}
+
 function renderTranslatedBlocks(
     blocks: readonly TextBlock[],
-    translatedTextByIndex: Map<number, string>,
+    translatedTextByIndex: Map<number, BlockTranslation>,
     mode: TranslationMode,
 ): TextBlock[] {
     const rendered: TextBlock[] = []
 
     for (let index = 0; index < blocks.length; index++) {
         const block = blocks[index]
-        const translatedText = translatedTextByIndex.get(index)
-        if (!translatedText) {
+        const translation = translatedTextByIndex.get(index)
+        if (!translation) {
             rendered.push(cloneTextBlock(block))
             continue
         }
 
+        if (typeof translation !== 'string') {
+            const translatedBlock = translateTableBlock(block, translation.tableCells)
+            if (mode === 'replace') {
+                rendered.push(translatedBlock)
+            } else {
+                rendered.push(cloneTextBlock(block), { ...translatedBlock, id: `t${index.toString(36)}` })
+            }
+            continue
+        }
+
+        const translatedText = translation
         const translatedSegments: TextSegment[] = [{ text: translatedText, style: block.segments[0]?.style }]
         if (mode === 'replace') {
             rendered.push({ ...cloneTextBlock(block), segments: translatedSegments })
@@ -385,8 +436,47 @@ function renderTranslatedBlocks(
 function cloneTextBlock(block: TextBlock): TextBlock {
     return {
         ...block,
+        table: block.table ? cloneTextTable(block.table) : block.table,
         segments: block.segments.map(segment => ({ ...segment, style: segment.style ? { ...segment.style } : segment.style }))
     }
+}
+
+function translateTableBlock(block: TextBlock, tableCells: TableCellTranslations): TextBlock {
+    const cloned = cloneTextBlock(block)
+    if (!cloned.table) return cloned
+    cloned.table = {
+        ...cloned.table,
+        rows: cloned.table.rows.map((row, rowIndex) => ({
+            ...row,
+            cells: row.cells.map((cell, cellIndex) => ({
+                ...cell,
+                text: tableCells.get(getTableCellKey(rowIndex, cellIndex)) ?? cell.text,
+            })),
+        })),
+    }
+    return cloned
+}
+
+function cloneTextTable(table: TextTable): TextTable {
+    return {
+        ...table,
+        columnWeights: table.columnWeights ? [...table.columnWeights] : table.columnWeights,
+        rows: table.rows.map(row => ({
+            ...row,
+            cells: row.cells.map(cloneTextTableCell),
+        })),
+    }
+}
+
+function cloneTextTableCell(cell: TextTableCell): TextTableCell {
+    return {
+        ...cell,
+        attrs: cell.attrs ? { ...cell.attrs } : cell.attrs,
+    }
+}
+
+function getTableCellKey(rowIndex: number, cellIndex: number): string {
+    return `${rowIndex}:${cellIndex}`
 }
 
 async function translateTOCLabels(
@@ -398,7 +488,8 @@ async function translateTOCLabels(
     const labels = items.map(item => item.label)
     if (!labels.length) return []
 
-    return requestTranslations(model, targetLanguage, labels)
+    const translations = await requestTranslations(model, targetLanguage, labels)
+    return translations.map((translation, index) => translation ?? labels[index])
 }
 
 function renderTOCItems(
@@ -430,7 +521,7 @@ async function requestTranslations(
     model: LanguageModel,
     targetLanguage: string,
     payload: string[],
-): Promise<string[]> {
+): Promise<Array<string | null>> {
     let lastError: unknown
     const entries = payload.map((text, index) => ({ key: index.toString(36), text }))
     const input = Object.fromEntries(entries.map(({ key, text }) => [key, text]))
@@ -460,7 +551,12 @@ async function requestTranslations(
             const translations = entries.map(({ key }) => output[key])
             const missingKey = entries.find(({ key }, index) => typeof translations[index] !== 'string')
             if (missingKey) {
-                throw new TranslationFormatError(`Translation output missed key "${missingKey.key}".`)
+                throw new TranslationFormatError(`Translation output missed key "${missingKey.key}".`, {
+                    translations: translations.map(value => typeof value === 'string' ? value : null),
+                    untranslatedTexts: entries
+                        .filter((_, index) => typeof translations[index] !== 'string')
+                        .map(({ text }) => text),
+                })
             }
 
             return translations
@@ -469,6 +565,13 @@ async function requestTranslations(
             if (attempt < MAX_TRANSLATION_ATTEMPTS && isRetryableTranslationError(error)) {
                 console.warn('Translation output format was invalid; retrying once.', error)
                 continue
+            }
+            if (error instanceof TranslationFormatError) {
+                console.warn('Translation output format was invalid; leaving untranslated text unchanged.', {
+                    error,
+                    untranslatedTexts: error.untranslatedTexts.length > 0 ? error.untranslatedTexts : payload,
+                })
+                return error.translations ?? payload.map(() => null)
             }
             throw error
         }

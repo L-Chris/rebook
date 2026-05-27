@@ -263,6 +263,81 @@ describe('Translation Plugin', () => {
         expect(translatedBlocks[2].segments[0].text).toBe('[Translated] Title')
     })
 
+    it('keeps untranslated text when translation output still misses a key after retry', async () => {
+        const update = waitForUpdate()
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        generateTextMock
+            .mockResolvedValueOnce({ output: { '0': '[Translated] Hello world.' } })
+            .mockResolvedValueOnce({ output: { '0': '[Translated] Hello world.' } })
+
+        const plugin = withTranslation({
+            model: mockModel as any,
+            mode: 'replace',
+            onUpdate: update.resolve
+        })
+
+        const wrappedBook = await plugin(mockBook)
+        await wrappedBook.sections[0].getBlocks!()
+        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1', 'b3'])
+        await update.promise
+        const translatedBlocks = await wrappedBook.sections[0].getBlocks!()
+
+        expect(generateTextMock).toHaveBeenCalledTimes(2)
+        expect(translatedBlocks[0].segments[0].text).toBe('[Translated] Hello world.')
+        expect(translatedBlocks[2].segments[0].text).toBe('Title')
+        expect(warn).toHaveBeenCalledWith(
+            'Translation output format was invalid; leaving untranslated text unchanged.',
+            expect.objectContaining({ untranslatedTexts: ['Title'] })
+        )
+        warn.mockRestore()
+    })
+
+    it('translates table cells', async () => {
+        const update = waitForUpdate()
+        const tableBlock: TextBlock = {
+            id: 'tbl',
+            type: 'table',
+            segments: [],
+            table: {
+                columnCount: 2,
+                rowIndex: 0,
+                rowCount: 1,
+                rows: [{
+                    cells: [
+                        { text: 'Figure 1.1' },
+                        { text: 'Terms in a synonym ring' },
+                    ]
+                }]
+            }
+        }
+        const section: Section = {
+            id: 'table-section',
+            size: 10,
+            load: () => '',
+            getBlocks: async () => [tableBlock]
+        }
+        const plugin = withTranslation({
+            model: mockModel as any,
+            mode: 'bilingual',
+            onUpdate: update.resolve
+        })
+
+        const wrappedBook = await plugin({ sections: [section] })
+        await wrappedBook.sections[0].getBlocks!()
+        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['tbl'])
+        await update.promise
+        const translatedBlocks = await wrappedBook.sections[0].getBlocks!()
+
+        expect(JSON.parse(generateTextMock.mock.calls[0][0].prompt)).toEqual({
+            '0': 'Figure 1.1',
+            '1': 'Terms in a synonym ring'
+        })
+        expect(translatedBlocks).toHaveLength(2)
+        expect(translatedBlocks[0].table?.rows[0].cells[1].text).toBe('Terms in a synonym ring')
+        expect(translatedBlocks[1].table?.rows[0].cells[0].text).toBe('[Translated] Figure 1.1')
+        expect(translatedBlocks[1].table?.rows[0].cells[1].text).toBe('[Translated] Terms in a synonym ring')
+    })
+
     it('updates rendered blocks after each translated batch', async () => {
         const updates: TextBlock[][] = []
         let resolveUpdates!: () => void
