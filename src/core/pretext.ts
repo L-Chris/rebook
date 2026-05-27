@@ -105,6 +105,8 @@ const BLOCK_TAGS = new Set([
     'section', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'ul',
 ])
 
+const LIST_CONTAINER_TAGS = new Set(['dl', 'ol', 'ul'])
+
 const DEFAULT_STYLE = {
     fontFamily: 'Georgia, serif',
     fontSize: 16,
@@ -202,7 +204,7 @@ export function extractDocumentBlocks(
         })
     }
 
-    const walkBlock = (node: DocumentNode, inherited: TextStyle) => {
+    const walkBlock = (node: DocumentNode, inherited: TextStyle, listDepth = 0) => {
         if (isTextNode(node)) {
             if (node.text.trim()) {
                 pushBlock('paragraph', node, [{ text: node.text, style: inherited, source: { nodeType: 'text' } }])
@@ -221,6 +223,7 @@ export function extractDocumentBlocks(
 
         if (type === 'table') {
             pushTableBlocks(node)
+            for (const image of collectImageNodes(node)) pushImageBlock(image)
             return
         }
 
@@ -236,11 +239,27 @@ export function extractDocumentBlocks(
             return
         }
 
-        if (type === 'li') {
+        if (type === 'li' || type === 'dt') {
             pushBlock('listItem', node, [
-                { text: '• ', style: inherited, source: { nodeType: 'marker' } },
-                ...collectInlineSegments(node, inherited),
-            ])
+                { text: `${'  '.repeat(listDepth)}• `, style: inherited, source: { nodeType: 'marker' } },
+                ...collectInlineSegments(node, inherited, { skipNestedLists: true }),
+            ], listDepth)
+
+            for (const child of node.children ?? []) {
+                if (!isTextNode(child) && LIST_CONTAINER_TAGS.has(child.type.toLowerCase())) {
+                    walkBlock(child, inherited, listDepth + 1)
+                }
+            }
+            return
+        }
+
+        if (type === 'dd') {
+            for (const child of node.children ?? []) walkBlock(child, inherited, listDepth + 1)
+            return
+        }
+
+        if (LIST_CONTAINER_TAGS.has(type)) {
+            for (const child of node.children ?? []) walkBlock(child, inherited, listDepth)
             return
         }
 
@@ -255,7 +274,7 @@ export function extractDocumentBlocks(
             return
         }
 
-        for (const child of node.children ?? []) walkBlock(child, inherited)
+        for (const child of node.children ?? []) walkBlock(child, inherited, listDepth)
     }
 
     for (const node of nodes) walkBlock(node, { ...baseStyle })
@@ -442,7 +461,11 @@ export function getVisibleLines(
 
 export type PretextRichInlineLineRange = RichInlineLineRange
 
-function collectInlineSegments(node: DocumentNode, inherited: TextStyle): TextSegment[] {
+function collectInlineSegments(
+    node: DocumentNode,
+    inherited: TextStyle,
+    options: { skipNestedLists?: boolean } = {},
+): TextSegment[] {
     const segments: TextSegment[] = []
 
     const walk = (current: DocumentNode, style: TextStyle) => {
@@ -456,6 +479,7 @@ function collectInlineSegments(node: DocumentNode, inherited: TextStyle): TextSe
         const type = current.type.toLowerCase()
         if (type === 'script' || type === 'style' || type === 'head') return
         if (isFootnoteContentNode(current)) return
+        if (options.skipNestedLists && current !== node && LIST_CONTAINER_TAGS.has(type)) return
         if (type === 'br') {
             segments.push({ text: '\n', style, source: { nodeType: 'br', attrs: current.attrs } })
             return

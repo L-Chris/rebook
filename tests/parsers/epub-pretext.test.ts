@@ -123,6 +123,54 @@ describe('EPUB Pretext segments', () => {
         expect(blockCount).toBeGreaterThan(0)
     })
 
+    it('keeps DocBook table-of-contents definition lists as list items', async () => {
+        const parser = new EPUBParser()
+        const data = await readFile('data/Structured Writing Rhetoric and Process.epub')
+        const book = await parser.parse(data.buffer.slice(
+            data.byteOffset,
+            data.byteOffset + data.byteLength,
+        ), {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+
+        const tocSection = book.sections.find(section => String(section.id).endsWith('bk01-toc.html'))
+        expect(tocSection).toBeDefined()
+
+        const blocks = await tocSection!.getBlocks?.()
+        const textBlocks = blocks?.filter(block => block.segments.some(segment => segment.text.trim())) ?? []
+        const listBlocks = textBlocks.filter(block => block.type === 'listItem')
+        expect(listBlocks.slice(0, 5).map(block => block.type)).toEqual([
+            'listItem',
+            'listItem',
+            'listItem',
+            'listItem',
+            'listItem',
+        ])
+        expect(listBlocks.find(block => block.segments.map(segment => segment.text).join('').includes('How Ideas Become Content'))?.depth).toBe(1)
+    })
+
+    it('extracts the publisher logo image after the table of contents', async () => {
+        const parser = new EPUBParser()
+        const data = await readFile('data/Structured Writing Rhetoric and Process.epub')
+        const book = await parser.parse(data.buffer.slice(
+            data.byteOffset,
+            data.byteOffset + data.byteLength,
+        ), {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+
+        const titlePage = book.sections.find(section => String(section.id).endsWith('index.html'))
+        expect(titlePage).toBeDefined()
+
+        const blocks = await titlePage!.getBlocks?.()
+        const logo = blocks?.find(block => block.type === 'image' && block.image?.originalSrc?.endsWith('graphics/XML-Press-Logo-noURL-color.png'))
+
+        expect(logo?.image?.src.startsWith('test://resource-')).toBe(true)
+        expect(logo?.image?.alt).toBe('XML Press')
+    })
+
     it('extracts tables and figure blocks from The Accidental Taxonomist', async () => {
         const parser = new EPUBParser()
         const data = await readFile('data/The Accidental Taxonomist.epub')

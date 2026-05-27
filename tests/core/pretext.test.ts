@@ -64,6 +64,34 @@ describe('Pretext pipeline', () => {
         expect(prepared.blocks[0].block.type).toBe('chapter')
     })
 
+    it('extracts definition lists as nested list item blocks', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('dl', { class: 'toc' }, [
+                elementNode('dt', {}, [
+                    elementNode('span', { class: 'part' }, [textNode('I. '), elementNode('a', { href: 'pt01.html' }, [textNode('Part One')])]),
+                ]),
+                elementNode('dd', {}, [
+                    elementNode('dl', {}, [
+                        elementNode('dt', {}, [
+                            elementNode('span', { class: 'chapter' }, [textNode('1. '), elementNode('a', { href: 'ch01.html' }, [textNode('Chapter One')])]),
+                        ]),
+                        elementNode('dt', {}, [
+                            elementNode('span', { class: 'chapter' }, [textNode('2. '), elementNode('a', { href: 'ch02.html' }, [textNode('Chapter Two')])]),
+                        ]),
+                    ]),
+                ]),
+            ]),
+        ])
+
+        expect(blocks.map(block => block.type)).toEqual(['listItem', 'listItem', 'listItem'])
+        expect(blocks.map(block => block.depth)).toEqual([0, 1, 1])
+        expect(blocks.map(block => block.segments.map(segment => segment.text).join(''))).toEqual([
+            '• I. Part One',
+            ' • 1. Chapter One',
+            ' • 2. Chapter Two',
+        ])
+    })
+
     it('extracts image blocks with sizing and cover metadata', () => {
         const blocks = extractDocumentBlocks([
             elementNode('p', {}, [
@@ -90,6 +118,31 @@ describe('Pretext pipeline', () => {
         expect(lines[0].kind).toBe('image')
         expect(lines[0].image?.isCover).toBe(true)
         expect(lines[0].height).toBeLessThanOrEqual(300)
+    })
+
+    it('extracts images nested inside layout tables', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('table', { class: 'borderless' }, [
+                elementNode('tr', {}, [
+                    elementNode('td', {}, [
+                        elementNode('div', { class: 'mediaobject' }, [
+                            elementNode('img', {
+                                src: 'blob:publisher-logo',
+                                'data-rebook-original-src': 'graphics/logo.png',
+                                alt: 'Publisher logo',
+                                width: '200',
+                                height: '80',
+                            }),
+                        ]),
+                    ]),
+                ]),
+            ]),
+        ])
+
+        expect(blocks.map(block => block.type)).toEqual(['image'])
+        expect(blocks[0].image?.src).toBe('blob:publisher-logo')
+        expect(blocks[0].image?.originalSrc).toBe('graphics/logo.png')
+        expect(blocks[0].image?.alt).toBe('Publisher logo')
     })
 
     it('extracts table rows as paginatable table blocks', () => {
