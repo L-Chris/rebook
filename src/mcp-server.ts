@@ -117,10 +117,10 @@ export async function runRebookMCPServer(argv = process.argv.slice(2)): Promise<
         return
     }
 
-    const filePath = argv.find(arg => !arg.startsWith('-'))
+    const filePath = argv.find(arg => !arg.startsWith('-')) || process.env.EBOOK_PATH
     if (!filePath) {
         printHelp()
-        throw new Error('Missing e-book file path')
+        throw new Error('Missing e-book file path (pass as argument or set EBOOK_PATH env)')
     }
 
     const book = await openBookFile(filePath)
@@ -164,15 +164,30 @@ function toolResult(value: Record<string, unknown>) {
 
 function printHelp(): void {
     console.error(`Usage: rebook-mcp <ebook-file>
+       EBOOK_PATH=/path/to/book.epub rebook-mcp
 
 Start a stdio MCP server for one EPUB, MOBI/AZW3, FB2, or CBZ file.
+The file path can be passed as an argument or via the EBOOK_PATH env var.
 
-Example MCP client config:
+Example MCP client config (argument):
 {
   "mcpServers": {
     "book": {
       "command": "npx",
       "args": ["-y", "--package", "rebook", "rebook-mcp", "/absolute/path/book.epub"]
+    }
+  }
+}
+
+Example MCP client config (env var):
+{
+  "mcpServers": {
+    "book": {
+      "command": "npx",
+      "args": ["-y", "--package", "rebook", "rebook-mcp"],
+      "env": {
+        "EBOOK_PATH": "/absolute/path/book.epub"
+      }
     }
   }
 }`)
