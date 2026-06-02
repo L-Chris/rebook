@@ -58,3 +58,9 @@ export type {
     SearchResult,
     ChapterSearchResult,
 } from '../search'
+export {
+    parseStyleDeclarations,
+    mergeStyleDeclarations,
+    parseSimpleClassRules,
+    type SimpleClassRule,
+} from './css'

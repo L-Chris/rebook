@@ -443,6 +443,10 @@ export class VirtualTextRenderer implements Renderer {
                 this.content.appendChild(this.createSeparatorLine(line, position))
                 continue
             }
+            if (line.kind === 'pre') {
+                this.content.appendChild(this.createPreBlock(line, position))
+                continue
+            }
             const lineEl = document.createElement('div')
             lineEl.style.cssText = `
                 position: absolute;
@@ -490,17 +494,15 @@ export class VirtualTextRenderer implements Renderer {
     private createImageLine(line: LineRange, position: { top: number; left: number }): HTMLElement {
         const layout = this.columnLayout
         const image = line.image!
+        const imageLeft = getImageLeft(image, position.left, line.width, layout.columnWidth)
         const wrapper = document.createElement('figure')
         wrapper.style.cssText = `
             position: absolute;
             top: ${position.top}px;
-            left: ${position.left}px;
-            width: ${layout.columnWidth}px;
+            left: ${imageLeft}px;
+            width: ${line.width}px;
             height: ${line.height}px;
             margin: 0;
-            display: flex;
-            align-items: center;
-            justify-content: ${getImageJustifyContent(image)};
             overflow: hidden;
         `
         if (line.block) {
@@ -515,13 +517,89 @@ export class VirtualTextRenderer implements Renderer {
         if (image.title) img.title = image.title
         img.style.cssText = `
             display: block;
-            width: auto;
+            width: 100%;
             height: auto;
-            max-width: ${Math.min(line.width, layout.columnWidth)}px;
             max-height: ${line.height}px;
             object-fit: ${image.style?.objectFit ?? 'contain'};
         `
         wrapper.appendChild(img)
+        return wrapper
+    }
+
+    private createPreBlock(line: LineRange, position: { top: number; left: number }): HTMLElement {
+        const layout = this.columnLayout
+        const block = line.block!
+        const preStyle = block.style ?? {}
+        const fontSize = preStyle.fontSize ?? layout.columnWidth * 0.04
+        const preWidth = Math.max(line.width, layout.columnWidth)
+
+        const wrapper = document.createElement('pre')
+        wrapper.style.cssText = `
+            position: absolute;
+            top: ${position.top}px;
+            left: ${position.left}px;
+            width: ${preWidth}px;
+            min-height: ${line.height}px;
+            margin: 0;
+            padding: ${fontSize * 0.75}px ${fontSize}px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: ${fontSize}px;
+            line-height: 1.55;
+            white-space: pre;
+            overflow-x: auto;
+            background: #f5f5f5;
+            border-radius: 6px;
+            border: 1px solid #e0e0e0;
+            color: #333;
+            box-sizing: border-box;
+        `
+        if (block) {
+            wrapper.dataset.blockId = block.id
+            wrapper.dataset.blockType = block.type
+        }
+
+        // Build content with span-based inline styling if segments have varied styles
+        const hasVariedStyles = line.segments.some((seg, i) => {
+            if (i === 0) return false
+            return seg.style?.fontFamily !== line.segments[i - 1]?.style?.fontFamily
+                || seg.style?.fontWeight !== line.segments[i - 1]?.style?.fontWeight
+                || seg.style?.fontStyle !== line.segments[i - 1]?.style?.fontStyle
+                || seg.style?.color !== line.segments[i - 1]?.style?.color
+        })
+
+        if (hasVariedStyles && line.segments.length > 0) {
+            let currentStyle: TextStyle | null = null
+            let currentText = ''
+            const flush = () => {
+                if (currentText) {
+                    if (currentStyle) {
+                        const span = document.createElement('span')
+                        if (currentStyle.fontWeight) span.style.fontWeight = currentStyle.fontWeight
+                        if (currentStyle.fontStyle) span.style.fontStyle = currentStyle.fontStyle
+                        if (currentStyle.color) span.style.color = currentStyle.color
+                        if (currentStyle.fontFamily) span.style.fontFamily = currentStyle.fontFamily
+                        span.textContent = currentText
+                        wrapper.appendChild(span)
+                    } else {
+                        wrapper.appendChild(document.createTextNode(currentText))
+                    }
+                    currentText = ''
+                }
+            }
+            for (const seg of line.segments) {
+                const segKey = seg.style ? `${seg.style.fontWeight}-${seg.style.fontStyle}-${seg.style.color}-${seg.style.fontFamily}` : 'none'
+                const prevKey = currentStyle ? `${currentStyle.fontWeight}-${currentStyle.fontStyle}-${currentStyle.color}-${currentStyle.fontFamily}` : 'none'
+                if (segKey !== prevKey) {
+                    flush()
+                    currentStyle = seg.style ?? null
+                }
+                currentText += seg.text
+            }
+            flush()
+        } else {
+            wrapper.textContent = line.text
+        }
+
         return wrapper
     }
 
@@ -1029,10 +1107,10 @@ function isInlineImageFragment(fragment: { source?: { nodeType?: string; attrs?:
     return fragment.source?.nodeType === 'img' && Boolean(fragment.source.attrs?.src)
 }
 
-function getImageJustifyContent(image: TextImage): string {
-    if (image.style?.align === 'start') return 'flex-start'
-    if (image.style?.align === 'end') return 'flex-end'
-    return 'center'
+function getImageLeft(image: TextImage, columnLeft: number, imageWidth: number, columnWidth: number): number {
+    if (image.style?.align === 'start') return columnLeft
+    if (image.style?.align === 'end') return columnLeft + columnWidth - imageWidth
+    return columnLeft + (columnWidth - imageWidth) / 2
 }
 
 function getTableGridTemplate(table: TextTable): string {

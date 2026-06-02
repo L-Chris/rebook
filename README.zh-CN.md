@@ -84,6 +84,49 @@ const blob = await exportFirstSections(file, 5, {
 
 在 `paginated` 布局下，滚轮和 `next()` / `prev()` 会按视口高度翻页，不再自由垂直漂移。宽屏时支持自动双列阅读：当可用宽度能容纳 `2 × maxInlineSize + gap` 时，可视行会分布到左右两列，并保留页内上下留白，避免文字贴到裁切边缘。`reader.setSpread(1)` 强制单列，`reader.setSpread(2)` 恢复自动双列。
 
+
+## MCP 服务器
+
+安装 `rebook` 后可以为 AI 助手提供阅读和搜索书籍的 MCP（Model Context Protocol）服务器：
+
+```bash
+npm install rebook
+```
+
+然后在你的 MCP 客户端（Claude Desktop、Cursor 等）中配置：
+
+```json
+{
+  "mcpServers": {
+    "book": {
+      "command": "npx",
+      "args": ["-y", "--package", "rebook", "rebook-mcp", "/absolute/path/book.epub"]
+    }
+  }
+}
+```
+
+CLI 支持 EPUB、MOBI/AZW3、FB2 和 CBZ 文件。可用工具：
+
+| 工具 | 描述 |
+|------|------|
+| `get_book_metadata` | 获取书名、作者、语言、主题 |
+| `get_chapter_list` | 列出所有章节及索引 |
+| `get_chapter_text` | 读取章节的文本内容 |
+| `search_book` | 在书中搜索关键词 |
+
+如果 `rebook` 安装在项目中，也可以编程使用：
+
+```typescript
+import { createBookMCPTools, callBookMCPTool } from 'rebook/mcp'
+
+const tools = createBookMCPTools(book)
+const result = await callBookMCPTool(tools, 'search_book', {
+  query: 'cooperative',
+  maxResults: 5,
+})
+```
+
 ## 文档模型（AI 友好）
 
 每个章节暴露一个结构化的文档树，提供查询和修改 API：

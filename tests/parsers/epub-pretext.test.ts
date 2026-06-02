@@ -201,11 +201,14 @@ describe('EPUB Pretext segments', () => {
 
         const prepared = prepareBlocks([listing!], { baseStyle: { fontSize: 10, lineHeight: 2 } })
         const lines = layout(prepared, { inlineSize: 1_000 })
-        const lineTexts = lines.map(line => line.text)
-        expect(lineTexts).toContain('<ol>')
-        expect(lineTexts).toContain('\u00a0\u00a0\u00a0\u00a0<li>')
-        expect(lineTexts).toContain('\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0<p>Dogs</p>')
-        expect(lineTexts).toContain('\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0<li>Spot</li>')
+        // Pre blocks are merged into a single kind='pre' line
+        expect(lines).toHaveLength(1)
+        expect(lines[0].kind).toBe('pre')
+        const layoutText = lines[0].text
+        expect(layoutText).toContain('<ol>')
+        expect(layoutText).toContain('\u00a0\u00a0\u00a0\u00a0<li>')
+        expect(layoutText).toContain('\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0<p>Dogs</p>')
+        expect(layoutText).toContain('\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0<li>Spot</li>')
     })
 
     it('extracts tables and figure blocks from The Accidental Taxonomist', async () => {

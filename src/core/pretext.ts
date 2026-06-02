@@ -27,6 +27,7 @@ import type {
     TextTableRow,
 } from './types'
 import { isTextNode } from './document'
+import { parseStyleDeclarations } from './css'
 
 export type { ImageStyle, TextBlock, TextBlockType, TextImage, TextSegment, TextStyle, TextTable, TextTableCell, TextTableRow } from './types'
 
@@ -77,7 +78,7 @@ export interface LineSegmentRange {
 
 export interface LineRange {
     index: number
-    kind: 'text' | 'image' | 'table' | 'separator'
+    kind: 'text' | 'image' | 'table' | 'separator' | 'pre'
     block?: TextBlock
     image?: TextImage
     table?: TextTable
@@ -463,23 +464,19 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
         }
         if (block.block.type === 'pre') {
             const preLines = splitPreLines(block, prepared)
+            let preTop = top
+            const allFragments: LineSegmentRange[] = []
+            let maxWidth = 0
+            const lineTexts: string[] = []
+
             for (const preLine of preLines) {
                 if (preLine.length === 0) {
-                    lines.push({
-                        index: lines.length,
-                        kind: 'text',
-                        block: block.block,
-                        start: null,
-                        end: null,
-                        text: '',
-                        width: 0,
-                        top,
-                        height: lineHeight,
-                        segments: [],
-                    })
-                    top += lineHeight
+                    lineTexts.push('')
                     continue
                 }
+
+                const lineText = preLine.map(item => toPreLayoutText(item.text)).join('')
+                lineTexts.push(lineText)
 
                 const richInline = prepareRichInline(preLine.map(item => ({
                     text: toPreLayoutText(item.text),
@@ -504,25 +501,31 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
                             occupiedWidth: fragment.occupiedWidth,
                         }
                     })
-                    const first = fragments[0]
-                    const last = fragments[fragments.length - 1]
-                    lines.push({
-                        index: lines.length,
-                        kind: 'text',
-                        block: block.block,
-                        start: first ? { segmentIndex: first.segmentIndex, cursor: first.start } : null,
-                        end: last ? { segmentIndex: last.segmentIndex, cursor: last.end } : null,
-                        text: joinFragments(fragments),
-                        width: materialized.width,
-                        top,
-                        height: lineHeight,
-                        segments: fragments,
-                    })
-                    top += lineHeight
+                    allFragments.push(...fragments)
+                    maxWidth = Math.max(maxWidth, materialized.width)
                 })
             }
 
-            if (lines.length > blockStartCount) top += block.block.blockGapAfter ?? blockGap
+            const preText = lineTexts.join('\n')
+            const totalLines = lineTexts.length
+            const totalHeight = totalLines * lineHeight
+            const first = allFragments[0]
+            const last = allFragments[allFragments.length - 1]
+
+            lines.push({
+                index: lines.length,
+                kind: 'pre',
+                block: block.block,
+                start: first ? { segmentIndex: first.segmentIndex, cursor: first.start } : null,
+                end: last ? { segmentIndex: last.segmentIndex, cursor: last.end } : null,
+                text: preText,
+                width: maxWidth,
+                top: preTop,
+                height: totalHeight,
+                segments: allFragments,
+            })
+            top = preTop + totalHeight
+            top += block.block.blockGapAfter ?? blockGap
             continue
         }
         const richInline = block.prepared
@@ -919,7 +922,9 @@ function getImageBlockMetrics(
     const preferredWidth = image.style?.width ?? image.width ?? maxWidth
     const width = Math.max(1, Math.min(maxWidth, preferredWidth))
     const naturalRatio = image.aspectRatio ?? (image.width && image.height ? image.width / image.height : undefined)
-    const fallbackHeight = image.isCover ? width * 1.35 : Math.max(lineHeight * 6, width * 0.62)
+    const fallbackHeight = image.isCover
+        ? (maxBlockHeight ?? width * 1.35)
+        : width * 0.75
     const preferredHeight = image.style?.height
         ?? (naturalRatio ? width / naturalRatio : undefined)
         ?? image.height
@@ -1254,18 +1259,6 @@ function parseTextAlignFromStyle(style?: string): ImageStyle['align'] | undefine
     return textAlign ? parseTextAlign(textAlign) : undefined
 }
 
-function parseStyleDeclarations(style?: string): Array<[string, string]> {
-    if (!style) return []
-    const declarations: Array<[string, string]> = []
-    for (const declaration of style.split(';')) {
-        const separator = declaration.indexOf(':')
-        if (separator < 0) continue
-        const name = declaration.slice(0, separator).trim().toLowerCase()
-        const value = declaration.slice(separator + 1).trim()
-        if (name && value) declarations.push([name, value])
-    }
-    return declarations
-}
 
 function parseCSSPixels(value: string): number | undefined {
     const match = value.match(/^([\d.]+)(px|em|rem)?$/)

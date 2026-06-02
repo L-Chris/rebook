@@ -1,6 +1,6 @@
 {
   "name": "rebook",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "A modular e-book parsing and rendering library",
   "type": "module",
   "main": "./dist/index.js",
@@ -90,9 +90,11 @@
     "@ai-sdk/openai": "^3.0.65",
     "@chenglou/pretext": "^0.0.7",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/css-tree": "^2.3.11",
     "@xmldom/xmldom": "^0.9.10",
     "@zip.js/zip.js": "^2.7.52",
     "ai": "^6.0.191",
+    "css-tree": "^3.2.1",
     "fflate": "^0.8.3",
     "zod": "^4.4.3"
   }

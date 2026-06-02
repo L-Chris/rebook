@@ -21,6 +21,7 @@ import { UnsupportedInputError, AdapterRequiredError, ParseError, CorruptedFileE
 import { normalizeLanguage, normalizeTitle, normalizePublisher } from '../core/metadata'
 import { parseHTML, createSectionDocument } from '../core/document'
 import { extractDocumentBlocks, extractDocumentSegments } from '../core/pretext'
+import { parseSimpleClassRules, mergeStyleDeclarations, extractImportURLs, type SimpleClassRule } from '../core/css'
 
 // ============================================================================
 // Constants
@@ -104,6 +105,56 @@ const resolveURL = (url: string, relativeTo: string): string => {
 
 /** Check if a URI is external */
 const isExternal = (uri: string): boolean => /^(?!blob)\w+:/i.test(uri)
+
+function readImageSize(buf: ArrayBuffer): { width: number; height: number } | null {
+    const bytes = new Uint8Array(buf)
+    const view = new DataView(buf)
+    // PNG: signature 8 bytes, then IHDR: 4 len + 4 type + 4 width + 4 height
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+        if (buf.byteLength < 24) return null
+        return { width: view.getUint32(16, false), height: view.getUint32(20, false) }
+    }
+    // JPEG: FF D8
+    if (bytes[0] === 0xff && bytes[1] === 0xd8) {
+        let offset = 2
+        while (offset + 8 < buf.byteLength) {
+            if (bytes[offset] !== 0xff) break
+            const marker = bytes[offset + 1]
+            const len = view.getUint16(offset + 2, false)
+            // SOF markers: C0, C1, C2, C3, C5, C6, C7, C9, CA, CB, CD, CE, CF
+            if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+                if (offset + 8 >= buf.byteLength) return null
+                return { width: view.getUint16(offset + 7, false), height: view.getUint16(offset + 5, false) }
+            }
+            offset += 2 + len
+        }
+        return null
+    }
+    // GIF: GIF87a / GIF89a
+    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+        if (buf.byteLength < 10) return null
+        return { width: view.getUint16(6, true), height: view.getUint16(8, true) }
+    }
+    // WebP: RIFF????WEBPVP8
+    if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+        && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+        if (buf.byteLength < 30) return null
+        // VP8 lossy: chunk at offset 12, data from 20, width at 26-27 (14-bit), height at 28-29 (14-bit)
+        if (bytes[12] === 0x56 && bytes[13] === 0x50 && bytes[14] === 0x38 && bytes[15] === 0x20) {
+            return {
+                width: (view.getUint16(26, true) & 0x3fff) + 1,
+                height: (view.getUint16(28, true) & 0x3fff) + 1,
+            }
+        }
+        // VP8L lossless: chunk at offset 12, signature 0x2f at offset 20, then 14-bit width-1, 14-bit height-1
+        if (bytes[12] === 0x56 && bytes[13] === 0x50 && bytes[14] === 0x38 && bytes[15] === 0x4c) {
+            const bits = view.getUint32(21, true)
+            return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 }
+        }
+    }
+    return null
+}
+
 
 /** Get dirname of a path */
 const pathDirname = (str: string): string =>
@@ -524,7 +575,31 @@ class ResourceLoader {
             for (const el of doc.querySelectorAll('[href]')) {
                 if (!isNavigationHrefElement(el)) await replace(el, 'href')
             }
-            for (const el of doc.querySelectorAll('[src]')) await replace(el, 'src')
+            for (const el of doc.querySelectorAll('[src]')) {
+                const srcBefore = el.getAttribute('src')
+                await replace(el, 'src')
+                // Inject real pixel dimensions into <img> elements that lack them,
+                // so layout can compute aspect ratio without fallback guesses.
+                if (el.localName.toLowerCase() === 'img'
+                    && !el.getAttribute('width') && !el.getAttribute('height')
+                    && srcBefore) {
+                    const imgHref = resolveURL(srcBefore, href)
+                    const imgItem = this.manifest.find(m => m.href === imgHref)
+                    if (imgItem?.mediaType.startsWith('image/') && imgItem.mediaType !== MIME.SVG) {
+                        try {
+                            const blob = await this.loadBlob(imgItem.href)
+                            if (blob) {
+                                const buf = await blob.arrayBuffer()
+                                const size = readImageSize(buf)
+                                if (size?.width && size?.height) {
+                                    el.setAttribute('width', String(size.width))
+                                    el.setAttribute('height', String(size.height))
+                                }
+                            }
+                        } catch { /* ignore, non-fatal */ }
+                    }
+                }
+            }
             for (const el of doc.querySelectorAll('[poster]')) await replace(el, 'poster')
             for (const el of doc.querySelectorAll('object[data]')) await replace(el, 'data')
             for (const el of doc.querySelectorAll('[*|href]:not([href])')) {
@@ -630,8 +705,8 @@ class ResourceLoader {
         if (!css) return ''
 
         const imports: string[] = []
-        for (const match of css.matchAll(/@import\s+(?:url\(\s*)?["']?([^"')\s]+)["']?\s*\)?[^;]*;/gi)) {
-            const importHref = resolveURL(match[1], href)
+        for (const url of extractImportURLs(css)) {
+            const importHref = resolveURL(url, href)
             const item = this.manifest.find(m => m.href === importHref)
             if (item?.mediaType === MIME.CSS) {
                 imports.push(await this.loadCSSWithImports(importHref, seen))
@@ -681,72 +756,6 @@ class ResourceLoader {
     }
 }
 
-interface SimpleClassRule {
-    matches(tagName: string, classNames: ReadonlySet<string>): boolean
-    declarations: string
-}
-
-function parseSimpleClassRules(css: string): SimpleClassRule[] {
-    const rules: SimpleClassRule[] = []
-    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '')
-    for (const match of withoutComments.matchAll(/([^{}]+)\{([^{}]+)\}/g)) {
-        const declarations = normalizeStyleDeclarations(match[2])
-        if (!declarations) continue
-        for (const selector of match[1].split(',')) {
-            const parsed = parseSimpleClassSelector(selector.trim())
-            if (!parsed) continue
-            rules.push({
-                declarations,
-                matches: (tagName, classNames) =>
-                    (!parsed.tagName || parsed.tagName === tagName)
-                    && parsed.classNames.every(className => classNames.has(className)),
-            })
-        }
-    }
-    return rules
-}
-
-function parseSimpleClassSelector(selector: string): { tagName?: string; classNames: string[] } | null {
-    const withoutPseudo = selector.replace(/:{1,2}[\w-]+(?:\([^)]*\))?/g, '')
-    if (!withoutPseudo || /[\s>+~#[\]]/.test(withoutPseudo)) return null
-    const tagMatch = withoutPseudo.match(/^[a-zA-Z][\w-]*/)
-    const tagName = tagMatch?.[0].toLowerCase()
-    const classMatches = [...withoutPseudo.matchAll(/\.([_a-zA-Z-][\w-]*)/g)].map(match => unescapeCSSIdentifier(match[1]))
-    if (!classMatches.length) return null
-    const consumed = `${tagName ?? ''}${classMatches.map(className => `.${className}`).join('')}`
-    if (consumed !== withoutPseudo) return null
-    return { tagName, classNames: classMatches }
-}
-
-function normalizeStyleDeclarations(style: string): string {
-    return parseStyleDeclarations(style)
-        .map(([name, value]) => `${name}: ${value}`)
-        .join('; ')
-}
-
-function mergeStyleDeclarations(base: string, override: string): string {
-    const merged = new Map<string, string>()
-    for (const [name, value] of parseStyleDeclarations(base)) merged.set(name, value)
-    for (const [name, value] of parseStyleDeclarations(override)) merged.set(name, value)
-    return [...merged.entries()].map(([name, value]) => `${name}: ${value}`).join('; ')
-}
-
-function parseStyleDeclarations(style: string): Array<[string, string]> {
-    return style
-        .split(';')
-        .map(part => {
-            const index = part.indexOf(':')
-            if (index < 0) return null
-            const name = part.slice(0, index).trim().toLowerCase()
-            const value = part.slice(index + 1).trim()
-            return name && value ? [name, value] as [string, string] : null
-        })
-        .filter((item): item is [string, string] => item !== null)
-}
-
-function unescapeCSSIdentifier(value: string): string {
-    return value.replace(/\\(.)/g, '$1')
-}
 
 function isNavigationHrefElement(el: XMLElement): boolean {
     const name = el.localName.toLowerCase()

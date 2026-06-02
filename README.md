@@ -129,6 +129,49 @@ const visible = getVisibleLines(lines, scrollTop, viewportHeight)
 
 The browser package also exports `VirtualTextRenderer` / `createVirtualTextRenderer`, which uses this pipeline to render only visible line rows as simple DOM spans.
 
+
+## MCP Server
+
+Install `rebook` to add an MCP (Model Context Protocol) server for AI assistants to read and search books:
+
+```bash
+npm install rebook
+```
+
+Then configure your MCP client (Claude Desktop, Cursor, etc.) with:
+
+```json
+{
+  "mcpServers": {
+    "book": {
+      "command": "npx",
+      "args": ["-y", "--package", "rebook", "rebook-mcp", "/absolute/path/book.epub"]
+    }
+  }
+}
+```
+
+The CLI supports EPUB, MOBI/AZW3, FB2, and CBZ files. Available tools:
+
+| Tool | Description |
+|------|-------------|
+| `get_book_metadata` | Get title, author, language, subjects |
+| `get_chapter_list` | List all chapters with indices |
+| `get_chapter_text` | Read a chapter's text content |
+| `search_book` | Search across the book with keyword |
+
+If `rebook` is installed locally in your project, you can also use it programmatically:
+
+```typescript
+import { createBookMCPTools, callBookMCPTool } from 'rebook/mcp'
+
+const tools = createBookMCPTools(book)
+const result = await callBookMCPTool(tools, 'search_book', {
+  query: 'cooperative',
+  maxResults: 5,
+})
+```
+
 ## Documentation
 
 - [**API Reference**](./docs/API.md) — Full API documentation: parsers, renderer, adapters, Document Model, Pretext layout, error types, metadata normalization

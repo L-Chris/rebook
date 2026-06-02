@@ -1029,8 +1029,12 @@
         })
 
         // Also allow drop on the whole page when book is open
-        document.body.addEventListener('dragover', (e) => e.preventDefault())
+        document.body.addEventListener('dragover', (e) => {
+            if (viewer.contains(e.target) || sidebar.contains(e.target)) return
+            e.preventDefault()
+        })
         document.body.addEventListener('drop', (e) => {
+            if (viewer.contains(e.target) || sidebar.contains(e.target)) return
             e.preventDefault()
             const file = Array.from(e.dataTransfer.files).find(f => f)
             if (file) openFile(file)

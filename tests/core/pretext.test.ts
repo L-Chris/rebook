@@ -269,13 +269,11 @@ describe('Pretext pipeline', () => {
 
         const prepared = prepareBlocks(blocks, { baseStyle: { fontSize: 10, lineHeight: 2 } })
         const lines = layout(prepared, { inlineSize: 300 })
+        // Pre blocks are now merged into a single kind='pre' line with embedded newlines
+        expect(lines).toHaveLength(1)
+        expect(lines[0].kind).toBe('pre')
         const indent = '\u00a0\u00a0\u00a0\u00a0'
-        expect(lines.map(line => line.text)).toEqual([
-            '<ol>',
-            `${indent}<li>Dogs</li>`,
-            `${indent}<li>Cats</li>`,
-            '</ol>',
-        ])
+        expect(lines[0].text).toBe(`<ol>\n${indent}<li>Dogs</li>\n${indent}<li>Cats</li>\n</ol>`)
     })
 
     it('returns a virtualized visible line window', () => {
