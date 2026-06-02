@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "rebook": {
+      "command": "node",
+      "args": ["/home/projects/github/ebook/ebook-js/dist/mcp-server.js"],
+      "env": {
+        "EBOOK_PATH": "/home/projects/github/ebook/ebook-js/data/2.epub"
+      }
+    }
+  }
+}
