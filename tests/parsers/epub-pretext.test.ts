@@ -151,7 +151,18 @@ describe('EPUB Pretext segments', () => {
             'listItem',
             'listItem',
         ])
-        expect(listBlocks.find(block => block.segments.map(segment => segment.text).join('').includes('How Ideas Become Content'))?.depth).toBe(1)
+        expect(listBlocks[0].segments.map(segment => segment.text).join('')).toBe('Preface')
+        expect(listBlocks[2].segments.map(segment => segment.text).join('')).toBe('I. Structured Writing Domains')
+
+        const nested = listBlocks.find(block => block.segments.map(segment => segment.text).join('').includes('How Ideas Become Content'))
+        expect(nested?.depth).toBe(1)
+        expect(nested?.segments.map(segment => segment.text).join('')).toBe('1. How Ideas Become Content')
+
+        const lines = layout(prepareBlocks(listBlocks.slice(0, 5), { baseStyle: { fontSize: 16, lineHeight: 1.5 } }), {
+            inlineSize: 360,
+        })
+        expect(lines.find(line => line.text.includes('Preface'))?.inlineOffset).toBe(0)
+        expect(lines.find(line => line.text.includes('How Ideas Become Content'))?.inlineOffset).toBeGreaterThan(0)
     })
 
     itWithStructuredWriting('extracts the publisher logo image after the table of contents', async () => {
@@ -209,6 +220,43 @@ describe('EPUB Pretext segments', () => {
         expect(layoutText).toContain('\u00a0\u00a0\u00a0\u00a0<li>')
         expect(layoutText).toContain('\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0<p>Dogs</p>')
         expect(layoutText).toContain('\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0<li>Spot</li>')
+    })
+
+    it('moves preformatted blocks to a fresh page when the current page has insufficient space', () => {
+        const paragraph = Array.from({ length: 90 }, (_, index) => `word${index}`).join(' ')
+        const code = [
+            '<ol>',
+            '    <li>',
+            '        <p>Dogs</p>',
+            '        <ol>',
+            '            <li>Spot</li>',
+            '        </ol>',
+            '    </li>',
+            '</ol>',
+        ].join('\n')
+        const prepared = prepareBlocks([
+            {
+                id: 'paragraph',
+                type: 'paragraph',
+                segments: [{ text: paragraph }],
+            },
+            {
+                id: 'code',
+                type: 'pre',
+                segments: [{ text: code }],
+            },
+        ], { baseStyle: { fontSize: 16, lineHeight: 1.5 } })
+
+        const lines = layout(prepared, {
+            inlineSize: 260,
+            lineHeight: 24,
+            maxBlockHeight: 200,
+        })
+        const preLine = lines.find(line => line.kind === 'pre')
+
+        expect(preLine?.top).toBeGreaterThanOrEqual(200)
+        expect((preLine?.top ?? 0) % 200).toBe(0)
+        expect(preLine?.height).toBeLessThanOrEqual(200)
     })
 
     it('extracts tables and figure blocks from The Accidental Taxonomist', async () => {

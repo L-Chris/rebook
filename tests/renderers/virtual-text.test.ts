@@ -526,6 +526,54 @@ describe('VirtualTextRenderer', () => {
         renderer.destroy()
     })
 
+    it('keeps preformatted blocks constrained to the column width', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '240')
+        document.body.appendChild(container)
+
+        const code = [
+            '<ol>',
+            '    <li>',
+            '        <p>Dogs</p>',
+            '        <ol>',
+            '            <li>Spot with a deliberately very long value that should scroll horizontally</li>',
+            '        </ol>',
+            '    </li>',
+            '</ol>',
+        ].join('\n')
+        const book: Book = {
+            sections: [{
+                id: 'chapter.xhtml',
+                size: code.length,
+                format: 'xhtml',
+                load: () => '',
+                getBlocks: () => [{
+                    id: 'code-sample',
+                    type: 'pre',
+                    segments: [{ text: code }],
+                }],
+            }],
+        }
+
+        const renderer = new VirtualTextRenderer({
+            container,
+            layout: 'paginated',
+            maxColumnCount: 1,
+            styles: { fontSize: '16px', lineHeight: 1.5, minColumnWidth: '260px', maxInlineSize: '260px', margin: '16px' },
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+
+        const pre = container.querySelector('pre[data-block-type="pre"]') as HTMLElement
+        expect(pre.style.width).toBe('260px')
+        expect(pre.style.overflow).toBe('auto')
+        expect(pre.textContent).toContain('<li>Spot')
+
+        renderer.destroy()
+    })
+
     it('renders footnote marker image segments inline', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')

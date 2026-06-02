@@ -448,11 +448,12 @@ export class VirtualTextRenderer implements Renderer {
                 continue
             }
             const lineEl = document.createElement('div')
+            const inlineOffset = line.inlineOffset ?? 0
             lineEl.style.cssText = `
                 position: absolute;
                 top: ${position.top}px;
-                left: ${position.left}px;
-                width: ${layout.columnWidth}px;
+                left: ${position.left + inlineOffset}px;
+                width: ${Math.max(1, layout.columnWidth - inlineOffset)}px;
                 height: ${line.height}px;
                 line-height: ${line.height}px;
                 white-space: pre;
@@ -531,22 +532,23 @@ export class VirtualTextRenderer implements Renderer {
         const block = line.block!
         const preStyle = block.style ?? {}
         const fontSize = preStyle.fontSize ?? layout.columnWidth * 0.04
-        const preWidth = Math.max(line.width, layout.columnWidth)
+        const inlineOffset = line.inlineOffset ?? 0
+        const preWidth = Math.max(1, layout.columnWidth - inlineOffset)
 
         const wrapper = document.createElement('pre')
         wrapper.style.cssText = `
             position: absolute;
             top: ${position.top}px;
-            left: ${position.left}px;
+            left: ${position.left + inlineOffset}px;
             width: ${preWidth}px;
-            min-height: ${line.height}px;
+            height: ${line.height}px;
             margin: 0;
             padding: ${fontSize * 0.75}px ${fontSize}px;
             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
             font-size: ${fontSize}px;
             line-height: 1.55;
             white-space: pre;
-            overflow-x: auto;
+            overflow: auto;
             background: #f5f5f5;
             border-radius: 6px;
             border: 1px solid #e0e0e0;

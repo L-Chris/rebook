@@ -13,7 +13,7 @@
  *   MOBIParser → public Parser interface
  */
 
-import type { Book, BookMetadata, Section, TOCItem, Landmark, Rendition, SectionDocument } from '../core/types'
+import type { Book, BookMetadata, Section, TOCItem, Landmark, Rendition, SectionDocument, DocumentNode } from '../core/types'
 import type { Parser, ParserInput, ParserOptions } from '../core/parser'
 import type { DOMAdapter } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
@@ -1212,6 +1212,32 @@ interface KF8Section {
     totalLength: number
 }
 
+const isBlankDocumentNode = (node: DocumentNode): boolean =>
+    node.type === 'text' && !(node.text ?? '').trim()
+
+const getNodeAttr = (node: DocumentNode, name: string): string =>
+    Object.entries(node.attrs ?? {})
+        .find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1] ?? ''
+
+const hasNavigationSemantics = (node: DocumentNode): boolean => {
+    const type = getNodeAttr(node, 'type')
+    const role = getNodeAttr(node, 'role')
+    const values = `${type} ${role}`.toLowerCase().split(/\s+/)
+    return values.some(value =>
+        value === 'toc' ||
+        value === 'landmarks' ||
+        value === 'page-list' ||
+        value === 'doc-toc' ||
+        value === 'doc-pagelist')
+}
+
+const isKF8NavigationDocument = (html: string, domAdapter: DOMAdapter): boolean => {
+    const nodes = parseHTML(html, domAdapter).filter(node => !isBlankDocumentNode(node))
+    if (nodes.length === 0) return false
+    return nodes.every(node => node.type.toLowerCase() === 'nav') &&
+        nodes.some(hasNavigationSemantics)
+}
+
 class KF8 {
     #mobi: MOBI
     #domAdapter?: DOMAdapter
@@ -1225,6 +1251,7 @@ class KF8 {
         fragTable?: KF8Frag[]
     } = {}
     #sections: KF8Section[] = []
+    #sectionIndexMap = new Map<number, number>()
     #fullRawLength = 0
     #rawHead: Uint8Array = new Uint8Array()
     #rawTail: Uint8Array = new Uint8Array()
@@ -1320,9 +1347,18 @@ class KF8 {
             }
         } catch { /* RESC is optional */ }
 
-        // Build sections
-        this.sections = this.#sections.map((section, index) =>
-            section.frags.length ? ({
+        // Build sections. Some KF8 books include a pure navigation skeleton
+        // containing TOC/guide/page-list data; it is metadata, not reading text.
+        this.sections = []
+        this.#sectionIndexMap.clear()
+        for (const [index, section] of this.#sections.entries()) {
+            if (!section.frags.length) continue
+            if (this.#domAdapter && isKF8NavigationDocument(await this.createDocument(section), this.#domAdapter)) {
+                continue
+            }
+
+            this.#sectionIndexMap.set(index, this.sections.length)
+            this.sections.push({
                 id: index,
                 load: () => this.loadSection(section),
                 createDocument: () => this.createDocument(section),
@@ -1348,7 +1384,8 @@ class KF8 {
                     })
                 },
                 size: section.length,
-            }) : ({ id: `nonlinear-${index}`, size: 0, linear: 'no', load: () => '' }))
+            })
+        }
 
         // Build TOC from NCX
         try {
@@ -1528,8 +1565,9 @@ class KF8 {
     resolveHref(href: string): { index: number; anchor: (doc: unknown) => unknown } | null {
         const pos = parsePosURI(href)
         if (!pos) return null
-        const index = this.getIndexByFID(pos.fid)
-        if (index < 0) return null
+        const rawIndex = this.getIndexByFID(pos.fid)
+        const index = this.#sectionIndexMap.get(rawIndex)
+        if (index == null) return null
         const anchor = () => this.#fragmentSelectors.get(pos.fid)?.get(pos.off) ?? null
         return { index, anchor }
     }
@@ -1537,7 +1575,9 @@ class KF8 {
     splitTOCHref(href: string): [number, string] | null {
         const pos = parsePosURI(href)
         if (!pos) return null
-        const index = this.getIndexByFID(pos.fid)
+        const rawIndex = this.getIndexByFID(pos.fid)
+        const index = this.#sectionIndexMap.get(rawIndex)
+        if (index == null) return null
         return [index, `${pos.fid}:${pos.off}`]
     }
 

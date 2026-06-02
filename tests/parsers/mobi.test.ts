@@ -89,6 +89,23 @@ describe('MOBIParser', () => {
             expect(firstBlocks?.some(block => block.segments.some(segment => segment.text.trim()))).toBe(true)
         })
 
+        it('does not expose KF8 navigation page lists as reading sections', async () => {
+            const data = await readFile('data/Lifestyle Gurus.azw3')
+            const book = await parser.parse(data.buffer.slice(
+                data.byteOffset,
+                data.byteOffset + data.byteLength,
+            ), options)
+
+            const firstBlocks = await book.sections[0].getBlocks?.()
+            const firstText = firstBlocks?.map(block =>
+                block.segments.map(segment => segment.text).join('')).join('\n') ?? ''
+
+            expect(firstText).toContain('Lifestyle Gurus')
+            expect(firstText).not.toContain('Pages')
+            expect(firstText).not.toContain('Contents')
+            expect(book.resolveHref?.('kindle:pos:fid:0005:off:0000000000')?.index).toBe(0)
+        })
+
         it('should extract metadata: title', async () => {
             const buffer = createTestMOBI({
                 title: 'The Great Novel',

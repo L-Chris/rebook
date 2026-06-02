@@ -88,6 +88,7 @@ export interface LineRange {
     width: number
     top: number
     height: number
+    inlineOffset?: number
     segments: readonly LineSegmentRange[]
 }
 
@@ -231,7 +232,12 @@ export function extractDocumentBlocks(
         })
     }
 
-    const walkBlock = (node: DocumentNode, inherited: TextStyle, listDepth = 0) => {
+    const walkBlock = (
+        node: DocumentNode,
+        inherited: TextStyle,
+        listDepth = 0,
+        listMarker?: string,
+    ) => {
         if (isTextNode(node)) {
             if (node.text.trim()) {
                 pushBlock('paragraph', node, [{ text: node.text, style: inherited, source: { nodeType: 'text' } }])
@@ -281,8 +287,9 @@ export function extractDocumentBlocks(
         }
 
         if (type === 'li' || type === 'dt') {
+            const marker = listMarker ? `${listMarker} ` : ''
             pushBlock('listItem', node, [
-                { text: `${'  '.repeat(listDepth)}• `, style: inherited, source: { nodeType: 'marker' } },
+                ...(marker ? [{ text: marker, style: inherited, source: { nodeType: 'marker' } }] : []),
                 ...collectInlineSegments(node, inherited, { skipNestedLists: true }),
             ], listDepth)
 
@@ -300,7 +307,18 @@ export function extractDocumentBlocks(
         }
 
         if (LIST_CONTAINER_TAGS.has(type)) {
-            for (const child of node.children ?? []) walkBlock(child, inherited, listDepth)
+            let ordinal = getOrderedListStart(node)
+            for (const child of node.children ?? []) {
+                if (isTextNode(child)) continue
+                const childType = child.type.toLowerCase()
+                if (type === 'ol' && childType === 'li') {
+                    walkBlock(child, inherited, listDepth, formatOrderedListMarker(ordinal++, node.attrs?.type))
+                } else if (type === 'ul' && childType === 'li') {
+                    walkBlock(child, inherited, listDepth, '•')
+                } else {
+                    walkBlock(child, inherited, listDepth)
+                }
+            }
             return
         }
 
@@ -382,6 +400,8 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
     for (const block of prepared.blocks) {
         const blockStartCount = lines.length
         if (blockStartCount > 0) top += block.block.blockGapBefore ?? 0
+        const inlineOffset = getBlockInlineOffset(block.block, prepared.baseStyle.fontSize)
+        const blockInlineSize = Math.max(prepared.baseStyle.fontSize * 4, inlineSize - inlineOffset)
         if (block.block.type === 'break') {
             lines.push({
                 index: lines.length,
@@ -393,6 +413,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
                 width: 0,
                 top,
                 height: lineHeight,
+                inlineOffset,
                 segments: [],
             })
             top += lineHeight
@@ -410,6 +431,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
                 width: inlineSize,
                 top,
                 height: lineHeight,
+                inlineOffset,
                 segments: [],
             })
             top += lineHeight
@@ -430,6 +452,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
                 width: metrics.width,
                 top,
                 height: metrics.height,
+                inlineOffset,
                 segments: [],
             })
             top += metrics.height
@@ -456,6 +479,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
                 width: metrics.width,
                 top,
                 height: metrics.height,
+                inlineOffset,
                 segments: [],
             })
             top += metrics.height
@@ -468,6 +492,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
             const allFragments: LineSegmentRange[] = []
             let maxWidth = 0
             const lineTexts: string[] = []
+            const paddingBlock = getPreBlockPaddingBlock(block.block, prepared.baseStyle.fontSize)
 
             for (const preLine of preLines) {
                 if (preLine.length === 0) {
@@ -485,7 +510,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
                     break: item.break,
                     extraWidth: item.extraWidth,
                 })))
-                walkRichInlineLineRanges(richInline, inlineSize, (range) => {
+                walkRichInlineLineRanges(richInline, blockInlineSize, (range) => {
                     const materialized = materializeRichInlineLineRange(richInline, range)
                     const fragments = materialized.fragments.map((fragment, index): LineSegmentRange => {
                         const rangeFragment = range.fragments[index]!
@@ -508,7 +533,9 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
 
             const preText = lineTexts.join('\n')
             const totalLines = lineTexts.length
-            const totalHeight = totalLines * lineHeight
+            const contentHeight = totalLines * lineHeight + paddingBlock * 2
+            const totalHeight = getPreBlockHeight(contentHeight, lineHeight, options.maxBlockHeight)
+            preTop = avoidAtomicBlockPageBreak(preTop, totalHeight, options.maxBlockHeight, lineHeight)
             const first = allFragments[0]
             const last = allFragments[allFragments.length - 1]
 
@@ -522,6 +549,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
                 width: maxWidth,
                 top: preTop,
                 height: totalHeight,
+                inlineOffset,
                 segments: allFragments,
             })
             top = preTop + totalHeight
@@ -530,7 +558,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
         }
         const richInline = block.prepared
         if (!richInline) continue
-        walkRichInlineLineRanges(richInline, inlineSize, (range) => {
+        walkRichInlineLineRanges(richInline, blockInlineSize, (range) => {
             const materialized = materializeRichInlineLineRange(richInline, range)
             const fragments = materialized.fragments.map((fragment, index): LineSegmentRange => {
                 const rangeFragment = range.fragments[index]!
@@ -558,6 +586,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
                 width: materialized.width,
                 top,
                 height: lineHeight,
+                inlineOffset,
                 segments: fragments,
             })
             top += lineHeight
@@ -987,9 +1016,10 @@ function avoidAtomicBlockPageBreak(
     maxBlockHeight: number | undefined,
     lineHeight: number,
 ): number {
-    if (!maxBlockHeight || height >= maxBlockHeight) return top
+    if (!maxBlockHeight) return top
     const offset = top % maxBlockHeight
     if (offset === 0) return top
+    if (height >= maxBlockHeight) return top + Math.max(lineHeight, maxBlockHeight - offset)
     return offset + height > maxBlockHeight
         ? top + Math.max(lineHeight, maxBlockHeight - offset)
         : top
@@ -1096,6 +1126,64 @@ function getBlockPreset(
         blockGapBefore: 0,
         blockGapAfter: fontSize * 0.75,
     }
+}
+
+function getBlockInlineOffset(block: TextBlock, fontSize: number): number {
+    if (block.type !== 'listItem') return 0
+    return Math.max(0, block.depth ?? 0) * fontSize * 1.65
+}
+
+function getPreBlockPaddingBlock(block: TextBlock, fallbackFontSize: number): number {
+    const fontSize = block.style?.fontSize ?? fallbackFontSize
+    return fontSize * 0.75
+}
+
+function getPreBlockHeight(contentHeight: number, lineHeight: number, maxBlockHeight?: number): number {
+    const minHeight = lineHeight * 2
+    if (!maxBlockHeight) return Math.max(minHeight, contentHeight)
+    return Math.max(minHeight, Math.min(maxBlockHeight, contentHeight))
+}
+
+function getOrderedListStart(node: DocumentNode): number {
+    const start = parsePositiveInteger(node.attrs?.start)
+    return start ?? 1
+}
+
+function formatOrderedListMarker(value: number, type?: string): string {
+    const normalized = type?.trim()
+    if (normalized === 'A') return `${formatAlpha(value, true)}.`
+    if (normalized === 'a') return `${formatAlpha(value, false)}.`
+    if (normalized === 'I') return `${formatRoman(value).toUpperCase()}.`
+    if (normalized === 'i') return `${formatRoman(value).toLowerCase()}.`
+    return `${value}.`
+}
+
+function formatAlpha(value: number, uppercase: boolean): string {
+    let n = Math.max(1, Math.floor(value))
+    let result = ''
+    while (n > 0) {
+        n--
+        result = String.fromCharCode((uppercase ? 65 : 97) + (n % 26)) + result
+        n = Math.floor(n / 26)
+    }
+    return result
+}
+
+function formatRoman(value: number): string {
+    let n = Math.max(1, Math.min(3999, Math.floor(value)))
+    const pairs: Array<[number, string]> = [
+        [1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'],
+        [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'],
+        [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i'],
+    ]
+    let result = ''
+    for (const [number, roman] of pairs) {
+        while (n >= number) {
+            result += roman
+            n -= number
+        }
+    }
+    return result
 }
 
 function normalizeSegments(segments: TextSegment[]): TextSegment[] {
