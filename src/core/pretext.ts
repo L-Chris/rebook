@@ -108,6 +108,7 @@ const BLOCK_TAGS = new Set([
 ])
 
 const LIST_CONTAINER_TAGS = new Set(['dl', 'ol', 'ul'])
+const ANCHOR_TAGS = new Set(['a', 'anchor'])
 
 const DEFAULT_STYLE = {
     fontFamily: 'Georgia, serif',
@@ -141,11 +142,13 @@ export function extractDocumentBlocks(
         const normalized = type === 'pre' ? normalizePreSegments(segments) : normalizeSegments(segments)
         if (!normalized.some(segment => segment.text.trim())) return
         const preset = getBlockPreset(type, baseStyle, depth)
+        const attrs = getBlockAnchorAttrs(node)
+        const id = attrs?.id ?? `${type}-${nextId++}`
         blocks.push({
-            id: node.attrs?.id ?? `${type}-${nextId++}`,
+            id,
             type,
             depth,
-            attrs: node.attrs,
+            attrs,
             style: preset.style,
             blockGapBefore: preset.blockGapBefore,
             blockGapAfter: preset.blockGapAfter,
@@ -155,7 +158,7 @@ export function extractDocumentBlocks(
                 source: {
                     ...segment.source,
                     nodeType: segment.source?.nodeType ?? type,
-                    attrs: segment.source?.attrs ?? node.attrs,
+                    attrs: segment.source?.attrs ?? attrs,
                 },
             })),
         })
@@ -1131,6 +1134,28 @@ function getBlockPreset(
 function getBlockInlineOffset(block: TextBlock, fontSize: number): number {
     if (block.type !== 'listItem') return 0
     return Math.max(0, block.depth ?? 0) * fontSize * 1.65
+}
+
+function getBlockAnchorAttrs(node: DocumentNode): Readonly<Record<string, string>> | undefined {
+    const attrs = node.attrs ?? {}
+    if (attrs.id || attrs.name) return attrs
+    const anchor = findDescendantAnchor(node)
+    if (!anchor) return attrs
+    return {
+        ...attrs,
+        ...(anchor.attrs?.id ? { id: anchor.attrs.id } : {}),
+        ...(anchor.attrs?.name ? { name: anchor.attrs.name } : {}),
+    }
+}
+
+function findDescendantAnchor(node: DocumentNode): DocumentNode | null {
+    for (const child of node.children ?? []) {
+        if (isTextNode(child)) continue
+        if (ANCHOR_TAGS.has(child.type.toLowerCase()) && (child.attrs?.id || child.attrs?.name)) return child
+        const nested = findDescendantAnchor(child)
+        if (nested) return nested
+    }
+    return null
 }
 
 function getPreBlockPaddingBlock(block: TextBlock, fallbackFontSize: number): number {

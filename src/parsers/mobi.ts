@@ -1562,22 +1562,28 @@ class KF8 {
         }
     }
 
-    resolveHref(href: string): { index: number; anchor: (doc: unknown) => unknown } | null {
+    isSectionStart(rawIndex: number, fid: number, off: number): boolean {
+        return off === 0 && this.#sections[rawIndex]?.frags[0]?.index === fid
+    }
+
+    resolveHref(href: string): { index: number; anchor: ((doc: unknown) => unknown) | number } | null {
         const pos = parsePosURI(href)
         if (!pos) return null
         const rawIndex = this.getIndexByFID(pos.fid)
         const index = this.#sectionIndexMap.get(rawIndex)
         if (index == null) return null
+        if (this.isSectionStart(rawIndex, pos.fid, pos.off)) return { index, anchor: 0 }
         const anchor = () => this.#fragmentSelectors.get(pos.fid)?.get(pos.off) ?? null
         return { index, anchor }
     }
 
-    splitTOCHref(href: string): [number, string] | null {
+    splitTOCHref(href: string): [number, string | null] | null {
         const pos = parsePosURI(href)
         if (!pos) return null
         const rawIndex = this.getIndexByFID(pos.fid)
         const index = this.#sectionIndexMap.get(rawIndex)
         if (index == null) return null
+        if (this.isSectionStart(rawIndex, pos.fid, pos.off)) return [index, null]
         return [index, `${pos.fid}:${pos.off}`]
     }
 

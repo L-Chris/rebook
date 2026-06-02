@@ -165,6 +165,29 @@ describe('EPUB Pretext segments', () => {
         expect(lines.find(line => line.text.includes('How Ideas Become Content'))?.inlineOffset).toBeGreaterThan(0)
     })
 
+    itWithStructuredWriting('keeps empty anchor ids on heading blocks for TOC navigation', async () => {
+        const parser = new EPUBParser()
+        const data = await readFile(structuredWritingFixture)
+        const book = await parser.parse(data.buffer.slice(
+            data.byteOffset,
+            data.byteOffset + data.byteLength,
+        ), {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+
+        const introduction = book.sections.find(section => String(section.id).endsWith('pr02.html'))
+        expect(introduction).toBeDefined()
+
+        const blocks = await introduction!.getBlocks?.()
+        const complexity = blocks?.find(block =>
+            block.segments.map(segment => segment.text).join('').includes('3.\u00a0Complexity')
+        )
+
+        expect(complexity?.id).toBe('d0e230')
+        expect(complexity?.attrs?.id).toBe('d0e230')
+    })
+
     itWithStructuredWriting('extracts the publisher logo image after the table of contents', async () => {
         const parser = new EPUBParser()
         const data = await readFile(structuredWritingFixture)

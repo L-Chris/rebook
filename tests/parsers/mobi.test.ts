@@ -104,6 +104,19 @@ describe('MOBIParser', () => {
             expect(firstText).not.toContain('Pages')
             expect(firstText).not.toContain('Contents')
             expect(book.resolveHref?.('kindle:pos:fid:0005:off:0000000000')?.index).toBe(0)
+            expect(book.resolveHref?.('kindle:pos:fid:0006:off:0000000000')).toEqual({
+                index: 1,
+                anchor: 0,
+            })
+            expect(book.splitTOCHref?.('kindle:pos:fid:0006:off:0000000000')).toEqual([1, null])
+
+            const subSection = book.toc?.[4]?.subitems?.find(item =>
+                item.label === 'De-Traditionalisation and its Discontents')
+            expect(subSection).toBeDefined()
+            const resolvedSubSection = book.resolveHref?.(subSection!.href)
+            expect(resolvedSubSection?.index).toBe(4)
+            expect(resolvedSubSection?.anchor).not.toBe(0)
+            expect(book.splitTOCHref?.(subSection!.href)).toEqual([4, '17:0'])
         })
 
         it('should extract metadata: title', async () => {

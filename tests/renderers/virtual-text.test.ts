@@ -1027,6 +1027,42 @@ describe('VirtualTextRenderer', () => {
         book.destroy?.()
     })
 
+    it('navigates to Structured Writing TOC entries with empty child anchor elements', async () => {
+        const buf = await readFile('data/Structured Writing Rhetoric and Process.epub')
+        const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
+        const book = await epub().parse(ab, {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+        const target = flattenTestTOC(book.toc ?? []).find(item => item.label === '3. Complexity')
+        expect(target).toBeDefined()
+
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '960')
+        container.setAttribute('data-height', '480')
+        document.body.appendChild(container)
+
+        const reader = createReader({
+            container,
+            layout: 'paginated',
+            maxColumnCount: 2,
+            styles: { fontSize: '16px', lineHeight: 1.7, minColumnWidth: '320px', maxColumnWidth: '720px', margin: '32px' },
+        })
+        let activeLabel: string | null = null
+        reader.on('relocate', event => {
+            activeLabel = event.tocItem?.label ?? null
+        })
+
+        await reader.openBook(book)
+        await reader.goTo(target!.href)
+
+        expect(activeLabel).toBe('3. Complexity')
+        expect(container.textContent).toContain('3.\u00a0Complexity')
+
+        reader.destroy()
+        book.destroy?.()
+    }, 10000)
+
     it('does not replace an explicit null renderer TOC item with ReaderView section fallback', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
@@ -1108,6 +1144,79 @@ describe('VirtualTextRenderer', () => {
 
         expect(activeHref).toBe(cover!.href)
         expect(activeHref).not.toBe(last!.href)
+
+        reader.destroy()
+        book.destroy?.()
+    }, 10000)
+
+    it('activates the copyright TOC entry for Lifestyle Gurus section-start KF8 links', async () => {
+        const buf = await readFile('data/Lifestyle Gurus.azw3')
+        const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
+        const book = await mobi().parse(ab, {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+        const copyright = book.toc?.find(item => item.label === 'Copyright page')
+        expect(copyright).toBeDefined()
+
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '960')
+        container.setAttribute('data-height', '480')
+        document.body.appendChild(container)
+
+        const reader = createReader({
+            container,
+            layout: 'paginated',
+            maxColumnCount: 2,
+            styles: { fontSize: '16px', lineHeight: 1.7, minColumnWidth: '320px', maxColumnWidth: '720px', margin: '32px' },
+        })
+        let activeLabel: string | null = null
+        reader.on('relocate', event => {
+            activeLabel = event.tocItem?.label ?? null
+        })
+
+        await reader.openBook(book)
+        await reader.goTo(copyright!.href)
+        ;(container.firstElementChild as HTMLElement).dispatchEvent(new window.Event('scroll'))
+
+        expect(activeLabel).toBe('Copyright page')
+
+        reader.destroy()
+        book.destroy?.()
+    }, 10000)
+
+    it('navigates to Lifestyle Gurus KF8 subsection links with zero offsets', async () => {
+        const buf = await readFile('data/Lifestyle Gurus.azw3')
+        const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
+        const book = await mobi().parse(ab, {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+        const subsection = book.toc?.[4]?.subitems?.find(item =>
+            item.label === 'De-Traditionalisation and its Discontents')
+        expect(subsection).toBeDefined()
+
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '960')
+        container.setAttribute('data-height', '480')
+        document.body.appendChild(container)
+
+        const reader = createReader({
+            container,
+            layout: 'paginated',
+            maxColumnCount: 2,
+            styles: { fontSize: '16px', lineHeight: 1.7, minColumnWidth: '320px', maxColumnWidth: '720px', margin: '32px' },
+        })
+        let activeLabel: string | null = null
+        reader.on('relocate', event => {
+            activeLabel = event.tocItem?.label ?? null
+        })
+
+        await reader.openBook(book)
+        await reader.goTo(subsection!.href)
+
+        expect(activeLabel).toBe('De-Traditionalisation and its Discontents')
+        expect(container.textContent).toContain('De-Traditionalisation and its Discontents')
 
         reader.destroy()
         book.destroy?.()
