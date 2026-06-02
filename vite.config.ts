@@ -23,6 +23,7 @@ export default defineConfig({
         'parsers/fb2': resolve(__dirname, 'src/parsers/fb2.ts'),
         'parsers/mobi': resolve(__dirname, 'src/parsers/mobi.ts'),
         'renderers/browser': resolve(__dirname, 'src/renderers/browser/index.ts'),
+        'renderers/wechat-miniprogram': resolve(__dirname, 'src/renderers/wechat-miniprogram.ts'),
         'exporters/index': resolve(__dirname, 'src/exporters/index.ts'),
         'exporters/epub': resolve(__dirname, 'src/exporters/epub.ts'),
         search: resolve(__dirname, 'src/search.ts'),

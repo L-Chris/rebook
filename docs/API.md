@@ -780,6 +780,27 @@ await renderer.goTo(0)
 
 In `paginated` mode, this renderer hides free scrolling, maps wheel/`next()`/`prev()` to page turns, and keeps page-block padding so text is not clipped at the viewport edge. In `scrolled` mode it falls back to continuous vertical scrolling.
 
+### WeChat Mini Program Renderer
+
+`WechatMiniProgramRenderer` uses the same Pretext block layout as the browser renderer, but emits a serializable snapshot instead of DOM nodes. Mini Program pages can pass `setData` and render `snapshot.lines` in WXML.
+
+```typescript
+import { createWechatMiniProgramRenderer } from 'rebook/renderers/wechat-miniprogram'
+
+const renderer = createWechatMiniProgramRenderer({
+    width: 375,
+    height: 667,
+    wx,
+    setData: snapshot => this.setData({ reader: snapshot }),
+    styles: { fontSize: '18px', lineHeight: 1.6 },
+})
+
+await renderer.open(book)
+await renderer.goTo(0)
+```
+
+The constructor installs `installWechatMiniProgramPretextPolyfill(wx)` by default so `@chenglou/pretext` can measure text through `wx.createOffscreenCanvas` in Mini Program runtimes. Pass `installPretextPolyfill: false` if the host has already installed a compatible `OffscreenCanvas` global.
+
 ---
 
 ## Adapter System

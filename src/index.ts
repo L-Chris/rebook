@@ -67,6 +67,9 @@ export type {
     LineRange,
     VisibleLineWindow,
     PretextRichInlineLineRange,
+    WechatMiniProgramLike,
+    PretextMeasureContext,
+    WechatMiniProgramPretextPolyfillOptions,
 } from './core/pretext'
 
 export type {
@@ -146,6 +149,7 @@ export {
     prepareBlocks,
     layout,
     getVisibleLines,
+    installWechatMiniProgramPretextPolyfill,
 } from './core/pretext'
 
 // Search
@@ -222,3 +226,21 @@ export {
     createReader,
 } from './renderers/browser'
 export type { ReaderConfig } from './renderers/browser'
+
+// WeChat Mini Program renderer
+export {
+    WechatMiniProgramRenderer,
+    createWechatMiniProgramRenderer,
+} from './renderers/wechat-miniprogram'
+export type {
+    WechatMiniProgramRendererConfig,
+    WechatMiniProgramRendererSnapshot,
+    WechatMiniProgramLineNode,
+    WechatMiniProgramLineBase,
+    WechatMiniProgramTextLineNode,
+    WechatMiniProgramPreLineNode,
+    WechatMiniProgramSeparatorLineNode,
+    WechatMiniProgramImageLineNode,
+    WechatMiniProgramTableLineNode,
+    WechatMiniProgramTextFragment,
+} from './renderers/wechat-miniprogram'

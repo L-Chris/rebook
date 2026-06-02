@@ -172,6 +172,21 @@ const visible = getVisibleLines(lines, scrollTop, viewportHeight)
 
 浏览器包也导出了 `VirtualTextRenderer` / `createVirtualTextRenderer`，它基于这条管线只把可视行渲染为简单 DOM spans。
 
+微信小程序可使用无 DOM 渲染器：
+
+```typescript
+import { createWechatMiniProgramRenderer } from 'rebook/renderers/wechat-miniprogram'
+
+const renderer = createWechatMiniProgramRenderer({
+    width: 375,
+    height: 667,
+    wx,
+    setData: snapshot => this.setData({ reader: snapshot }),
+})
+```
+
+它会为 Pretext 安装基于 `wx.createOffscreenCanvas` 的 `OffscreenCanvas` polyfill，并输出可序列化的行节点供 WXML 渲染。
+
 ## 文档
 
 - [**API 参考**](./docs/API.md) — 完整 API 文档：解析器、渲染器、适配器、文档模型、Pretext 布局、错误类型、元数据标准化

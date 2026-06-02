@@ -100,6 +100,26 @@ export interface VisibleLineWindow {
     lines: readonly LineRange[]
 }
 
+export interface WechatMiniProgramLike {
+    createOffscreenCanvas?(options?: { type?: string; width?: number; height?: number }): {
+        getContext(type: '2d'): PretextMeasureContext | null
+    }
+}
+
+export interface PretextMeasureContext {
+    font: string
+    measureText(text: string): { width: number }
+}
+
+export interface WechatMiniProgramPretextPolyfillOptions {
+    /**
+     * Install an estimated text measurer when wx.createOffscreenCanvas is not
+     * available. This keeps layout usable on older base libraries, with less
+     * exact line breaks than native canvas measurement.
+     */
+    estimatedFallback?: boolean
+}
+
 const BLOCK_TAGS = new Set([
     'address', 'article', 'aside', 'blockquote', 'body', 'br', 'dd', 'div',
     'dl', 'dt', 'figcaption', 'figure', 'footer', 'h1', 'h2', 'h3', 'h4',
@@ -115,6 +135,55 @@ const DEFAULT_STYLE = {
     fontSize: 16,
     lineHeight: 1.6,
 } satisfies Required<Pick<TextStyle, 'fontFamily' | 'fontSize' | 'lineHeight'>>
+
+/**
+ * Installs the canvas shape expected by @chenglou/pretext in WeChat Mini Program
+ * runtimes, where OffscreenCanvas is commonly exposed through wx instead of as a
+ * browser global.
+ */
+export function installWechatMiniProgramPretextPolyfill(
+    wxLike: WechatMiniProgramLike = (globalThis as { wx?: WechatMiniProgramLike }).wx ?? {},
+    options: WechatMiniProgramPretextPolyfillOptions = {},
+): boolean {
+    if (typeof globalThis.OffscreenCanvas !== 'undefined') return false
+
+    const createNativeCanvas = wxLike.createOffscreenCanvas
+    if (createNativeCanvas) {
+        const PolyfilledOffscreenCanvas = class {
+            private readonly width: number
+            private readonly height: number
+
+            constructor(width = 1, height = 1) {
+                this.width = width
+                this.height = height
+            }
+
+            getContext(type: '2d'): PretextMeasureContext | null {
+                const canvas = createNativeCanvas({ type, width: this.width, height: this.height })
+                const context = canvas.getContext(type)
+                return context
+            }
+        }
+        ;(globalThis as { OffscreenCanvas?: typeof OffscreenCanvas }).OffscreenCanvas = PolyfilledOffscreenCanvas as unknown as typeof OffscreenCanvas
+        return true
+    }
+
+    if (options.estimatedFallback === false) return false
+
+    const EstimatedOffscreenCanvas = class {
+        getContext(type: '2d'): PretextMeasureContext | null {
+            if (type !== '2d') return null
+            return {
+                font: '16px serif',
+                measureText(text: string) {
+                    return { width: estimateTextWidth(text, getFontSizeFromCanvasFont(this.font)) }
+                },
+            }
+        }
+    }
+    ;(globalThis as { OffscreenCanvas?: typeof OffscreenCanvas }).OffscreenCanvas = EstimatedOffscreenCanvas as unknown as typeof OffscreenCanvas
+    return true
+}
 
 export function extractDocumentSegments(
     nodes: readonly DocumentNode[],
@@ -1011,6 +1080,12 @@ function estimateTextWidth(text: string, fontSize: number): number {
         if (/[\u4e00-\u9fff]/.test(char)) return sum + fontSize
         return sum + fontSize * 0.54
     }, 0)
+}
+
+function getFontSizeFromCanvasFont(font: string): number {
+    const match = font.match(/([\d.]+)px/)
+    const parsed = match ? Number(match[1]) : 16
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 16
 }
 
 function avoidAtomicBlockPageBreak(
