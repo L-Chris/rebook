@@ -18,10 +18,15 @@ export default defineConfig({
     lib: {
       entry: {
         index: resolve(__dirname, 'src/index.ts'),
+        'core/parser': resolve(__dirname, 'src/core/parser.ts'),
         'parsers/epub': resolve(__dirname, 'src/parsers/epub.ts'),
         'parsers/cbz': resolve(__dirname, 'src/parsers/cbz.ts'),
         'parsers/fb2': resolve(__dirname, 'src/parsers/fb2.ts'),
         'parsers/mobi': resolve(__dirname, 'src/parsers/mobi.ts'),
+        'adapters/index': resolve(__dirname, 'src/adapters/index.ts'),
+        'adapters/browser': resolve(__dirname, 'src/adapters/browser.ts'),
+        'adapters/node': resolve(__dirname, 'src/adapters/node.ts'),
+        'adapters/wechat-miniprogram': resolve(__dirname, 'src/adapters/wechat-miniprogram.ts'),
         'renderers/browser': resolve(__dirname, 'src/renderers/browser/index.ts'),
         'renderers/wechat-miniprogram': resolve(__dirname, 'src/renderers/wechat-miniprogram.ts'),
         'exporters/index': resolve(__dirname, 'src/exporters/index.ts'),

@@ -6,6 +6,40 @@
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "core/parser": [
+        "dist/core/parser.d.ts"
+      ],
+      "parsers/*": [
+        "dist/parsers/*.d.ts"
+      ],
+      "renderers/*": [
+        "dist/renderers/*.d.ts"
+      ],
+      "adapters": [
+        "dist/adapters/index.d.ts"
+      ],
+      "adapters/*": [
+        "dist/adapters/*.d.ts"
+      ],
+      "exporters": [
+        "dist/exporters/index.d.ts"
+      ],
+      "exporters/*": [
+        "dist/exporters/*.d.ts"
+      ],
+      "search": [
+        "dist/search.d.ts"
+      ],
+      "mcp": [
+        "dist/mcp.d.ts"
+      ],
+      "mcp-server": [
+        "dist/mcp-server.d.ts"
+      ]
+    }
+  },
   "bin": {
     "rebook-mcp": "./dist/mcp-server.js"
   },
@@ -18,6 +52,10 @@
       "types": "./dist/parsers/*.d.ts",
       "import": "./dist/parsers/*.js"
     },
+    "./core/parser": {
+      "types": "./dist/core/parser.d.ts",
+      "import": "./dist/core/parser.js"
+    },
     "./renderers/*": {
       "types": "./dist/renderers/*.d.ts",
       "import": "./dist/renderers/*.js"
@@ -29,6 +67,10 @@
     "./exporters/*": {
       "types": "./dist/exporters/*.d.ts",
       "import": "./dist/exporters/*.js"
+    },
+    "./adapters": {
+      "types": "./dist/adapters/index.d.ts",
+      "import": "./dist/adapters/index.js"
     },
     "./search": {
       "types": "./dist/search.d.ts",
