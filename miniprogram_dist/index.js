@@ -20119,7 +20119,7 @@ class WechatMiniProgramRenderer {
   }
   async goToFraction(fraction) {
     if (!this.progress) return;
-    const safe2 = clamp01(fraction);
+    const safe2 = clamp01$1(fraction);
     const [index, sectionFraction] = this.progress.getSection(safe2);
     await this.loadSection(index);
     this.restoreSectionFraction(sectionFraction);
@@ -20499,7 +20499,7 @@ class WechatMiniProgramRenderer {
     return maxScroll > 0 ? this.scrollTop / maxScroll : 0;
   }
   restoreSectionFraction(fraction) {
-    const safe2 = clamp01(fraction);
+    const safe2 = clamp01$1(fraction);
     if (this.layoutMode === "paginated") {
       this.pageIndex = Math.min(
         this.columnLayout.pageCount - 1,
@@ -20627,7 +20627,7 @@ function getElementLikeId(value2) {
 function unescapeCSSIdentifier(value2) {
   return value2.replace(/\\(.)/g, "$1");
 }
-function clamp01(value2) {
+function clamp01$1(value2) {
   return Math.max(0, Math.min(1, value2));
 }
 var lib = {};
@@ -27357,6 +27357,117 @@ class WechatMiniProgramURLFactory {
     return this.urls.get(url);
   }
 }
+const DEFAULT_BYTES_PER_ESTIMATED_PAGE = 2500;
+const DEFAULT_EPSILON = 1e-4;
+const normalizeNavigationHref = (href) => (href || "").split("#")[0];
+const normalizeBookPath = (href) => {
+  const path = normalizeNavigationHref(href).replace(/\\/g, "/").replace(/^\/+/, "");
+  const parts = [];
+  for (const part of path.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return parts.join("/");
+};
+function resolveBookNavigation(book, href) {
+  var _a2;
+  const resolved = (_a2 = book.resolveHref) == null ? void 0 : _a2.call(book, href);
+  if (typeof (resolved == null ? void 0 : resolved.index) === "number" && resolved.index >= 0) return resolved;
+  const normalizedHref = normalizeBookPath(href);
+  if (!normalizedHref) return null;
+  const sectionIndex = book.sections.findIndex((section) => {
+    var _a3;
+    const sectionId = normalizeBookPath(String((_a3 = section.id) != null ? _a3 : ""));
+    return sectionId === normalizedHref || sectionId.endsWith(`/${normalizedHref}`);
+  });
+  return sectionIndex >= 0 ? { index: sectionIndex } : null;
+}
+function getTotalFraction(location, sectionFractions) {
+  var _a2, _b2;
+  if (!location || location.index < 0) return 0;
+  if (typeof location.totalFraction === "number") return clamp01(location.totalFraction);
+  const sectionStart = (_a2 = sectionFractions[location.index]) != null ? _a2 : 0;
+  const nextSectionStart = (_b2 = sectionFractions[location.index + 1]) != null ? _b2 : 1;
+  const sectionSpan = Math.max(0, nextSectionStart - sectionStart);
+  return clamp01(sectionStart + sectionSpan * (location.fraction || 0));
+}
+function estimatePageLimitFraction(book, options = {}) {
+  var _a2, _b2;
+  const maxPages = options.maxPages;
+  if (!maxPages || maxPages <= 0) return 1;
+  const bytesPerEstimatedPage = (_a2 = options.bytesPerEstimatedPage) != null ? _a2 : DEFAULT_BYTES_PER_ESTIMATED_PAGE;
+  const totalSectionSize = book.sections.reduce((sum, section) => sum + (section.size || 0), 0);
+  const estimatedPages = ((_b2 = book.pageList) == null ? void 0 : _b2.length) || Math.ceil(totalSectionSize / bytesPerEstimatedPage);
+  return clamp01(maxPages / Math.max(estimatedPages, maxPages));
+}
+function getTrialPageStepFraction(book, options = {}) {
+  const maxPages = options.maxPages;
+  if (!maxPages || maxPages <= 0) return 1;
+  return estimatePageLimitFraction(book, options) / maxPages;
+}
+function getTargetStartFraction(book, sectionFractions, target) {
+  var _a2, _b2;
+  const index = typeof target === "number" ? target : (_a2 = resolveBookNavigation(book, target)) == null ? void 0 : _a2.index;
+  if (typeof index !== "number" || index < 0) return 0;
+  return (_b2 = sectionFractions[index]) != null ? _b2 : 0;
+}
+function canAccessTarget(book, sectionFractions, target, limitFraction, epsilon = DEFAULT_EPSILON) {
+  return getTargetStartFraction(book, sectionFractions, target) <= limitFraction + epsilon;
+}
+function getAllowedTOCHrefs(book, sectionFractions, limitFraction, epsilon = DEFAULT_EPSILON) {
+  return getTOCAccessItems(book, sectionFractions, limitFraction, epsilon).filter((item) => !item.disabled).map((item) => normalizeNavigationHref(item.href));
+}
+function getTOCAccessItems(book, sectionFractions, limitFraction, epsilon = DEFAULT_EPSILON, items = book.toc || [], depth = 0) {
+  return items.flatMap((item) => {
+    var _a2, _b2, _c;
+    const sectionIndex = (_b2 = (_a2 = resolveBookNavigation(book, item.href)) == null ? void 0 : _a2.index) != null ? _b2 : -1;
+    const sectionFraction = sectionIndex >= 0 ? (_c = sectionFractions[sectionIndex]) != null ? _c : 0 : 0;
+    const disabled = sectionIndex >= 0 && sectionFraction > limitFraction + epsilon;
+    return [
+      {
+        item,
+        label: item.label || "Untitled",
+        href: item.href,
+        depth,
+        sectionIndex,
+        sectionFraction,
+        disabled
+      },
+      ...getTOCAccessItems(book, sectionFractions, limitFraction, epsilon, item.subitems || [], depth + 1)
+    ];
+  });
+}
+function getCurrentTOCAccessItem(items, location) {
+  if (!items.length || !location || location.index < 0) return null;
+  const exact = items.find((item) => item.sectionIndex === location.index);
+  if (exact) return exact;
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index];
+    if (item && item.sectionIndex >= 0 && item.sectionIndex < location.index) return item;
+  }
+  return null;
+}
+function estimateNextTotalFractionFromSnapshot(snapshot, sectionFractions) {
+  var _a2;
+  if (snapshot.pageIndex < snapshot.pageCount - 1) {
+    return getTotalFraction({
+      index: snapshot.sectionIndex,
+      fraction: snapshot.pageCount > 1 ? (snapshot.pageIndex + 1) / (snapshot.pageCount - 1) : 0
+    }, sectionFractions);
+  }
+  if (snapshot.sectionIndex < snapshot.sectionCount - 1) {
+    return (_a2 = sectionFractions[snapshot.sectionIndex + 1]) != null ? _a2 : 1;
+  }
+  return 1;
+}
+function willForwardExceedLimit(location, sectionFractions, limitFraction, pageStepFraction, epsilon = DEFAULT_EPSILON) {
+  return getTotalFraction(location, sectionFractions) + pageStepFraction > limitFraction + epsilon;
+}
+function clamp01(value2) {
+  if (!Number.isFinite(value2)) return 0;
+  return Math.max(0, Math.min(1, value2));
+}
 var ch2 = {};
 var wk = (function(c, id, msg, transfer, cb) {
   var w = new Worker(ch2[id] || (ch2[id] = URL.createObjectURL(new Blob([
@@ -29695,12 +29806,25 @@ export {
   WechatMiniProgramDOMAdapter,
   WechatMiniProgramRenderer,
   WechatMiniProgramURLFactory,
+  canAccessTarget,
   cbz,
   createWechatMiniProgramRenderer,
   epub,
+  estimateNextTotalFractionFromSnapshot,
+  estimatePageLimitFraction,
   fb2,
+  getAllowedTOCHrefs,
+  getCurrentTOCAccessItem,
+  getTOCAccessItems,
+  getTargetStartFraction,
+  getTotalFraction,
+  getTrialPageStepFraction,
   isRebookDebugEnabled,
   mobi,
+  normalizeBookPath,
+  normalizeNavigationHref,
   registry,
-  setRebookDebug
+  resolveBookNavigation,
+  setRebookDebug,
+  willForwardExceedLimit
 };

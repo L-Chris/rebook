@@ -27,3 +27,24 @@ export {
     WechatMiniProgramDOMAdapter,
     WechatMiniProgramURLFactory,
 } from './adapters/wechat-miniprogram'
+
+export {
+    canAccessTarget,
+    estimateNextTotalFractionFromSnapshot,
+    estimatePageLimitFraction,
+    getAllowedTOCHrefs,
+    getCurrentTOCAccessItem,
+    getTargetStartFraction,
+    getTOCAccessItems,
+    getTotalFraction,
+    getTrialPageStepFraction,
+    normalizeBookPath,
+    normalizeNavigationHref,
+    resolveBookNavigation,
+    willForwardExceedLimit,
+} from './utils/reader'
+export type {
+    ReaderSnapshotLike,
+    ReaderTOCAccessItem,
+    TrialLimitOptions,
+} from './utils/reader'

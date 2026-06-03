@@ -194,6 +194,26 @@ export { createZipLoader, isZipFile } from './loaders'
 
 // Progress utilities
 export { SectionProgress, TOCProgress } from './utils/progress'
+export {
+    canAccessTarget,
+    estimateNextTotalFractionFromSnapshot,
+    estimatePageLimitFraction,
+    getAllowedTOCHrefs,
+    getCurrentTOCAccessItem,
+    getTargetStartFraction,
+    getTOCAccessItems,
+    getTotalFraction,
+    getTrialPageStepFraction,
+    normalizeBookPath,
+    normalizeNavigationHref,
+    resolveBookNavigation,
+    willForwardExceedLimit,
+} from './utils/reader'
+export type {
+    ReaderSnapshotLike,
+    ReaderTOCAccessItem,
+    TrialLimitOptions,
+} from './utils/reader'
 
 // Exporters
 export {
