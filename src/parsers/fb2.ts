@@ -16,6 +16,7 @@ import { createZipLoader, isZipFile } from '../loaders/zip-loader'
 import { normalizeWhitespace, getElementText, escapeAttr } from '../core/utils'
 import { AdapterRequiredError, UnsupportedInputError, ParseError } from '../core/errors'
 import { parseHTML, createSectionDocument } from '../core/document'
+import { getInputName, isBlobLike } from '../core/binary'
 
 // ============================================================================
 // Constants
@@ -24,6 +25,7 @@ import { parseHTML, createSectionDocument } from '../core/document'
 const XLINK_NS = 'http://www.w3.org/1999/xlink'
 const XHTML_NS = 'http://www.w3.org/1999/xhtml'
 const MIME_XHTML = 'application/xhtml+xml'
+const textEncoder = new TextEncoder()
 
 // ============================================================================
 // Utility functions
@@ -267,8 +269,9 @@ export class FB2Parser implements Parser {
             const lower = input.toLowerCase()
             return lower.endsWith('.fb2') || lower.endsWith('.fbz') || lower.endsWith('.fb2.zip')
         }
-        if (input instanceof File) {
-            const lower = input.name.toLowerCase()
+        const inputName = getInputName(input)
+        if (inputName) {
+            const lower = inputName.toLowerCase()
             if (lower.endsWith('.fb2') || lower.endsWith('.fbz') || lower.endsWith('.fb2.zip')) return true
         }
 
@@ -321,9 +324,12 @@ export class FB2Parser implements Parser {
         } else if (typeof input === 'string') {
             // Assume it's already XML content or a path
             xmlContent = input
+        } else if (isBlobLike(input)) {
+            xmlContent = input.text
+                ? await input.text()
+                : new TextDecoder().decode(await input.arrayBuffer())
         } else {
-            // Blob
-            xmlContent = await (input as Blob).text()
+            throw new UnsupportedInputError('Unsupported input type for FB2 parser')
         }
 
         // Parse XML
@@ -483,11 +489,10 @@ export class FB2Parser implements Parser {
 
                     // Create section HTML — return string directly, renderer creates URLs
                     const sectionHtml = buildXHTMLDocument(child, bodyType)
-                    const sectionBlob = new Blob([sectionHtml], { type: MIME_XHTML })
 
                     sections.push({
                         id: idx,
-                        size: sectionBlob.size,
+                        size: textEncoder.encode(sectionHtml).byteLength,
                         load: () => sectionHtml,
                         format: 'xhtml' as const,
                         createDocument: () => sectionHtml,
@@ -510,7 +515,6 @@ export class FB2Parser implements Parser {
                 const title = titleEl ? getElementText(titleEl) : `Notes ${bodyIdx}`
 
                 const sectionHtml = buildXHTMLDocument(bodyEl, bodyType || 'notes')
-                const sectionBlob = new Blob([sectionHtml], { type: MIME_XHTML })
 
                 // Collect IDs
                 for (const el of findAllByTag(bodyEl, '*')) {
@@ -520,7 +524,7 @@ export class FB2Parser implements Parser {
 
                 sections.push({
                     id: idx,
-                    size: sectionBlob.size,
+                    size: textEncoder.encode(sectionHtml).byteLength,
                     load: () => sectionHtml,
                     format: 'xhtml' as const,
                     createDocument: () => sectionHtml,

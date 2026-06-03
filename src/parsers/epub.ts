@@ -16,12 +16,14 @@ import type { DOMAdapter, XMLDocument, XMLElement } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
 import type { Loader } from '../core/loader'
 import { createZipLoader, isZipFile } from '../loaders/zip-loader'
-import { normalizeWhitespace, getElementText, cssEscape, replaceSeries } from '../core/utils'
+import { normalizeWhitespace, getElementText, cssEscape, replaceSeries, getMimeTypeFromPath } from '../core/utils'
 import { UnsupportedInputError, AdapterRequiredError, ParseError, CorruptedFileError } from '../core/errors'
 import { normalizeLanguage, normalizeTitle, normalizePublisher } from '../core/metadata'
 import { parseHTML, createSectionDocument } from '../core/document'
 import { extractDocumentBlocks, extractDocumentSegments } from '../core/pretext'
 import { parseSimpleClassRules, mergeStyleDeclarations, extractImportURLs, type SimpleClassRule } from '../core/css'
+import { isBlobLike } from '../core/binary'
+import { debugRebook, isRebookDebugEnabled } from '../core/debug'
 
 // ============================================================================
 // Constants
@@ -103,8 +105,28 @@ const resolveURL = (url: string, relativeTo: string): string => {
     }
 }
 
+const normalizeArchivePath = (path: string): string => {
+    const normalized = decodeURI(path)
+        .replace(/\\/g, '/')
+        .replace(/^[a-z]+:\/\/[^/]+\//i, '')
+        .replace(/^\/+/, '')
+        .replace(/\/{2,}/g, '/')
+
+    const parts: string[] = []
+    for (const part of normalized.split('/')) {
+        if (!part || part === '.') continue
+        if (part === '..') parts.pop()
+        else parts.push(part)
+    }
+    return parts.join('/')
+}
+
+function debugEPUB(message: string, details?: Record<string, unknown>): void {
+    debugRebook('epub', message, details)
+}
+
 /** Check if a URI is external */
-const isExternal = (uri: string): boolean => /^(?!blob)\w+:/i.test(uri)
+const isExternal = (uri: string): boolean => uri.startsWith('//') || /^(?!blob)\w+:/i.test(uri)
 
 function readImageSize(buf: ArrayBuffer): { width: number; height: number } | null {
     const bytes = new Uint8Array(buf)
@@ -168,10 +190,6 @@ const pathRelative = (from: string, to: string): string => {
     const i = (as.length > bs.length ? as : bs).findIndex((_, i) => as[i] !== bs[i])
     return i < 0 ? '' : Array(as.length - i).fill('..').concat(bs.slice(i)).join('/')
 }
-
-/** Duck-type check for Blob-like objects */
-const isBlobLike = (obj: unknown): obj is { arrayBuffer(): Promise<ArrayBuffer> } =>
-    obj != null && typeof obj === 'object' && 'arrayBuffer' in obj && typeof obj.arrayBuffer === 'function'
 
 // ============================================================================
 // Metadata Parsing
@@ -536,12 +554,12 @@ class ResourceLoader {
 
     private async loadReplaced(item: ManifestItem): Promise<string> {
         const { href, mediaType } = item
-        const str = await this.loadText(href)
-        if (!str) return ''
 
         // Parse and replace in HTML/XHTML/SVG
         const htmlTypes: string[] = [MIME.XHTML, MIME.HTML, MIME.SVG]
         if (htmlTypes.includes(mediaType)) {
+            const str = await this.loadText(href)
+            if (!str) return ''
             let doc: XMLDocument
             try {
                 doc = this.domAdapter.parseXML(str)
@@ -564,10 +582,30 @@ class ResourceLoader {
             const replace = async (el: XMLElement, attr: string) => {
                 const val = el.getAttribute(attr)
                 if (val) {
+                    const resolved = resolveURL(val, href)
+                    const replaced = await this.loadHref(val, href)
                     if (attr === 'src' || attr === 'poster' || attr === 'data') {
-                        el.setAttribute(`data-rebook-original-${attr}`, resolveURL(val, href))
+                        el.setAttribute(`data-rebook-original-${attr}`, resolved)
                     }
-                    el.setAttribute(attr, await this.loadHref(val, href))
+                    el.setAttribute(attr, replaced)
+                    if ((attr === 'src' || attr === 'poster' || attr === 'data') && replaced === val) {
+                        debugEPUB('resource attr kept original value', {
+                            base: href,
+                            tag: el.localName,
+                            attr,
+                            value: val,
+                            resolved,
+                        })
+                    } else if ((attr === 'src' || attr === 'poster' || attr === 'data') && isRebookDebugEnabled()) {
+                        debugEPUB('resource attr replaced', {
+                            base: href,
+                            tag: el.localName,
+                            attr,
+                            value: val,
+                            resolved,
+                            replaced,
+                        })
+                    }
                 }
             }
 
@@ -584,7 +622,7 @@ class ResourceLoader {
                     && !el.getAttribute('width') && !el.getAttribute('height')
                     && srcBefore) {
                     const imgHref = resolveURL(srcBefore, href)
-                    const imgItem = this.manifest.find(m => m.href === imgHref)
+                    const imgItem = this.findResourceItem(imgHref)
                     if (imgItem?.mediaType.startsWith('image/') && imgItem.mediaType !== MIME.SVG) {
                         try {
                             const blob = await this.loadBlob(imgItem.href)
@@ -648,6 +686,8 @@ class ResourceLoader {
 
         // CSS
         if (mediaType === MIME.CSS) {
+            const str = await this.loadText(href)
+            if (!str) return ''
             const result = await this.replaceCSS(str, href)
             return this.createURL(href, result, mediaType)
         }
@@ -662,9 +702,48 @@ class ResourceLoader {
     private async loadHref(url: string, base: string): Promise<string> {
         if (!url || url.startsWith('#') || isExternal(url)) return url
         const href = resolveURL(url, base)
-        const item = this.manifest.find(m => m.href === href)
-        if (!item) return url
+        const item = this.findResourceItem(href)
+        if (!item) {
+            debugEPUB('resource item not found', {
+                base,
+                url,
+                resolved: href,
+                normalized: normalizeArchivePath(href),
+                manifestSample: this.manifest.slice(0, 8).map(item => item.href),
+                entrySample: Array.from(this.entries.keys()).slice(0, 8),
+            })
+            return url
+        }
         return (await this.loadItem(item)) || href
+    }
+
+    private findResourceItem(href: string): ManifestItem | undefined {
+        const normalizedHref = normalizeArchivePath(href)
+        const manifestItem = this.manifest.find(m => normalizeArchivePath(m.href) === normalizedHref)
+            ?? this.manifest.find(m => normalizeArchivePath(m.href).endsWith(`/${normalizedHref}`))
+        if (manifestItem) return manifestItem
+
+        const exactEntry = this.entries.get(normalizedHref)
+        const suffixEntry = exactEntry
+            ? undefined
+            : Array.from(this.entries.values()).find(entry =>
+                normalizeArchivePath(entry.filename).endsWith(`/${normalizedHref}`))
+        const entry = exactEntry ?? suffixEntry
+        if (!entry) return undefined
+
+        const entryHref = normalizeArchivePath(entry.filename)
+        if (entryHref !== normalizedHref) {
+            debugEPUB('resource entry matched by suffix', {
+                requested: href,
+                normalized: normalizedHref,
+                matched: entryHref,
+            })
+        }
+        return {
+            id: entryHref,
+            href: entryHref,
+            mediaType: getMimeTypeFromPath(entryHref),
+        }
     }
 
     private async applyLinkedStyles(doc: XMLDocument, href: string): Promise<void> {
@@ -676,9 +755,9 @@ class ResourceLoader {
             const url = el.getAttribute('href')
             if (!url || isExternal(url)) continue
             const cssHref = resolveURL(url, href)
-            const item = this.manifest.find(m => m.href === cssHref)
+            const item = this.findResourceItem(cssHref)
             if (!item || item.mediaType !== MIME.CSS) continue
-            const css = await this.loadCSSWithImports(cssHref)
+            const css = await this.loadCSSWithImports(item.href)
             if (css) cssTexts.push(css)
         }
 
@@ -707,9 +786,9 @@ class ResourceLoader {
         const imports: string[] = []
         for (const url of extractImportURLs(css)) {
             const importHref = resolveURL(url, href)
-            const item = this.manifest.find(m => m.href === importHref)
+            const item = this.findResourceItem(importHref)
             if (item?.mediaType === MIME.CSS) {
-                imports.push(await this.loadCSSWithImports(importHref, seen))
+                imports.push(await this.loadCSSWithImports(item.href, seen))
             }
         }
         return [...imports, css].filter(Boolean).join('\n')
@@ -875,13 +954,16 @@ class EPUBBook implements Book {
         if ($manifest) {
             this.manifest = Array.from($manifest.children)
                 .filter(el => el.localName === 'item')
-                .map(el => ({
-                    id: el.getAttribute('id') ?? '',
-                    href: resolveURL(el.getAttribute('href') ?? '', this.opfPath),
-                    mediaType: el.getAttribute('media-type') ?? '',
-                    properties: el.getAttribute('properties')?.split(/\s/),
-                    mediaOverlay: el.getAttribute('media-overlay') ?? undefined,
-                }))
+                .map(el => {
+                    const href = el.getAttribute('href') ?? ''
+                    return {
+                        id: el.getAttribute('id') ?? '',
+                        href: this.resolveManifestHref(href),
+                        mediaType: el.getAttribute('media-type') ?? '',
+                        properties: el.getAttribute('properties')?.split(/\s/),
+                        mediaOverlay: el.getAttribute('media-overlay') ?? undefined,
+                    }
+                })
             this.manifestById = new Map(this.manifest.map(m => [m.id, m]))
         }
 
@@ -951,8 +1033,8 @@ class EPUBBook implements Book {
                 if (navDoc) {
                     const resolve = (url: string) => resolveURL(url, navItem.href)
                     const nav = parseNav(navDoc, resolve)
-                    this.toc = nav.toc ?? undefined
-                    this.pageList = nav.pageList ?? undefined
+                    this.toc = this.normalizeTOCItems(nav.toc ?? undefined)
+                    this.pageList = this.normalizeTOCItems(nav.pageList ?? undefined)
                     this.landmarks = nav.landmarks ?? undefined
                 }
             } catch (e) {
@@ -967,8 +1049,8 @@ class EPUBBook implements Book {
                 if (ncxDoc) {
                     const resolve = (url: string) => resolveURL(url, ncxItem.href)
                     const ncx = parseNCX(ncxDoc, resolve)
-                    this.toc = ncx.toc ?? undefined
-                    this.pageList = ncx.pageList ?? undefined
+                    this.toc = this.normalizeTOCItems(ncx.toc ?? undefined)
+                    this.pageList = this.normalizeTOCItems(ncx.pageList ?? undefined)
                 }
             } catch (e) {
                 console.warn('Failed to parse NCX:', e)
@@ -989,11 +1071,50 @@ class EPUBBook implements Book {
         return str
     }
 
+    private resolveManifestHref(href: string): string {
+        const resolved = resolveURL(href, this.opfPath)
+        return this.findExistingEntryHref(resolved)
+            ?? this.findExistingEntryHref(href)
+            ?? resolved
+    }
+
+    private findExistingEntryHref(href: string): string | null {
+        const normalized = normalizeArchivePath(href)
+        if (!normalized) return null
+        if (this.loader.getSize(normalized) > 0) return normalized
+
+        const exact = this.loader.entries.find(entry => normalizeArchivePath(entry.filename) === normalized)
+        if (exact) return exact.filename
+
+        const suffix = `/${normalized}`
+        const match = this.loader.entries.find(entry => normalizeArchivePath(entry.filename).endsWith(suffix))
+        return match?.filename ?? null
+    }
+
+    private normalizeNavigationHref(href: string): string {
+        const [path, hash] = href.split('#')
+        if (!path) return href
+        const normalized = this.findExistingEntryHref(path) ?? path
+        return hash ? `${normalized}#${hash}` : normalized
+    }
+
+    private normalizeTOCItems(items?: readonly TOCItem[] | null): TOCItem[] | undefined {
+        return items?.map(item => ({
+            ...item,
+            href: this.normalizeNavigationHref(item.href),
+            subitems: this.normalizeTOCItems(item.subitems ?? undefined),
+        }))
+    }
+
     resolveHref(href: string): ResolvedNavigation | null {
         const [path, hash] = href.split('#')
-        const item = this.manifest.find(m => m.href === decodeURI(path))
-        if (!item) return null
-        const index = this.sections.findIndex(s => s.id === item.href)
+        const normalizedPath = normalizeArchivePath(path)
+        const item = this.manifest.find(m => normalizeArchivePath(m.href) === normalizedPath)
+            ?? this.manifest.find(m => normalizeArchivePath(m.href).endsWith(`/${normalizedPath}`))
+        const sectionHref = item?.href
+            ?? this.sections.find(section => normalizeArchivePath(String(section.id)).endsWith(`/${normalizedPath}`))?.id
+        if (!sectionHref) return null
+        const index = this.sections.findIndex(s => s.id === sectionHref)
         if (index < 0) return null
         const anchor = hash
             ? (doc: unknown) => (doc as XMLDocument).getElementById(hash)

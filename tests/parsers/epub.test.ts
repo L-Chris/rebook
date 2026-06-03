@@ -2,7 +2,8 @@
  * EPUB Parser unit tests
  */
 
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
+import { BlobWriter, TextReader, ZipWriter } from '@zip.js/zip.js'
 import { EPUBParser, epub } from '../../src/parsers/epub'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import { createTestEPUB, createTestEPUBWithNCX } from '../fixtures/epub-fixture'
@@ -33,6 +34,18 @@ describe('EPUBParser', () => {
         it('should return true for valid EPUB ArrayBuffer', async () => {
             const epubBuffer = await createTestEPUB()
             expect(await parser.canParse(epubBuffer)).toBe(true)
+        })
+
+        it('should detect ArrayBuffer input when File and Blob globals are unavailable', async () => {
+            const epubBuffer = await createTestEPUB()
+
+            vi.stubGlobal('File', undefined)
+            vi.stubGlobal('Blob', undefined)
+            try {
+                await expect(parser.canParse(epubBuffer)).resolves.toBe(true)
+            } finally {
+                vi.unstubAllGlobals()
+            }
         })
 
         it('should return false for invalid ArrayBuffer', async () => {
@@ -96,6 +109,20 @@ describe('EPUBParser', () => {
             expect(book.toc?.length).toBe(2)
             expect(book.toc?.[0].label).toBe('NCX Chapter 1')
             expect(book.toc?.[1].label).toBe('NCX Chapter 2')
+        })
+
+        it('resolves manifest resources by matching actual archive entry suffixes', async () => {
+            const epubBuffer = await createPrefixedEntryEPUB()
+            const book = await parser.parse(epubBuffer, { domAdapter, urlFactory })
+
+            expect(book.sections[0].id).toBe('OEBPS/Text/chapter.xhtml')
+            expect(book.sections[0].size).toBeGreaterThan(0)
+            expect(book.toc?.[0]).toMatchObject({
+                label: 'Prefixed Chapter',
+                href: 'OEBPS/Text/chapter.xhtml',
+            })
+            expect(book.resolveHref?.('Text/chapter.xhtml')?.index).toBe(0)
+            await expect(book.sections[0].loadText?.()).resolves.toContain('Recovered prefixed chapter')
         })
 
         it('should create correct number of sections', async () => {
@@ -265,3 +292,49 @@ describe('EPUBParser', () => {
         })
     })
 })
+
+async function createPrefixedEntryEPUB(): Promise<ArrayBuffer> {
+    const containerXML = `<?xml version="1.0" encoding="UTF-8"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+  <rootfiles>
+    <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`
+    const opf = `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">prefixed-entry-book</dc:identifier>
+    <dc:title>Prefixed Entry Book</dc:title>
+    <dc:language>zh-CN</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="chapter"/>
+  </spine>
+</package>`
+    const ncx = `<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <docTitle><text>Prefixed Entry Book</text></docTitle>
+  <navMap>
+    <navPoint id="navpoint-1" playOrder="1">
+      <navLabel><text>Prefixed Chapter</text></navLabel>
+      <content src="Text/chapter.xhtml"/>
+    </navPoint>
+  </navMap>
+</ncx>`
+    const chapter = '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Recovered prefixed chapter</p></body></html>'
+
+    const blobWriter = new BlobWriter()
+    const zipWriter = new ZipWriter(blobWriter)
+    await zipWriter.add('mimetype', new TextReader('application/epub+zip'), { level: 0 })
+    await zipWriter.add('META-INF/container.xml', new TextReader(containerXML))
+    await zipWriter.add('content.opf', new TextReader(opf))
+    await zipWriter.add('OEBPS/toc.ncx', new TextReader(ncx))
+    await zipWriter.add('OEBPS/Text/chapter.xhtml', new TextReader(chapter))
+    await zipWriter.close()
+    const blob = await blobWriter.getData()
+    return blob.arrayBuffer()
+}

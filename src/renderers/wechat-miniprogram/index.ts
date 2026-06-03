@@ -658,7 +658,7 @@ export class WechatMiniProgramRenderer implements Renderer {
         const row = Math.floor(sourceColumn / columns)
         const column = sourceColumn % columns
         return {
-            top: row * pageHeight + pagePaddingBlock + (line.top % columnHeight),
+            top: (row - this.pageIndex) * pageHeight + pagePaddingBlock + (line.top % columnHeight),
             left: column * (columnWidth + gap),
         }
     }
@@ -741,8 +741,9 @@ function getTranslationPrefetchPageCount(book: Book): number {
         : 0
 }
 
-function parseCSSPixels(value: string | undefined, fallback: number): number {
+function parseCSSPixels(value: string | number | undefined, fallback: number): number {
     if (!value) return fallback
+    if (typeof value === 'number') return Number.isFinite(value) ? value : fallback
     const match = value.trim().match(/^([\d.]+)(px)?$/)
     if (!match) return fallback
     const parsed = Number(match[1])

@@ -14,6 +14,7 @@ import { createZipLoader, isZipFile } from '../loaders/zip-loader'
 import { UnsupportedInputError, ParseError, AdapterRequiredError } from '../core/errors'
 import { normalizeContributors } from '../core/metadata'
 import { getMimeTypeFromPath } from '../core/utils'
+import { getInputName } from '../core/binary'
 
 // ============================================================================
 // Image extensions
@@ -145,8 +146,9 @@ export class CBZParser implements Parser {
         if (typeof input === 'string') {
             return input.toLowerCase().endsWith('.cbz')
         }
-        if (input instanceof File) {
-            return input.name.toLowerCase().endsWith('.cbz')
+        const inputName = getInputName(input)
+        if (inputName) {
+            return inputName.toLowerCase().endsWith('.cbz')
         }
 
         // Check if it's a zip with image files

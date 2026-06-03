@@ -165,6 +165,11 @@ export type {
     ChapterSearchResult,
 } from './search'
 
+export {
+    setRebookDebug,
+    isRebookDebugEnabled,
+} from './core/debug'
+
 // MCP helpers
 export {
     createBookMCPTools,

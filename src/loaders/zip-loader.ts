@@ -19,22 +19,20 @@
 
 import type { Loader, LoaderEntry } from '../core/loader'
 import { CorruptedFileError, AdapterRequiredError } from '../core/errors'
-
-/** Internal zip entry shape */
-interface ZipFileEntry {
-    filename: string
-    uncompressedSize: number
-    compressedSize: number
-    compressionMethod: number
-    getData(writer: unknown): Promise<unknown>
-}
+import {
+    ArrayBufferBlob,
+    type BlobLike,
+    hasBlobConstructor,
+    toBlobLike,
+} from '../core/binary'
 
 /** Input types accepted by the zip loader */
-export type ZipInput = File | Blob | ArrayBuffer
+export type ZipInput = File | Blob | ArrayBuffer | BlobLike
 
-/** Duck-type check for Blob-like objects */
-const isBlobLike = (obj: unknown): obj is Blob =>
-    obj != null && typeof obj === 'object' && 'arrayBuffer' in obj && typeof (obj as Blob).slice === 'function'
+interface LocalHeaderEntry {
+    offset: number
+    uncompressedSize: number
+}
 
 // ============================================================================
 // Zip format constants
@@ -59,7 +57,7 @@ const DATA_DESCRIPTOR_SIG = 0x08074b50
  *
  * @internal
  */
-export async function findPrependedDataSize(blob: Blob): Promise<number> {
+export async function findPrependedDataSize(blob: BlobLike): Promise<number> {
     // Read first 64KB to find the first PK\x03\x04
     const headerBuf = await blob.slice(0, Math.min(blob.size, 64 * 1024)).arrayBuffer()
     const bytes = new Uint8Array(headerBuf)
@@ -142,7 +140,7 @@ export function correctPrependedData(buffer: ArrayBuffer, delta: number): ArrayB
  *
  * @internal
  */
-export async function readZipComment(blob: Blob): Promise<string | null> {
+export async function readZipComment(blob: BlobLike): Promise<string | null> {
     // EOCD is at least 22 bytes, at most 22 + 65535 (max comment)
     const readSize = Math.min(blob.size, 22 + 65535)
     const start = blob.size - readSize
@@ -174,8 +172,8 @@ export async function readZipComment(blob: Blob): Promise<string | null> {
  *
  * @internal
  */
-export async function buildLocalHeaderMap(blob: Blob): Promise<Map<string, number>> {
-    const map = new Map<string, number>()
+export async function buildLocalHeaderMap(blob: BlobLike): Promise<Map<string, LocalHeaderEntry>> {
+    const map = new Map<string, LocalHeaderEntry>()
     const CHUNK = 256 * 1024
     const size = blob.size
     const positions: number[] = []
@@ -199,6 +197,7 @@ export async function buildLocalHeaderMap(blob: Blob): Promise<Map<string, numbe
         const headerBuf = await blob.slice(pos, pos + LOCAL_HEADER_SIZE).arrayBuffer()
         const header = new DataView(headerBuf)
         if (header.getUint32(0, true) !== LOCAL_FILE_HEADER_SIG) continue
+        const uncompressedSize = header.getUint32(22, true)
         const fileNameLength = header.getUint16(26, true)
         if (fileNameLength === 0 || fileNameLength > 1024) continue
         if (pos + LOCAL_HEADER_SIZE + fileNameLength > size) continue
@@ -206,20 +205,70 @@ export async function buildLocalHeaderMap(blob: Blob): Promise<Map<string, numbe
         const filename = new TextDecoder().decode(nameBuf)
         // Skip false positives: null bytes or Unicode replacement chars from compressed data
         if (!filename.includes('\0') && !/[�]/.test(filename)) {
-            map.set(filename, pos)
+            map.set(filename, { offset: pos, uncompressedSize })
         }
     }
 
+    await applyCentralDirectoryMetadata(blob, map)
+
     return map
+}
+
+async function applyCentralDirectoryMetadata(
+    blob: BlobLike,
+    localHeaderMap: Map<string, LocalHeaderEntry>,
+): Promise<void> {
+    const readSize = Math.min(blob.size, EOCD_MIN_SIZE + 65535)
+    const start = blob.size - readSize
+    const buf = await blob.slice(start).arrayBuffer()
+    const bytes = new Uint8Array(buf)
+    const view = new DataView(buf)
+
+    let eocdOffset = -1
+    for (let i = buf.byteLength - EOCD_MIN_SIZE; i >= 0; i--) {
+        if (bytes[i] === 0x50 && bytes[i + 1] === 0x4b &&
+            bytes[i + 2] === 0x05 && bytes[i + 3] === 0x06) {
+            eocdOffset = start + i
+            break
+        }
+    }
+    if (eocdOffset < 0) return
+
+    const eocdLocalOffset = eocdOffset - start
+    const entryCount = view.getUint16(eocdLocalOffset + 10, true)
+    const cdOffset = view.getUint32(eocdLocalOffset + 16, true)
+
+    let pos = cdOffset
+    for (let i = 0; i < entryCount; i++) {
+        if (pos + 46 > blob.size) break
+        const headerBuf = await blob.slice(pos, pos + 46).arrayBuffer()
+        const header = new DataView(headerBuf)
+        if (header.getUint32(0, true) !== CENTRAL_DIR_SIG) break
+
+        const uncompressedSize = header.getUint32(24, true)
+        const fileNameLength = header.getUint16(28, true)
+        const extraFieldLength = header.getUint16(30, true)
+        const commentLength = header.getUint16(32, true)
+        const localOffset = header.getUint32(42, true)
+        const nameBuf = await blob.slice(pos + 46, pos + 46 + fileNameLength).arrayBuffer()
+        const filename = new TextDecoder().decode(nameBuf)
+        const existing = localHeaderMap.get(filename)
+        if (existing) {
+            existing.uncompressedSize = uncompressedSize
+        } else {
+            localHeaderMap.set(filename, { offset: localOffset, uncompressedSize })
+        }
+        pos += 46 + fileNameLength + extraFieldLength + commentLength
+    }
 }
 
 /**
  * Find the next local file header offset after the given position.
  * Used to determine compressed data boundaries when data descriptors are present.
  */
-function findNextLFHOffset(localHeaderMap: Map<string, number>, afterOffset: number): number {
+function findNextLFHOffset(localHeaderMap: Map<string, LocalHeaderEntry>, afterOffset: number): number {
     let next = -1
-    for (const offset of localHeaderMap.values()) {
+    for (const { offset } of localHeaderMap.values()) {
         if (offset > afterOffset && (next === -1 || offset < next)) {
             next = offset
         }
@@ -239,9 +288,9 @@ function findNextLFHOffset(localHeaderMap: Map<string, number>, afterOffset: num
  * @internal
  */
 export async function extractDirectly(
-    blob: Blob,
+    blob: BlobLike,
     localOffset: number,
-    localHeaderMap?: Map<string, number>,
+    localHeaderMap?: Map<string, LocalHeaderEntry>,
 ): Promise<ArrayBuffer> {
     // Read local file header
     const headerBuf = await blob.slice(localOffset, localOffset + LOCAL_HEADER_SIZE).arrayBuffer()
@@ -318,12 +367,18 @@ export async function extractDirectly(
 
     // Method 8: deflate
     if (compressionMethod === 8) {
-        if (typeof DecompressionStream === 'undefined') {
-            throw new AdapterRequiredError('DecompressionStream API')
+        if (compressedData.stream && typeof DecompressionStream !== 'undefined' && typeof Response !== 'undefined') {
+            const stream = compressedData.stream()
+                .pipeThrough(new DecompressionStream('deflate-raw') as unknown as ReadableWritablePair<Uint8Array, Uint8Array>)
+            return new Response(stream).arrayBuffer()
         }
-        const stream = compressedData.stream()
-            .pipeThrough(new DecompressionStream('deflate-raw'))
-        return new Response(stream).arrayBuffer()
+        try {
+            const fflate = await import('fflate')
+            const inflated = fflate.inflateSync(new Uint8Array(await compressedData.arrayBuffer()))
+            return inflated.buffer.slice(inflated.byteOffset, inflated.byteOffset + inflated.byteLength) as ArrayBuffer
+        } catch {
+            throw new AdapterRequiredError('DecompressionStream API or fflate')
+        }
     }
 
     throw new CorruptedFileError(`Unsupported compression method: ${compressionMethod}`, 'zip')
@@ -338,20 +393,20 @@ export async function extractDirectly(
  * Used as last resort when the Central Directory is completely unreadable.
  */
 function buildFallbackLoader(
-    blob: Blob,
-    localHeaderMap: Map<string, number>,
+    blob: BlobLike,
+    localHeaderMap: Map<string, LocalHeaderEntry>,
 ): Loader {
     const filenames = [...localHeaderMap.keys()]
     const entries: LoaderEntry[] = filenames.map(filename => ({
         filename,
-        size: 0, // Unknown without CD
+        size: localHeaderMap.get(filename)?.uncompressedSize ?? 0,
     }))
 
     const loadText = async (filename: string): Promise<string | null> => {
-        const localOffset = localHeaderMap.get(filename)
-        if (localOffset === undefined) return null
+        const entry = localHeaderMap.get(filename)
+        if (!entry) return null
         try {
-            const buffer = await extractDirectly(blob, localOffset, localHeaderMap)
+            const buffer = await extractDirectly(blob, entry.offset, localHeaderMap)
             return new TextDecoder().decode(buffer)
         } catch {
             return null
@@ -359,17 +414,17 @@ function buildFallbackLoader(
     }
 
     const loadBlob = async (filename: string, type?: string): Promise<Blob | null> => {
-        const localOffset = localHeaderMap.get(filename)
-        if (localOffset === undefined) return null
+        const entry = localHeaderMap.get(filename)
+        if (!entry) return null
         try {
-            const buffer = await extractDirectly(blob, localOffset, localHeaderMap)
-            return new Blob([buffer], { type: type ?? '' })
+            const buffer = await extractDirectly(blob, entry.offset, localHeaderMap)
+            return createOutputBlob(buffer, type)
         } catch {
             return null
         }
     }
 
-    const getSize = (_filename: string): number => 0
+    const getSize = (filename: string): number => localHeaderMap.get(filename)?.uncompressedSize ?? 0
 
     return { entries, loadText, loadBlob, getSize, getComment: () => readZipComment(blob) }
 }
@@ -389,98 +444,11 @@ function buildFallbackLoader(
  * 3. Full local-header-only loader (completely destroyed Central Directory)
  */
 export async function createZipLoader(input: ZipInput): Promise<Loader> {
-    const { configure, ZipReader, BlobReader, Uint8ArrayReader, TextWriter, BlobWriter } =
-        await import('@zip.js/zip.js')
-
-    configure({ useWebWorkers: false })
-
-    // Create the Blob for fallback extraction
-    const blob: Blob = isBlobLike(input)
-        ? input
-        : new Blob([input])
-
-    // Build local header map upfront — needed for all fallback paths
+    // Use local-header scanning instead of @zip.js/zip.js so Mini Program
+    // bundles do not pull in ESM-only code that references import.meta.
+    const blob = toBlobLike(input)
     const localHeaderMap = await buildLocalHeaderMap(blob)
-
-    // --- Try zip.js with original input ---
-    let reader: InstanceType<typeof ZipReader>
-    let entries: ZipFileEntry[]
-
-    try {
-        reader = isBlobLike(input)
-            ? new ZipReader(new BlobReader(input))
-            : new ZipReader(new Uint8ArrayReader(new Uint8Array(input)))
-        entries = await reader.getEntries() as unknown as ZipFileEntry[]
-    } catch {
-        // --- Try prepended data correction ---
-        const delta = await findPrependedDataSize(blob)
-        if (delta > 0) {
-            try {
-                const originalBuf = await blob.arrayBuffer()
-                const corrected = correctPrependedData(originalBuf, delta)
-                const correctedBlob = new Blob([corrected])
-                reader = new ZipReader(new BlobReader(correctedBlob))
-                entries = await reader.getEntries() as unknown as ZipFileEntry[]
-            } catch {
-                // --- Last resort: local-header-only fallback ---
-                return buildFallbackLoader(blob, localHeaderMap)
-            }
-        } else {
-            // --- Last resort: local-header-only fallback ---
-            return buildFallbackLoader(blob, localHeaderMap)
-        }
-    }
-
-    const map = new Map(entries.map(entry => [entry.filename, entry]))
-
-    const loadText = async (filename: string): Promise<string | null> => {
-        const entry = map.get(filename)
-        if (!entry) return null
-        try {
-            return await entry.getData(new TextWriter()) as string
-        } catch {
-            const localOffset = localHeaderMap.get(filename)
-            if (localOffset === undefined) return null
-            try {
-                const buffer = await extractDirectly(blob, localOffset, localHeaderMap)
-                return new TextDecoder().decode(buffer)
-            } catch {
-                return null
-            }
-        }
-    }
-
-    const loadBlob = async (filename: string, type?: string): Promise<Blob | null> => {
-        const entry = map.get(filename)
-        if (!entry) return null
-        try {
-            return await entry.getData(new BlobWriter(type)) as Blob
-        } catch {
-            const localOffset = localHeaderMap.get(filename)
-            if (localOffset === undefined) return null
-            try {
-                const buffer = await extractDirectly(blob, localOffset, localHeaderMap)
-                return new Blob([buffer], { type: type ?? '' })
-            } catch {
-                return null
-            }
-        }
-    }
-
-    const getSize = (filename: string): number => {
-        return map.get(filename)?.uncompressedSize ?? 0
-    }
-
-    return {
-        entries: entries.map(entry => ({
-            filename: entry.filename,
-            size: entry.uncompressedSize,
-        })),
-        loadText,
-        loadBlob,
-        getSize,
-        getComment: () => readZipComment(blob),
-    }
+    return buildFallbackLoader(blob, localHeaderMap)
 }
 
 /**
@@ -488,13 +456,14 @@ export async function createZipLoader(input: ZipInput): Promise<Loader> {
  */
 export async function isZipFile(input: ZipInput): Promise<boolean> {
     let buffer: ArrayBuffer
-    if (isBlobLike(input)) {
-        if (input.size < 4) return false
-        buffer = await input.slice(0, 4).arrayBuffer()
-    } else {
-        if (input.byteLength < 4) return false
-        buffer = input.slice(0, 4)
-    }
+    const blob = toBlobLike(input)
+    if (blob.size < 4) return false
+    buffer = await blob.slice(0, 4).arrayBuffer()
     const arr = new Uint8Array(buffer)
     return arr[0] === 0x50 && arr[1] === 0x4b && arr[2] === 0x03 && arr[3] === 0x04
+}
+
+function createOutputBlob(buffer: ArrayBuffer, type = ''): Blob {
+    if (hasBlobConstructor()) return new Blob([buffer], { type })
+    return new ArrayBufferBlob(buffer, type) as unknown as Blob
 }

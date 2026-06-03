@@ -5,14 +5,10 @@
  * measurement are delegated to @chenglou/pretext.
  */
 
-import type { LayoutCursor } from '@chenglou/pretext'
 import {
-    materializeRichInlineLineRange,
-    prepareRichInline,
-    walkRichInlineLineRanges,
-    type PreparedRichInline,
-    type RichInlineItem,
-    type RichInlineLineRange,
+    materializeRichInlineLineRange as pretextMaterializeRichInlineLineRange,
+    prepareRichInline as pretextPrepareRichInline,
+    walkRichInlineLineRanges as pretextWalkRichInlineLineRanges,
 } from '@chenglou/pretext/rich-inline'
 import type {
     DocumentNode,
@@ -30,6 +26,41 @@ import { isTextNode } from './document'
 import { parseStyleDeclarations } from './css'
 
 export type { ImageStyle, TextBlock, TextBlockType, TextImage, TextSegment, TextStyle, TextTable, TextTableCell, TextTableRow } from './types'
+
+export interface LayoutCursor {
+    segmentIndex: number
+    graphemeIndex: number
+}
+
+export interface RichInlineItem {
+    text: string
+    font: string
+    letterSpacing?: number
+    break?: 'normal' | 'never'
+    extraWidth?: number
+}
+
+export interface PreparedRichInline {
+    readonly __preparedRichInlineBrand?: true
+}
+
+export interface RichInlineFragmentRange {
+    itemIndex: number
+    gapBefore: number
+    occupiedWidth: number
+    start: LayoutCursor
+    end: LayoutCursor
+}
+
+export interface RichInlineLineRange {
+    fragments: RichInlineFragmentRange[]
+    width: number
+    end: {
+        itemIndex: number
+        segmentIndex: number
+        graphemeIndex: number
+    }
+}
 
 export interface PreparedTextBlock {
     prepared?: PreparedRichInline
@@ -708,6 +739,32 @@ export function getVisibleLines(
 }
 
 export type PretextRichInlineLineRange = RichInlineLineRange
+
+function prepareRichInline(items: RichInlineItem[]): PreparedRichInline {
+    return pretextPrepareRichInline(items as Parameters<typeof pretextPrepareRichInline>[0]) as PreparedRichInline
+}
+
+function walkRichInlineLineRanges(
+    prepared: PreparedRichInline,
+    maxWidth: number,
+    onLine: (line: RichInlineLineRange) => void,
+): number {
+    return pretextWalkRichInlineLineRanges(
+        prepared as Parameters<typeof pretextWalkRichInlineLineRanges>[0],
+        maxWidth,
+        line => onLine(line as RichInlineLineRange),
+    )
+}
+
+function materializeRichInlineLineRange(
+    prepared: PreparedRichInline,
+    line: RichInlineLineRange,
+) {
+    return pretextMaterializeRichInlineLineRange(
+        prepared as Parameters<typeof pretextMaterializeRichInlineLineRange>[0],
+        line as Parameters<typeof pretextMaterializeRichInlineLineRange>[1],
+    )
+}
 
 function collectInlineSegments(
     node: DocumentNode,

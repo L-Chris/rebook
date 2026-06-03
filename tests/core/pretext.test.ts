@@ -86,9 +86,9 @@ describe('Pretext pipeline', () => {
         expect(blocks.map(block => block.type)).toEqual(['listItem', 'listItem', 'listItem'])
         expect(blocks.map(block => block.depth)).toEqual([0, 1, 1])
         expect(blocks.map(block => block.segments.map(segment => segment.text).join(''))).toEqual([
-            '• I. Part One',
-            ' • 1. Chapter One',
-            ' • 2. Chapter Two',
+            'I. Part One',
+            '1. Chapter One',
+            '2. Chapter Two',
         ])
     })
 
@@ -282,7 +282,7 @@ describe('Pretext pipeline', () => {
         const visible = getVisibleLines(lines, 20, 20, 1)
 
         expect(visible.totalHeight).toBe(lines.length * 10)
-        expect(visible.startIndex).toBe(1)
-        expect(visible.lines[0]).toBe(lines[1])
+        expect(visible.startIndex).toBe(0)
+        expect(visible.lines[0]).toBe(lines[0])
     })
 })

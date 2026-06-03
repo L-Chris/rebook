@@ -66,6 +66,42 @@ describe('Wechat Mini Program adapters', () => {
     expect(snapshot.lines.length).toBeGreaterThan(0)
     expect(JSON.stringify(snapshot)).toContain('Visible mini program reader text')
   })
+
+  it('writes image resources to local mini program files when filesystem APIs are available', () => {
+    const writes: Array<{ filePath: string; data: unknown; encoding?: string }> = []
+    const unlinks: string[] = []
+    vi.stubGlobal('wx', {
+      env: { USER_DATA_PATH: 'wxfile://user' },
+      getFileSystemManager: () => ({
+        writeFileSync(filePath: string, data: unknown, encoding?: string) {
+          writes.push({ filePath, data, encoding })
+        },
+        unlinkSync(filePath: string) {
+          unlinks.push(filePath)
+        },
+      }),
+      arrayBufferToBase64(buffer: ArrayBuffer) {
+        return Buffer.from(buffer).toString('base64')
+      },
+    })
+
+    try {
+      const factory = new WechatMiniProgramURLFactory()
+      const buffer = new Uint8Array([1, 2, 3]).buffer
+      const url = factory.createURL(buffer, 'image/jpeg')
+
+      expect(url).toMatch(/^wxfile:\/\/user\/rebook-resource-.+\.jpg$/)
+      expect(writes).toHaveLength(1)
+      expect(writes[0].data).toBe(buffer)
+      expect(factory.getData(url)?.mimeType).toBe('image/jpeg')
+
+      factory.revokeURL(url)
+      expect(unlinks).toEqual([url])
+      expect(factory.getData(url)).toBeUndefined()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
 
 function createMockWx() {

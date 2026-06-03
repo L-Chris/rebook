@@ -5,7 +5,7 @@
  * recovery via CD offset correction and local header scanning fallback.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createZipLoader, isZipFile } from '../../src/loaders/zip-loader'
 import {
     createValidZip,
@@ -55,6 +55,18 @@ describe('isZipFile', () => {
     it('should return false for ArrayBuffer smaller than 4 bytes', async () => {
         expect(await isZipFile(new ArrayBuffer(2))).toBe(false)
     })
+
+    it('should detect ArrayBuffer zip when File and Blob globals are unavailable', async () => {
+        const buffer = await createValidZip(TEST_FILES)
+
+        vi.stubGlobal('File', undefined)
+        vi.stubGlobal('Blob', undefined)
+        try {
+            await expect(isZipFile(buffer)).resolves.toBe(true)
+        } finally {
+            vi.unstubAllGlobals()
+        }
+    })
 })
 
 // ============================================================================
@@ -80,6 +92,20 @@ describe('createZipLoader', () => {
 
             const text = await loader.loadText('hello.txt')
             expect(text).toBe('Hello, World!')
+        })
+
+        it('should load ArrayBuffer zip when File and Blob globals are unavailable', async () => {
+            const buffer = await createValidZip(TEST_FILES)
+
+            vi.stubGlobal('File', undefined)
+            vi.stubGlobal('Blob', undefined)
+            try {
+                const loader = await createZipLoader(buffer)
+                expect(loader.entries.map(entry => entry.filename)).toContain('hello.txt')
+                await expect(loader.loadText('hello.txt')).resolves.toBe('Hello, World!')
+            } finally {
+                vi.unstubAllGlobals()
+            }
         })
 
         it('should load text from nested path', async () => {

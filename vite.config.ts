@@ -40,13 +40,12 @@ export default defineConfig({
     rollupOptions: {
       external: [
         /^node:/,
-        '@zip.js/zip.js',
         '@modelcontextprotocol/sdk/server/mcp.js',
         '@modelcontextprotocol/sdk/server/stdio.js',
         'zod/v4',
       ],
     },
-    target: 'es2022',
+    target: 'es2018',
     minify: false,
   },
 })

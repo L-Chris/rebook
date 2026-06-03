@@ -9,6 +9,7 @@ import { createRequire } from 'node:module'
 import type { DOMAdapter, XMLDocument, XMLElement, XMLAttr, XMLNode } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
 import { EBookError } from '../core/errors'
+import { isNativeBlob } from '../core/binary'
 
 const require = createRequire(import.meta.url)
 
@@ -422,7 +423,7 @@ export class NodeURLFactory implements URLFactory {
 
   createURL(data: string | ArrayBuffer | Blob, mimeType?: string): string {
     const url = `test://resource-${this.counter++}`
-    const actualMimeType = data instanceof Blob ? (data.type || mimeType || 'application/octet-stream') : (mimeType || 'application/octet-stream')
+    const actualMimeType = isNativeBlob(data) ? (data.type || mimeType || 'application/octet-stream') : (mimeType || 'application/octet-stream')
     this.urls.set(url, { data, mimeType: actualMimeType })
     return url
   }

@@ -2,7 +2,7 @@
  * MOBI Parser unit tests
  */
 
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { readFile } from 'node:fs/promises'
 import { MOBIParser, mobi } from '../../src/parsers/mobi'
 import { createTestMOBI, createTestMOBIBlob } from '../fixtures/mobi-fixture'
@@ -59,6 +59,21 @@ describe('MOBIParser', () => {
         it('should return false for non-MOBI ArrayBuffer', async () => {
             const buffer = new TextEncoder().encode('not a mobi file at all').buffer
             expect(await parser.canParse(buffer)).toBe(false)
+        })
+
+        it('should detect ArrayBuffer input when File and Blob globals are unavailable', async () => {
+            const buffer = createTestMOBI({
+                title: 'Mini Program Test',
+                sections: [{ html: '<html><body><p>Hello</p></body></html>' }],
+            })
+
+            vi.stubGlobal('File', undefined)
+            vi.stubGlobal('Blob', undefined)
+            try {
+                await expect(parser.canParse(buffer)).resolves.toBe(true)
+            } finally {
+                vi.unstubAllGlobals()
+            }
         })
     })
 

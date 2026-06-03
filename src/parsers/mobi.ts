@@ -22,6 +22,7 @@ import { UnsupportedInputError, ParseError, CorruptedFileError, AdapterRequiredE
 import { normalizeContributors } from '../core/metadata'
 import { parseHTML, createSectionDocument } from '../core/document'
 import { extractDocumentBlocks, extractDocumentSegments } from '../core/pretext'
+import { ArrayBufferBlob, type BlobLike, getInputName, isBlobLike, toBlobLike } from '../core/binary'
 
 // ============================================================================
 // Constants
@@ -612,11 +613,11 @@ interface PDBRecord {
 }
 
 class PDB {
-    file!: Blob
+    file!: BlobLike
     offsets: PDBRecord[] = []
     pdb: Record<string, string | number | undefined> = {}
 
-    async open(file: Blob): Promise<void> {
+    async open(file: BlobLike): Promise<void> {
         this.file = file
         const headerBuf = await file.slice(0, 78).arrayBuffer()
         this.pdb = getStruct(PDB_HEADER, headerBuf)
@@ -667,7 +668,7 @@ class MOBI {
 
     get pdbInfo() { return this.#pdb.pdb }
 
-    async open(file: Blob, opts?: { domAdapter?: DOMAdapter; urlFactory?: URLFactory }): Promise<Book> {
+    async open(file: BlobLike, opts?: { domAdapter?: DOMAdapter; urlFactory?: URLFactory }): Promise<Book> {
         await this.#pdb.open(file)
         this.headers = this.#getHeaders(await this.#pdb.loadRecord(0))
         this.#resourceStart = this.headers.mobi.resourceStart as number
@@ -814,7 +815,7 @@ class MOBI {
             : thumbOffset != null && thumbOffset < 0xffffffff ? thumbOffset : null
         if (offset != null) {
             const buf = await this.loadResource(offset)
-            return new Blob([buf])
+            return createOutputBlob(buf)
         }
         return null
     }
@@ -1647,9 +1648,22 @@ class KF8 {
 /**
  * Check if a file is a MOBI/AZW file by reading bytes 60-68 for 'BOOKMOBI'.
  */
-export const isMOBI = async (file: Blob | ArrayBuffer): Promise<boolean> => {
+function createOutputBlob(buffer: ArrayBuffer, type = ''): Blob {
+    if (typeof Blob !== 'undefined') return new Blob([buffer], { type })
+    return new ArrayBufferBlob(buffer, type) as unknown as Blob
+}
+
+function toMOBIBlobInput(input: Blob | ArrayBuffer | BlobLike): BlobLike {
     try {
-        const blob = file instanceof ArrayBuffer ? new Blob([file]) : file
+        return toBlobLike(input)
+    } catch {
+        throw new UnsupportedInputError('MOBI parser cannot parse this input; provide a Blob-like object or ArrayBuffer')
+    }
+}
+
+export const isMOBI = async (file: Blob | ArrayBuffer | BlobLike): Promise<boolean> => {
+    try {
+        const blob = toMOBIBlobInput(file)
         const magic = getString(await blob.slice(60, 68).arrayBuffer())
         return magic === 'BOOKMOBI'
     } catch {
@@ -1666,8 +1680,9 @@ export class MOBIParser implements Parser {
             const lower = input.toLowerCase()
             return lower.endsWith('.mobi') || lower.endsWith('.azw') || lower.endsWith('.azw3')
         }
-        if (input instanceof File) {
-            const lower = input.name.toLowerCase()
+        const inputName = getInputName(input)
+        if (inputName) {
+            const lower = inputName.toLowerCase()
             return lower.endsWith('.mobi') || lower.endsWith('.azw') || lower.endsWith('.azw3')
         }
 
@@ -1675,8 +1690,10 @@ export class MOBIParser implements Parser {
         if (input instanceof ArrayBuffer) {
             return isMOBI(input)
         }
-        // Blob
-        return isMOBI(input as Blob)
+        if (isBlobLike(input)) {
+            return isMOBI(input)
+        }
+        return false
     }
 
     async parse(input: ParserInput, options?: ParserOptions): Promise<Book> {
@@ -1685,16 +1702,12 @@ export class MOBIParser implements Parser {
             throw new AdapterRequiredError('domAdapter and urlFactory')
         }
 
-        // Convert input to Blob
-        let blob: Blob
+        // Convert input to the Blob subset used by the PDB reader.
+        let blob: BlobLike
         if (typeof input === 'string') {
             throw new UnsupportedInputError('MOBI parser cannot parse URL strings; provide a File, Blob, or ArrayBuffer')
         }
-        if (input instanceof File || input instanceof Blob) {
-            blob = input
-        } else {
-            blob = new Blob([input])
-        }
+        blob = toMOBIBlobInput(input as Blob | ArrayBuffer | BlobLike)
 
         // Set up unzlib using fflate if available
         let unzlib: ((data: Uint8Array) => Uint8Array) | undefined

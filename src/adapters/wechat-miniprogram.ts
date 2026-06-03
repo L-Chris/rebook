@@ -10,6 +10,7 @@ import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
 import type { DOMAdapter, XMLAttr, XMLDocument, XMLElement, XMLNode, XMLText } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
 import { EBookError } from '../core/errors'
+import { debugRebook } from '../core/debug'
 
 type NativeNodeList = {
   length: number
@@ -19,6 +20,19 @@ type NativeNodeList = {
 type NativeNamedNodeMap = NativeNodeList
 
 const XLINK_NS = 'http://www.w3.org/1999/xlink'
+
+type WechatMiniProgramFileSystemManager = {
+  writeFileSync(filePath: string, data: string | ArrayBuffer, encoding?: string): void
+  unlinkSync?(filePath: string): void
+}
+
+type WechatMiniProgramGlobal = typeof globalThis & {
+  wx?: {
+    env?: { USER_DATA_PATH?: string }
+    arrayBufferToBase64?: (buffer: ArrayBuffer) => string
+    getFileSystemManager?: () => WechatMiniProgramFileSystemManager
+  }
+}
 
 function nodeListToArray<T = any>(list?: NativeNodeList | null): T[] {
   const result: T[] = []
@@ -35,11 +49,13 @@ function getElementChildren(el: any): any[] {
 }
 
 function normalizeHTMLVoidTags(str: string): string {
-  return str.replace(
-    /<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)(\s[^<>]*?)?>/gi,
-    (match, tagName: string, attrs = '') =>
-      match.endsWith('/>') ? match : `<${tagName}${attrs}/>`
-  )
+  return str
+    .replace(/<!DOCTYPE[^>]*>/gi, '')
+    .replace(
+      /<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)(\s[^<>]*?)?>/gi,
+      (match, tagName: string, attrs = '') =>
+        match.endsWith('/>') ? match : `<${tagName}${attrs}/>`
+    )
 }
 
 function encodeBase64(data: string | ArrayBuffer): string {
@@ -69,6 +85,38 @@ function stringToArrayBuffer(value: string): ArrayBuffer {
 
 function isBlobLike(value: unknown): value is Blob {
   return !!value && typeof value === 'object' && 'type' in value && 'arrayBuffer' in value
+}
+
+function getWechatMiniProgramFileSystem(): { fs: WechatMiniProgramFileSystemManager; root: string } | null {
+  const wxLike = (globalThis as WechatMiniProgramGlobal).wx
+  const root = wxLike?.env?.USER_DATA_PATH
+  const fs = wxLike?.getFileSystemManager?.()
+  return root && fs ? { fs, root } : null
+}
+
+function getMimeExtension(mimeType: string): string {
+  const normalized = mimeType.split(';', 1)[0].trim().toLowerCase()
+  switch (normalized) {
+    case 'image/jpeg':
+    case 'image/jpg':
+      return 'jpg'
+    case 'image/png':
+      return 'png'
+    case 'image/gif':
+      return 'gif'
+    case 'image/webp':
+      return 'webp'
+    case 'image/svg+xml':
+      return 'svg'
+    case 'image/bmp':
+      return 'bmp'
+    default:
+      return 'bin'
+  }
+}
+
+function debugResource(message: string, details?: Record<string, unknown>): void {
+  debugRebook('wechat-url', message, details)
 }
 
 class MiniProgramXMLNode implements XMLNode {
@@ -385,7 +433,8 @@ export class WechatMiniProgramDOMAdapter implements DOMAdapter {
 }
 
 export class WechatMiniProgramURLFactory implements URLFactory {
-  private urls = new Map<string, { data: string | ArrayBuffer | Blob; mimeType: string }>()
+  private counter = 0
+  private urls = new Map<string, { data: string | ArrayBuffer | Blob; mimeType: string; localPath?: string }>()
 
   createURL(data: string | ArrayBuffer | Blob, mimeType = 'application/octet-stream'): string {
     if (isBlobLike(data)) {
@@ -395,12 +444,48 @@ export class WechatMiniProgramURLFactory implements URLFactory {
       )
     }
 
+    const fsInfo = getWechatMiniProgramFileSystem()
+    if (fsInfo && mimeType.startsWith('image/')) {
+      const ext = getMimeExtension(mimeType)
+      const url = `${fsInfo.root}/rebook-resource-${Date.now()}-${this.counter++}.${ext}`
+      try {
+        if (typeof data === 'string') {
+          fsInfo.fs.writeFileSync(url, data, 'utf8')
+        } else {
+          fsInfo.fs.writeFileSync(url, data)
+        }
+        this.urls.set(url, { data, mimeType, localPath: url })
+        debugResource('wrote image resource', {
+          url,
+          mimeType,
+          bytes: typeof data === 'string' ? data.length : data.byteLength,
+        })
+        return url
+      } catch (error) {
+        debugResource('failed to write image resource, falling back to data URL', {
+          mimeType,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        // Fall back to data URLs when local file writes are unavailable.
+      }
+    } else if (mimeType.startsWith('image/')) {
+      debugResource('mini program filesystem unavailable, falling back to data URL', { mimeType })
+    }
+
     const url = `data:${mimeType};base64,${encodeBase64(data)}`
     this.urls.set(url, { data, mimeType })
     return url
   }
 
   revokeURL(url: string): void {
+    const entry = this.urls.get(url)
+    if (entry?.localPath) {
+      try {
+        getWechatMiniProgramFileSystem()?.fs.unlinkSync?.(entry.localPath)
+      } catch {
+        // Best-effort cleanup only.
+      }
+    }
     this.urls.delete(url)
   }
 

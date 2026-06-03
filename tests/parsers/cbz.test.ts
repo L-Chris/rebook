@@ -2,7 +2,7 @@
  * CBZ Parser unit tests
  */
 
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { CBZParser, cbz } from '../../src/parsers/cbz'
 import { createTestCBZ, createTestCBZWithoutMetadata } from '../fixtures/cbz-fixture'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
@@ -36,6 +36,18 @@ describe('CBZParser', () => {
         it('should return true for CBZ ArrayBuffer with images', async () => {
             const buffer = await createTestCBZ()
             expect(await parser.canParse(buffer)).toBe(true)
+        })
+
+        it('should detect ArrayBuffer input when File and Blob globals are unavailable', async () => {
+            const buffer = await createTestCBZ()
+
+            vi.stubGlobal('File', undefined)
+            vi.stubGlobal('Blob', undefined)
+            try {
+                await expect(parser.canParse(buffer)).resolves.toBe(true)
+            } finally {
+                vi.unstubAllGlobals()
+            }
         })
 
         it('should return false for non-image zip ArrayBuffer', async () => {

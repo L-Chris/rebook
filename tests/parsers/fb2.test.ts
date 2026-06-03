@@ -2,7 +2,7 @@
  * FB2 Parser unit tests
  */
 
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { FB2Parser, fb2 } from '../../src/parsers/fb2'
 import { createTestFB2, createTestFB2Buffer, createTestFBZ } from '../fixtures/fb2-fixture'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
@@ -53,6 +53,18 @@ describe('FB2Parser', () => {
         it('should return true for FBZ archive', async () => {
             const buffer = await createTestFBZ()
             expect(await parser.canParse(buffer)).toBe(true)
+        })
+
+        it('should detect FBZ ArrayBuffer when File and Blob globals are unavailable', async () => {
+            const buffer = await createTestFBZ()
+
+            vi.stubGlobal('File', undefined)
+            vi.stubGlobal('Blob', undefined)
+            try {
+                await expect(parser.canParse(buffer)).resolves.toBe(true)
+            } finally {
+                vi.unstubAllGlobals()
+            }
         })
 
         it('should return false for zip without .fb2 file', async () => {

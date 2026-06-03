@@ -14,7 +14,7 @@ export interface RendererStyles {
     /** Font family */
     fontFamily?: string
     /** Font size (CSS value) */
-    fontSize?: string
+    fontSize?: string | number
     /** Line height (number or CSS value) */
     lineHeight?: number | string
     /** Text alignment */
@@ -30,17 +30,17 @@ export interface RendererStyles {
     /** Background color */
     background?: string
     /** Column gap (for paginated mode) */
-    gap?: string
+    gap?: string | number
     /** Maximum column width (for paginated mode) */
-    maxInlineSize?: string
+    maxInlineSize?: string | number
     /** Minimum column width — switch to single column below this (virtual-text renderer) */
-    minColumnWidth?: string
+    minColumnWidth?: string | number
     /** Maximum column width per column (virtual-text renderer) */
-    maxColumnWidth?: string
+    maxColumnWidth?: string | number
     /** Maximum page height (for paginated mode) */
-    maxBlockSize?: string
+    maxBlockSize?: string | number
     /** Header/footer margin */
-    margin?: string
+    margin?: string | number
 }
 
 /**

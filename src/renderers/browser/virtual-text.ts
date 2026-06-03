@@ -1128,8 +1128,9 @@ function getTableTextAlign(align: 'start' | 'center' | 'end' | undefined): strin
     return 'left'
 }
 
-function parseCSSPixels(value: string | undefined, fallback: number): number {
+function parseCSSPixels(value: string | number | undefined, fallback: number): number {
     if (!value) return fallback
+    if (typeof value === 'number') return Number.isFinite(value) ? value : fallback
     const match = value.trim().match(/^([\d.]+)(px)?$/)
     if (!match) return fallback
     const parsed = Number(match[1])

@@ -9,6 +9,7 @@ import type { BookMetadata, Contributor, LanguageMap, Section } from '../core/ty
 import type { ExportOptions, ExportSelection } from '../core/exporter'
 import type { URLFactory } from '../core/url-factory'
 import { extensionFromMime, extensionFromPath, getMimeTypeFromPath, escapeXML, escapeAttr } from '../core/utils'
+import { isBlobLike } from '../core/binary'
 
 export { extensionFromMime, extensionFromPath, getMimeTypeFromPath, escapeXML, escapeAttr }
 
@@ -42,8 +43,8 @@ export function decodeBase64(base64: string): Uint8Array {
 
 export async function toBytes(data: string | ArrayBuffer | Blob): Promise<Uint8Array> {
     if (typeof data === 'string') return new TextEncoder().encode(data)
-    if (data instanceof Blob) return new Uint8Array(await data.arrayBuffer())
-    return new Uint8Array(data)
+    if (isBlobLike(data)) return new Uint8Array(await data.arrayBuffer())
+    return new Uint8Array(data as ArrayBuffer)
 }
 
 // ---------------------------------------------------------------------------
