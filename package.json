@@ -100,6 +100,7 @@
     "dev": "vite --config vite.demo.config.ts",
     "build:demo": "vite build --config vite.demo.config.ts",
     "build": "tsc && vite build",
+    "prepare": "npm run build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
