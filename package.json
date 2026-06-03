@@ -1,6 +1,6 @@
 {
   "name": "rebook",
-  "version": "0.4.17",
+  "version": "0.4.19",
   "description": "A modular e-book parsing and rendering library",
   "type": "module",
   "main": "./dist/index.js",
@@ -38,6 +38,9 @@
       ],
       "mcp-server": [
         "dist/mcp-server.d.ts"
+      ],
+      "utils/reader": [
+        "dist/utils/reader.d.ts"
       ]
     }
   },
@@ -84,6 +87,10 @@
     "./mcp-server": {
       "types": "./dist/mcp-server.d.ts",
       "import": "./dist/mcp-server.js"
+    },
+    "./utils/reader": {
+      "types": "./dist/utils/reader.d.ts",
+      "import": "./dist/utils/reader.js"
     },
     "./adapters/*": {
       "types": "./dist/adapters/*.d.ts",

@@ -31,6 +31,7 @@ export default defineConfig({
         'renderers/wechat-miniprogram': resolve(__dirname, 'src/renderers/wechat-miniprogram.ts'),
         'exporters/index': resolve(__dirname, 'src/exporters/index.ts'),
         'exporters/epub': resolve(__dirname, 'src/exporters/epub.ts'),
+        'utils/reader': resolve(__dirname, 'src/utils/reader.ts'),
         search: resolve(__dirname, 'src/search.ts'),
         mcp: resolve(__dirname, 'src/mcp.ts'),
         'mcp-server': resolve(__dirname, 'src/mcp-server.ts'),
