@@ -108,6 +108,49 @@ describe('WechatMiniProgramRenderer', () => {
         expect(blockWindow.length).toBeGreaterThan(0)
         expect(blocks.some(block => block.id === blockWindow[0])).toBe(true)
     })
+
+    it('applies configured book plugins before rendering', async () => {
+        vi.stubGlobal('OffscreenCanvas', undefined)
+        const book: Book = {
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 100,
+                format: 'xhtml',
+                load: () => '',
+                getBlocks: () => [{
+                    id: 'original',
+                    type: 'paragraph',
+                    segments: [{ text: 'Original text' }],
+                }],
+            }],
+        }
+        const renderer = createWechatMiniProgramRenderer({
+            width: 320,
+            height: 120,
+            layout: 'paginated',
+            styles: { fontSize: '16px', lineHeight: 1.5, margin: '12px' },
+            wx: createMockWx(),
+            plugins: [
+                input => ({
+                    ...input,
+                    sections: input.sections.map(section => ({
+                        ...section,
+                        getBlocks: () => [{
+                            id: 'plugin-block',
+                            type: 'paragraph',
+                            segments: [{ text: 'Plugin rendered text' }],
+                        }],
+                    })),
+                }),
+            ],
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+
+        expect(JSON.stringify(renderer.getSnapshot())).toContain('Plugin rendered text')
+        expect(JSON.stringify(renderer.getSnapshot())).not.toContain('Original text')
+    })
 })
 
 function createMockWx() {

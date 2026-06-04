@@ -204,6 +204,14 @@ writeStub(
   'adapters/wechat-miniprogram.js',
   "export { WechatMiniProgramDOMAdapter, WechatMiniProgramURLFactory } from '../index.js'",
 )
+writeStub(
+  'plugins/index.js',
+  "export { withTrialLimit, estimateBookPageCount, estimateTrialLimitState } from '../index.js'",
+)
+writeStub(
+  'plugins/trial-limit.js',
+  "export { withTrialLimit, estimateBookPageCount, estimateTrialLimitState } from '../index.js'",
+)
 
 writeFileSync(
   `${out}/package.json`,

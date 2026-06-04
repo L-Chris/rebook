@@ -7,6 +7,7 @@ Complete API documentation for rebook.
 - [Parser Registry](#parser-registry)
 - [First Sections Export](#first-sections-export)
 - [ReaderView](#readerview)
+- [Plugins](#plugins)
 - [Book](#book)
 - [Section](#section)
 - [Document Model](#document-model)
@@ -314,6 +315,51 @@ const fractions = reader.getSectionFractions() // Per-section progress ticks
 
 ```typescript
 reader.destroy() // Release all resources
+```
+
+---
+
+## Plugins
+
+Plugins are `Book` middleware. They run after parsing and before rendering in
+`ReaderView`, and the WeChat Mini Program renderer accepts the same `plugins`
+configuration when a parsed book is opened directly.
+
+```typescript
+import { createReader, withTrialLimit, type TrialLimitedBook } from 'rebook'
+
+const reader = createReader({
+  container,
+  plugins: [withTrialLimit({ maxPages: 20 })],
+})
+
+const book = await reader.open(file) as TrialLimitedBook
+const sectionFractions = reader.getSectionFractions()
+
+if (!book.trialLimit.canAccessTarget(sectionFractions, 'chapter-20.xhtml')) {
+  // Show locked-state UI in the host app.
+}
+```
+
+The trial-limit plugin adds `book.trialLimit`, a controller for trial reader
+state: estimated page count, limit fraction, page step fraction, TOC access
+items, target access checks, and forward-navigation checks. Page estimates use
+explicit page lists first, pre-paginated section counts second, and sampled text
+density for reflowable books before falling back to section sizes.
+
+```typescript
+import { createWechatMiniProgramRenderer } from 'rebook/renderers/wechat-miniprogram'
+import { withTrialLimit } from 'rebook/plugins/trial-limit'
+
+const renderer = createWechatMiniProgramRenderer({
+  width,
+  height,
+  wx,
+  plugins: [withTrialLimit({ maxPages: 20 })],
+  setData: snapshot => page.setData({ reader: snapshot }),
+})
+
+await renderer.open(book)
 ```
 
 ---

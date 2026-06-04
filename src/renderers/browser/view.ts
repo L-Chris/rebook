@@ -7,6 +7,7 @@ import type { Book, RelocateEvent, LoadEvent, TOCItem, RebookPlugin, BlockWindow
 import type { ParserInput, ParserOptions } from '../../core/parser'
 import type { RendererConfig, RendererStyles, LayoutMode, Renderer } from '../../core/renderer'
 import { registry } from '../../core/parser'
+import { applyRebookPlugins } from '../../core/plugins'
 import { VirtualTextRenderer } from './virtual-text'
 import { BrowserDOMAdapter, BrowserURLFactory } from '../../adapters/browser'
 
@@ -62,13 +63,7 @@ export class ReaderView {
             ...this.config.parserOptions,
         }
 
-        // Use registry to auto-detect and parse
-        let book = await registry.open(input, options)
-        
-        // Apply plugins
-        for (const plugin of this.config.plugins ?? []) {
-            book = await plugin(book)
-        }
+        const book = await applyRebookPlugins(await registry.open(input, options), this.config.plugins)
         
         this.book = book
 
@@ -85,11 +80,7 @@ export class ReaderView {
         this.close()
         this.resetRenderer()
         
-        let book = inputBook
-        // Apply plugins
-        for (const plugin of this.config.plugins ?? []) {
-            book = await plugin(book)
-        }
+        const book = await applyRebookPlugins(inputBook, this.config.plugins)
         
         this.book = book
         await this.renderer.open(book)

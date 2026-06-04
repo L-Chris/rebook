@@ -42,6 +42,7 @@ export type {
     LoadEvent,
     RelocateEvent,
     LinkEvent,
+    RebookPlugin,
     // Document Model
     DocumentNode,
     SectionDocument,
@@ -158,6 +159,20 @@ export {
     searchChapters,
     getSectionSearchText,
 } from './search'
+
+export {
+    withTrialLimit,
+    estimateBookPageCount,
+    estimateTrialLimitState,
+} from './plugins/trial-limit'
+export type {
+    TrialLimitController,
+    TrialLimitedBook,
+    TrialLimitOptions,
+    TrialLimitState,
+    TrialSnapshotLike,
+    TrialTOCAccessItem,
+} from './plugins/trial-limit'
 export type {
     SearchScope,
     SearchOptions,
@@ -194,26 +209,6 @@ export { createZipLoader, isZipFile } from './loaders'
 
 // Progress utilities
 export { SectionProgress, TOCProgress } from './utils/progress'
-export {
-    canAccessTarget,
-    estimateNextTotalFractionFromSnapshot,
-    estimatePageLimitFraction,
-    getAllowedTOCHrefs,
-    getCurrentTOCAccessItem,
-    getTargetStartFraction,
-    getTOCAccessItems,
-    getTotalFraction,
-    getTrialPageStepFraction,
-    normalizeBookPath,
-    normalizeNavigationHref,
-    resolveBookNavigation,
-    willForwardExceedLimit,
-} from './utils/reader'
-export type {
-    ReaderSnapshotLike,
-    ReaderTOCAccessItem,
-    TrialLimitOptions,
-} from './utils/reader'
 
 // Exporters
 export {

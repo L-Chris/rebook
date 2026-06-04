@@ -29,22 +29,15 @@ export {
 } from './adapters/wechat-miniprogram'
 
 export {
-    canAccessTarget,
-    estimateNextTotalFractionFromSnapshot,
-    estimatePageLimitFraction,
-    getAllowedTOCHrefs,
-    getCurrentTOCAccessItem,
-    getTargetStartFraction,
-    getTOCAccessItems,
-    getTotalFraction,
-    getTrialPageStepFraction,
-    normalizeBookPath,
-    normalizeNavigationHref,
-    resolveBookNavigation,
-    willForwardExceedLimit,
-} from './utils/reader'
+    withTrialLimit,
+    estimateBookPageCount,
+    estimateTrialLimitState,
+} from './plugins/trial-limit'
 export type {
-    ReaderSnapshotLike,
-    ReaderTOCAccessItem,
+    TrialLimitController,
+    TrialLimitedBook,
     TrialLimitOptions,
-} from './utils/reader'
+    TrialLimitState,
+    TrialSnapshotLike,
+    TrialTOCAccessItem,
+} from './plugins/trial-limit'

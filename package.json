@@ -39,8 +39,11 @@
       "mcp-server": [
         "dist/mcp-server.d.ts"
       ],
-      "utils/reader": [
-        "dist/utils/reader.d.ts"
+      "plugins/*": [
+        "dist/plugins/*.d.ts"
+      ],
+      "plugins": [
+        "dist/plugins/index.d.ts"
       ]
     }
   },
@@ -88,13 +91,13 @@
       "types": "./dist/mcp-server.d.ts",
       "import": "./dist/mcp-server.js"
     },
-    "./utils/reader": {
-      "types": "./dist/utils/reader.d.ts",
-      "import": "./dist/utils/reader.js"
-    },
     "./adapters/*": {
       "types": "./dist/adapters/*.d.ts",
       "import": "./dist/adapters/*.js"
+    },
+    "./plugins": {
+      "types": "./dist/plugins/index.d.ts",
+      "import": "./dist/plugins/index.js"
     },
     "./plugins/*": {
       "types": "./dist/plugins/*.d.ts",

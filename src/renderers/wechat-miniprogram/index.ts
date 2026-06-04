@@ -5,8 +5,9 @@
  * Mini Program pages/components can feed into setData and render with WXML.
  */
 
-import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section } from '../../core/types'
+import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, RebookPlugin, ResolvedNavigation, Section, TOCItem } from '../../core/types'
 import type { LayoutMode, Renderer, RendererStyles } from '../../core/renderer'
+import { applyRebookPlugins } from '../../core/plugins'
 import { SectionProgress } from '../../utils/progress'
 import {
     getVisibleLines,
@@ -43,6 +44,7 @@ export interface WechatMiniProgramRendererConfig {
     layout?: LayoutMode
     styles?: RendererStyles
     maxColumnCount?: number
+    plugins?: RebookPlugin[]
     overscan?: number
     wx?: WechatMiniProgramLike
     /**
@@ -136,6 +138,13 @@ interface ColumnLayout {
     pageCount: number
 }
 
+interface TOCPosition {
+    index: number
+    sourceTop: number
+    order: number
+    item: TOCItem
+}
+
 const DEFAULT_MARGIN = 32
 const DEFAULT_GAP = 48
 
@@ -146,6 +155,7 @@ export class WechatMiniProgramRenderer implements Renderer {
     private layoutMode: LayoutMode
     private maxColumnCount: number
     private overscan: number
+    private plugins?: readonly RebookPlugin[]
     private setData?: (snapshot: WechatMiniProgramRendererSnapshot) => void
     private book: Book | null = null
     private sections: readonly Section[] = []
@@ -159,6 +169,8 @@ export class WechatMiniProgramRenderer implements Renderer {
     private listeners = new Map<string, Set<Listener<unknown>>>()
     private activeLoadId = 0
     private prefetchPageCount = 0
+    private tocPositions: TOCPosition[] = []
+    private pendingTOCItem: TOCItem | null = null
     private columnLayout: ColumnLayout = {
         margin: DEFAULT_MARGIN,
         gap: DEFAULT_GAP,
@@ -180,15 +192,19 @@ export class WechatMiniProgramRenderer implements Renderer {
         this.styles = config.styles ?? {}
         this.layoutMode = config.layout ?? 'paginated'
         this.maxColumnCount = config.maxColumnCount ?? 1
+        this.plugins = config.plugins
         this.overscan = config.overscan ?? 4
         this.setData = config.setData
     }
 
     async open(book: Book): Promise<void> {
-        this.book = book
-        this.sections = book.sections
+        const pluginBook = await applyRebookPlugins(book, this.plugins)
+        this.book = pluginBook
+        this.sections = pluginBook.sections
         this.progress = new SectionProgress(this.sections)
-        this.prefetchPageCount = getTranslationPrefetchPageCount(book)
+        this.prefetchPageCount = getTranslationPrefetchPageCount(pluginBook)
+        this.tocPositions = []
+        this.pendingTOCItem = null
         this.currentIndex = -1
         this.pageIndex = 0
         this.scrollTop = 0
@@ -197,19 +213,22 @@ export class WechatMiniProgramRenderer implements Renderer {
 
     async goTo(target: number | string): Promise<void> {
         if (typeof target === 'number') {
+            this.pendingTOCItem = null
             await this.loadSection(target)
             return
         }
 
         const resolved = this.book?.resolveHref?.(target) ?? this.resolveHrefFallback(target)
         if (!resolved) return
+        this.pendingTOCItem = this.findTOCItem(target)
         await this.loadSection(resolved.index, resolved.anchor)
     }
 
     async next(): Promise<void> {
         if (this.layoutMode === 'paginated') {
-            if (this.pageIndex < this.columnLayout.pageCount - 1) {
-                this.pageIndex++
+            const nextPage = this.findReadablePage(this.pageIndex + 1, 1)
+            if (nextPage != null) {
+                this.pageIndex = nextPage
                 this.scrollTop = this.pageIndex * this.columnLayout.pageHeight
                 this.publishPosition('page')
                 return
@@ -229,8 +248,9 @@ export class WechatMiniProgramRenderer implements Renderer {
 
     async prev(): Promise<void> {
         if (this.layoutMode === 'paginated') {
-            if (this.pageIndex > 0) {
-                this.pageIndex--
+            const previousPage = this.findReadablePage(this.pageIndex - 1, -1)
+            if (previousPage != null) {
+                this.pageIndex = previousPage
                 this.scrollTop = this.pageIndex * this.columnLayout.pageHeight
                 this.publishPosition('page')
                 return
@@ -238,6 +258,7 @@ export class WechatMiniProgramRenderer implements Renderer {
             if (this.currentIndex > 0) {
                 await this.loadSection(this.currentIndex - 1)
                 this.pageIndex = this.columnLayout.pageCount - 1
+                this.pageIndex = this.findReadablePage(this.pageIndex, 0) ?? this.pageIndex
                 this.scrollTop = this.pageIndex * this.columnLayout.pageHeight
                 this.publishPosition('page')
             }
@@ -394,6 +415,7 @@ export class WechatMiniProgramRenderer implements Renderer {
                 this.columnLayout.pageCount - 1,
                 Math.floor(this.scrollTop / Math.max(1, this.columnLayout.pageHeight)),
             )
+            this.pageIndex = this.findReadablePage(this.pageIndex, 0) ?? this.pageIndex
             this.scrollTop = this.pageIndex * this.columnLayout.pageHeight
         }
 
@@ -463,8 +485,9 @@ export class WechatMiniProgramRenderer implements Renderer {
             totalHeight,
             pageCount,
         }
-        this.pageIndex = Math.min(this.pageIndex, pageCount - 1)
+        this.pageIndex = this.findReadablePage(Math.min(this.pageIndex, pageCount - 1), 0) ?? 0
         this.scrollTop = Math.min(this.scrollTop, this.getMaxScrollTop())
+        this.rebuildTOCPositions()
     }
 
     private createEmptyLayout(): ColumnLayout {
@@ -568,10 +591,12 @@ export class WechatMiniProgramRenderer implements Renderer {
             index: this.currentIndex,
             fraction,
             totalFraction: this.progress?.getProgress(this.currentIndex, fraction).fraction,
+            tocItem: this.pendingTOCItem ?? this.getCurrentTOCItem(),
             reason,
         }
         this.lastLocation = event
         this.emit('relocate', event)
+        this.pendingTOCItem = null
     }
 
     private emitBlockWindow(reason: string): void {
@@ -614,6 +639,72 @@ export class WechatMiniProgramRenderer implements Renderer {
         const index = this.sections.findIndex(section =>
             typeof section.id === 'string' && (section.id === path || section.id.endsWith(path)))
         return index < 0 ? null : { index }
+    }
+
+    private rebuildTOCPositions(): void {
+        this.tocPositions = []
+        if (!this.book?.toc) return
+
+        for (const [order, item] of flattenTOC(this.book.toc).entries()) {
+            const resolved = this.book.resolveHref?.(item.href)
+            const index = resolved?.index ?? this.getTOCSectionIndex(item.href)
+            if (index == null || index < 0) continue
+            let sourceTop = 0
+            if (index === this.currentIndex) {
+                if (resolved?.anchor == null && !this.getTOCFragment(item.href)) {
+                    sourceTop = 0
+                } else {
+                    const anchorTop = this.getAnchorSourceTop(resolved?.anchor)
+                    if (anchorTop == null) continue
+                    sourceTop = anchorTop
+                }
+            }
+            this.tocPositions.push({ index, sourceTop, order, item })
+        }
+        this.tocPositions.sort(compareTOCPosition)
+    }
+
+    private getTOCSectionIndex(href: string): number | null {
+        const result = this.book?.splitTOCHref?.(href)
+        if (!result) return null
+        const [id] = result
+        const index = this.sections.findIndex(section => section.id === id)
+        return index >= 0 ? index : null
+    }
+
+    private getTOCFragment(href: string): string | number | null {
+        const result = this.book?.splitTOCHref?.(href)
+        if (result) return result[1]
+        return href.includes('#') ? href.split('#')[1] : null
+    }
+
+    private findTOCItem(href: string): TOCItem | null {
+        if (!this.book?.toc) return null
+        return flattenTOC(this.book.toc).find(item => item.href === href) ?? null
+    }
+
+    private getCurrentTOCItem(): TOCItem | null {
+        if (!this.tocPositions.length || this.currentIndex < 0) return null
+        const sourceStart = this.getSourceScrollTop()
+        const sourceEnd = sourceStart + this.getSourceViewportHeight()
+        if (this.layoutMode === 'paginated') {
+            const visible = this.tocPositions.find(position =>
+                position.index === this.currentIndex
+                && position.sourceTop > sourceStart + 1
+                && position.sourceTop < sourceEnd - 1)
+            if (visible) return visible.item
+        }
+
+        const sourceTop = sourceStart + this.getLineHeightPixels() * 0.5
+        let active: TOCPosition | null = null
+
+        for (const position of this.tocPositions) {
+            if (position.index > this.currentIndex) break
+            if (position.index === this.currentIndex && position.sourceTop > sourceTop) break
+            active = position
+        }
+
+        return active?.item ?? null
     }
 
     private getAnchorSourceTop(anchor?: ResolvedNavigation['anchor']): number | null {
@@ -691,6 +782,7 @@ export class WechatMiniProgramRenderer implements Renderer {
                 this.columnLayout.pageCount - 1,
                 Math.round(safe * Math.max(0, this.columnLayout.pageCount - 1)),
             )
+            this.pageIndex = this.findReadablePage(this.pageIndex, 0) ?? this.pageIndex
             this.scrollTop = this.pageIndex * this.columnLayout.pageHeight
             return
         }
@@ -725,6 +817,43 @@ export class WechatMiniProgramRenderer implements Renderer {
         return fontSize * getLineHeightMultiplier(lineHeight, fontSize)
     }
 
+    private findReadablePage(pageIndex: number, direction: -1 | 0 | 1): number | null {
+        if (this.layoutMode !== 'paginated') return 0
+        const pageCount = this.columnLayout.pageCount
+        if (pageCount <= 0) return null
+        if (direction > 0 && pageIndex >= pageCount) return null
+        if (direction < 0 && pageIndex < 0) return null
+        const start = Math.min(Math.max(0, pageIndex), pageCount - 1)
+        if (this.hasReadableLinesOnPage(start)) return start
+
+        if (direction > 0) {
+            for (let page = start + 1; page < pageCount; page++) {
+                if (this.hasReadableLinesOnPage(page)) return page
+            }
+            return null
+        }
+
+        if (direction < 0) {
+            for (let page = start - 1; page >= 0; page--) {
+                if (this.hasReadableLinesOnPage(page)) return page
+            }
+            return null
+        }
+
+        for (let distance = 1; distance < pageCount; distance++) {
+            const previous = start - distance
+            const next = start + distance
+            if (previous >= 0 && this.hasReadableLinesOnPage(previous)) return previous
+            if (next < pageCount && this.hasReadableLinesOnPage(next)) return next
+        }
+        return null
+    }
+
+    private hasReadableLinesOnPage(pageIndex: number): boolean {
+        const { columns, columnHeight } = this.columnLayout
+        return this.lines.some(line => getLinePageIndex(line, columnHeight, columns) === pageIndex)
+    }
+
     private emit<K extends keyof RendererEventMap>(event: K, data: RendererEventMap[K]): void {
         this.listeners.get(event)?.forEach(fn => fn(data))
     }
@@ -732,6 +861,20 @@ export class WechatMiniProgramRenderer implements Renderer {
 
 export const createWechatMiniProgramRenderer = (config: WechatMiniProgramRendererConfig): WechatMiniProgramRenderer => {
     return new WechatMiniProgramRenderer(config)
+}
+
+function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
+    return items.flatMap(item =>
+        item.subitems?.length
+            ? [item, ...flattenTOC(item.subitems)]
+            : [item]
+    )
+}
+
+function compareTOCPosition(a: TOCPosition, b: TOCPosition): number {
+    return a.index - b.index
+        || a.sourceTop - b.sourceTop
+        || a.order - b.order
 }
 
 function getTranslationPrefetchPageCount(book: Book): number {
