@@ -468,9 +468,14 @@
                 <input type="checkbox" id="translate-toc-check">
             </div>
             <div class="setting-row">
+                <label>Professional</label>
+                <input type="checkbox" id="professional-translation-check">
+            </div>
+            <div class="setting-row">
                 <label>Prefetch</label>
                 <input type="number" id="prefetch-pages-input" min="0" max="20" value="2" title="Pages ahead to translate">
             </div>
+            <div class="setting-note" id="translation-status">Translation plugin disabled.</div>
         </div>
     </div>
 
@@ -522,7 +527,7 @@
         import { fb2 } from '../src/parsers/fb2.ts'
         import { mobi } from '../src/parsers/mobi.ts'
         import { withTrialLimit } from '../src/plugins/trial-limit.ts'
-        import { withTranslation } from '../src/plugins/translation.ts'
+        import { withProfessionalTranslation, withTranslation } from '../src/plugins/translation.ts'
         import { createOpenAI } from '@ai-sdk/openai'
 
         // Create shared adapters for all parsers
@@ -567,7 +572,9 @@
         const modelInput = document.getElementById('model-input')
         const translateModeSelect = document.getElementById('translate-mode-select')
         const translateTocCheck = document.getElementById('translate-toc-check')
+        const professionalTranslationCheck = document.getElementById('professional-translation-check')
         const prefetchPagesInput = document.getElementById('prefetch-pages-input')
+        const translationStatus = document.getElementById('translation-status')
         const progressBar = document.getElementById('progress-bar')
         const progressFill = document.getElementById('progress-fill')
         const progressText = document.getElementById('progress-text')
@@ -584,6 +591,7 @@
             exportSectionCount: '3',
             translate: false,
             translateTOC: false,
+            professionalTranslation: false,
             baseURL: '',
             apiKey: '',
             model: '',
@@ -617,6 +625,7 @@
                 exportSectionCount: exportSectionCount.value,
                 translate: translateCheck.checked,
                 translateTOC: translateTocCheck.checked,
+                professionalTranslation: professionalTranslationCheck.checked,
                 baseURL: baseUrlInput.value,
                 apiKey: apiKeyInput.value,
                 model: modelInput.value,
@@ -636,6 +645,7 @@
             exportSectionCount.value = config.exportSectionCount
             translateCheck.checked = config.translate
             translateTocCheck.checked = config.translateTOC
+            professionalTranslationCheck.checked = !!config.professionalTranslation
             baseUrlInput.value = config.baseURL
             apiKeyInput.value = config.apiKey
             modelInput.value = config.model
@@ -647,6 +657,23 @@
 
         const updateTranslationFields = () => {
             translationFields.style.display = translateCheck.checked ? 'block' : 'none'
+            updateTranslationStatus()
+        }
+
+        const updateTranslationStatus = (status = currentBook?.professionalTranslationStatus) => {
+            if (!translateCheck.checked) {
+                translationStatus.textContent = 'Translation plugin disabled.'
+                return
+            }
+            if (!apiKeyInput.value.trim()) {
+                translationStatus.textContent = 'Enter an API key to enable translation.'
+                return
+            }
+            if (!professionalTranslationCheck.checked) {
+                translationStatus.textContent = 'Basic block translation enabled.'
+                return
+            }
+            translationStatus.textContent = status?.message ?? 'Professional translation analysis will start after opening or reloading a book.'
         }
 
         const updateTrialStatus = () => {
@@ -693,7 +720,7 @@
                 
                 const openai = createOpenAI(openaiOptions)
                 const modelName = modelInput.value.trim() || 'gpt-4o-mini'
-                plugins.push(withTranslation({
+                const translationOptions = {
                     model: openai.chat(modelName),
                     targetLanguage: 'zh-CN',
                     mode: () => translateModeSelect.value,
@@ -707,7 +734,15 @@
                             scheduleReaderRefresh()
                         }
                     }
-                }))
+                }
+                plugins.push(professionalTranslationCheck.checked
+                    ? withProfessionalTranslation({
+                        ...translationOptions,
+                        pipeline: {
+                            onStatus: updateTranslationStatus,
+                        },
+                    })
+                    : withTranslation(translationOptions))
             }
 
             return createReader({
@@ -862,6 +897,7 @@
                 const book = await reader.open(file)
                 currentBook = book
                 activeTOCHref = null
+                updateTranslationStatus()
 
                 // Update UI
                 const title = formatLanguageMap(book.metadata?.title) || 'Untitled'
@@ -1007,6 +1043,12 @@
             refreshCurrentTOC()
         })
 
+        professionalTranslationCheck.addEventListener('change', () => {
+            saveConfig()
+            if (translateCheck.checked) recreateReader()
+            else updateTranslationStatus()
+        })
+
         baseUrlInput.addEventListener('change', () => {
             saveConfig()
             if (translateCheck.checked) recreateReader()
@@ -1014,6 +1056,7 @@
 
         apiKeyInput.addEventListener('change', () => {
             saveConfig()
+            updateTranslationStatus()
             if (translateCheck.checked) recreateReader()
         })
 

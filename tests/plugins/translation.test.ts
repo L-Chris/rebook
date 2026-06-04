@@ -1,15 +1,19 @@
 import { describe, it, expect, vi } from 'vitest'
-import { withTranslation } from '../../src/plugins/translation'
+import { withProfessionalTranslation, withTranslation } from '../../src/plugins/translation'
 import type { Book, Section, TextBlock } from '../../src/core/types'
 
 type TestTranslationBook = Book & {
     requestBlockTranslations?: (sectionIndex: number, blockIds: readonly string[]) => void
     refreshTranslatedTOC?: () => void
+    professionalTranslationStatus?: { phase: string, message: string }
 }
 
 const { generateTextMock, outputObjectMock, createTranslationResponse } = vi.hoisted(() => ({
     createTranslationResponse: async (options: any) => {
-        const payload = JSON.parse(options.prompt)
+        const parsed = JSON.parse(options.prompt)
+        const payload = parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.input
+            ? parsed.input
+            : parsed
         const translatedPayload = Object.fromEntries(
             Object.entries(payload).map(([key, text]) => [key, `[Translated] ${text}`])
         )
@@ -504,5 +508,219 @@ describe('Translation Plugin', () => {
         wrappedBook.refreshTranslatedTOC?.()
         expect(wrappedBook.toc?.[0].label).toBe('[Translated] Chapter One')
         expect(generateTextMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('builds a professional pipeline profile before contextual translation', async () => {
+        const update = waitForUpdate()
+        const statuses: string[] = []
+        let resolveReady!: () => void
+        const readyPromise = new Promise<void>(resolve => {
+            resolveReady = resolve
+        })
+
+        generateTextMock.mockImplementation(async (options: any) => {
+            if (options.system.includes('senior translation editor')) {
+                return {
+                    output: {
+                        bookType: 'technical textbook',
+                        audience: 'software engineers',
+                        styleGuide: 'Use precise technical Chinese.',
+                        terminologyRules: ['Translate API as 应用程序接口 on first mention.'],
+                        properNounRules: ['Keep product names in English.'],
+                        terms: [{
+                            source: 'API',
+                            target: '应用程序接口',
+                            category: 'abbreviation',
+                            note: 'Core technical abbreviation.',
+                        }],
+                        chapterSummaries: [
+                            { sectionIndex: 0, title: 'API Basics', summary: 'Introduces API concepts.' },
+                            { sectionIndex: 1, title: 'Implementation Notes', summary: 'Explains code and tables.' },
+                        ],
+                    }
+                }
+            }
+            return createTranslationResponse(options)
+        })
+
+        const professionalBlocks: TextBlock[] = [
+            {
+                id: 'api',
+                type: 'paragraph',
+                segments: [{ text: 'API design keeps client and server contracts stable.' }],
+            },
+            {
+                id: 'code',
+                type: 'pre',
+                segments: [{ text: 'fetch("/api/books")' }],
+            },
+            {
+                id: 'tbl',
+                type: 'table',
+                segments: [],
+                table: {
+                    columnCount: 2,
+                    rowIndex: 0,
+                    rowCount: 1,
+                    rows: [{ cells: [{ text: 'API' }, { text: 'Contract' }] }],
+                },
+            },
+            {
+                id: 'note',
+                type: 'paragraph',
+                attrs: { 'data-rebook-footnote-content': 'An implementation note.' },
+                segments: [{ text: '1' }],
+            },
+        ]
+        const professionalBook: Book = {
+            metadata: {
+                title: 'API Design',
+                author: 'Example Author',
+                language: 'en',
+            },
+            toc: [
+                { label: 'API Basics', href: 's1' },
+                { label: 'Implementation Notes', href: 's2' },
+            ],
+            resolveHref: href => href === 's1' ? { index: 0 } as any : { index: 1 } as any,
+            sections: [
+                {
+                    id: 's1',
+                    size: 100,
+                    load: () => '',
+                    getBlocks: async () => professionalBlocks,
+                },
+                {
+                    id: 's2',
+                    size: 50,
+                    load: () => '',
+                    getBlocks: async () => [{
+                        id: 'math',
+                        type: 'paragraph',
+                        attrs: { class: 'equation' },
+                        segments: [{ text: '\\sum_i x_i' }],
+                    }],
+                },
+            ],
+        }
+
+        const plugin = withProfessionalTranslation({
+            model: mockModel as any,
+            targetLanguage: 'zh-CN',
+            mode: 'replace',
+            onUpdate: update.resolve,
+            pipeline: {
+                onStatus: status => {
+                    statuses.push(status.phase)
+                    if (status.phase === 'ready') resolveReady()
+                },
+            },
+        })
+
+        const wrappedBook = await plugin(professionalBook)
+        await readyPromise
+        await wrappedBook.sections[0].getBlocks!()
+        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['api'])
+        await update.promise
+
+        const profileCall = generateTextMock.mock.calls.find((call: any[]) =>
+            call[0].system.includes('senior translation editor')
+        )
+        expect(profileCall).toBeTruthy()
+        const profilePrompt = JSON.parse(profileCall[0].prompt)
+        expect(profilePrompt.analysis.toc).toEqual([
+            { label: 'API Basics', depth: 0 },
+            { label: 'Implementation Notes', depth: 0 },
+        ])
+        expect(profilePrompt.analysis.toc[0]).not.toHaveProperty('href')
+        expect(profilePrompt.analysis.chapters[0]).toMatchObject({
+            sectionIndex: 0,
+            title: 'API Basics',
+        })
+        expect(profilePrompt.analysis.chapters[0]).not.toHaveProperty('blockCount')
+        expect(profilePrompt.analysis.chapters[0]).not.toHaveProperty('wordCount')
+        expect(profilePrompt.analysis.chapters[0]).not.toHaveProperty('structures')
+        expect(profilePrompt.analysis.chapters[1]).toMatchObject({
+            sectionIndex: 1,
+            title: 'Implementation Notes',
+        })
+        expect(profilePrompt.analysis).not.toHaveProperty('features')
+        expect(profilePrompt.analysis).not.toHaveProperty('structureSamples')
+        expect(profilePrompt.analysis).not.toHaveProperty('termCandidates')
+
+        const translationCall = generateTextMock.mock.calls.find((call: any[]) =>
+            call[0].system.includes('multi-stage translation pipeline')
+        )
+        expect(translationCall).toBeTruthy()
+        const translationPrompt = JSON.parse(translationCall[0].prompt)
+        expect(translationPrompt.context).toMatchObject({
+            bookType: 'technical textbook',
+            audience: 'software engineers',
+            chapter: { sectionIndex: 0, summary: 'Introduces API concepts.' },
+            nextChapter: { sectionIndex: 1, summary: 'Explains code and tables.' },
+        })
+        expect(translationPrompt.context.glossary[0]).toMatchObject({
+            source: 'API',
+            target: '应用程序接口',
+        })
+        expect(translationPrompt.input).toEqual({
+            '0': 'API design keeps client and server contracts stable.',
+        })
+        expect(statuses).toEqual(['analyzing', 'ready'])
+        expect((wrappedBook as TestTranslationBook).professionalTranslationStatus?.phase).toBe('ready')
+    })
+
+    it('waits for the professional profile before translating the table of contents', async () => {
+        let resolveProfile!: (value: any) => void
+        const profilePromise = new Promise(resolve => {
+            resolveProfile = resolve
+        })
+        let resolveTOC!: (toc: Book['toc']) => void
+        const tocPromise = new Promise<Book['toc']>(resolve => {
+            resolveTOC = resolve
+        })
+        generateTextMock.mockImplementation(async (options: any) => {
+            if (options.system.includes('senior translation editor')) {
+                return profilePromise
+            }
+            return createTranslationResponse(options)
+        })
+
+        const plugin = withProfessionalTranslation({
+            model: mockModel as any,
+            translateTOC: true,
+            onTOCUpdate: resolveTOC,
+        })
+
+        const wrappedBook = await plugin({
+            sections: [mockSection],
+            toc: [{ label: 'Chapter One', href: 's1' }],
+        })
+
+        // Accessing TOC schedules translation, but professional mode must wait for the profile first.
+        expect(wrappedBook.toc?.[0].label).toBe('Chapter One')
+        await new Promise(resolve => setTimeout(resolve, 0))
+        expect(generateTextMock).toHaveBeenCalledTimes(1)
+        expect(generateTextMock.mock.calls[0][0].system).toContain('senior translation editor')
+
+        resolveProfile({
+            output: {
+                bookType: 'book',
+                audience: 'general readers',
+                styleGuide: 'Clear Chinese.',
+                terminologyRules: [],
+                properNounRules: [],
+                terms: [],
+                chapterSummaries: [
+                    { sectionIndex: 0, title: 'Chapter One', summary: 'Opening chapter.' },
+                ],
+            },
+        })
+
+        const translatedTOC = await tocPromise
+        expect(generateTextMock).toHaveBeenCalledTimes(2)
+        expect(generateTextMock.mock.calls[1][0].system).not.toContain('senior translation editor')
+        expect(JSON.parse(generateTextMock.mock.calls[1][0].prompt)).toEqual({ '0': 'Chapter One' })
+        expect(translatedTOC?.[0].label).toBe('Chapter One / [Translated] Chapter One')
     })
 })
