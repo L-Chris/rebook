@@ -41,6 +41,11 @@ export {
     estimateTrialLimitState,
 } from './plugins/trial-limit'
 export type {
+    TOCViewItem,
+    TOCViewOptions,
+} from './core/reader'
+
+export type {
     TrialLimitController,
     TrialLimitedBook,
     TrialLimitOptions,

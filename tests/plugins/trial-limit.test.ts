@@ -71,12 +71,14 @@ const makeBook = (): Book => ({
             label: 'Part One',
             href: 'Text/chapter-1.xhtml#start',
             subitems: [
+                { label: 'Chapter One Note', href: 'Text/chapter-1.xhtml#note' },
                 { label: 'Chapter Two', href: 'Text/chapter-2.xhtml' },
             ],
         },
     ],
     resolveHref: (href: string) => {
         if (href === 'Text/chapter-1.xhtml#start') return { index: 1 }
+        if (href === 'Text/chapter-1.xhtml#note') return { index: 1 }
         return null
     },
 })
@@ -133,19 +135,41 @@ describe('Trial limit plugin', () => {
         expect(items.map(item => ({
             label: item.label,
             depth: item.depth,
+            parentHrefs: item.parentHrefs,
+            hasChildren: item.hasChildren,
             sectionIndex: item.sectionIndex,
             disabled: item.disabled,
         }))).toEqual([
-            { label: 'Cover', depth: 0, sectionIndex: 0, disabled: false },
-            { label: 'Part One', depth: 0, sectionIndex: 1, disabled: false },
-            { label: 'Chapter Two', depth: 1, sectionIndex: 2, disabled: true },
+            { label: 'Cover', depth: 0, parentHrefs: [], hasChildren: false, sectionIndex: 0, disabled: false },
+            { label: 'Part One', depth: 0, parentHrefs: [], hasChildren: true, sectionIndex: 1, disabled: false },
+            {
+                label: 'Chapter One Note',
+                depth: 1,
+                parentHrefs: ['Text/chapter-1.xhtml#start'],
+                hasChildren: false,
+                sectionIndex: 1,
+                disabled: false,
+            },
+            {
+                label: 'Chapter Two',
+                depth: 1,
+                parentHrefs: ['Text/chapter-1.xhtml#start'],
+                hasChildren: false,
+                sectionIndex: 2,
+                disabled: true,
+            },
         ])
         expect(book.trialLimit.getAllowedTOCHrefs(sectionFractions)).toEqual([
             'Text/cover.xhtml',
             'Text/chapter-1.xhtml',
+            'Text/chapter-1.xhtml',
         ])
         expect(book.trialLimit.canGoTo('Text/chapter-2.xhtml', sectionFractions)).toBe(false)
         expect(book.trialLimit.getCurrentTOCItem(items, { index: 2, fraction: 0 })?.label).toBe('Chapter Two')
+        expect(book.trialLimit.getCurrentTOCItem(items, {
+            index: 1,
+            tocItem: { label: 'Chapter One Note', href: 'Text/chapter-1.xhtml#note' },
+        })?.label).toBe('Chapter One Note')
         expect(book.trialLimit.getNextTotalFraction({
             sectionIndex: 1,
             sectionCount: 3,
@@ -178,9 +202,33 @@ describe('Trial limit plugin', () => {
         expect(reader.getAllowedTOCHrefs()).toEqual([
             'Text/cover.xhtml',
             'Text/chapter-1.xhtml',
+            'Text/chapter-1.xhtml',
         ])
         expect(reader.getTrialTOCItems().at(-1)?.disabled).toBe(true)
         expect(reader.getCurrentTrialTOCItem()?.label).toBe('Part One')
+        expect(reader.getTOCViewItems().map(item => ({
+            label: item.label,
+            depth: item.depth,
+            active: item.active,
+            disabled: item.disabled,
+        }))).toEqual([
+            { label: 'Cover', depth: 0, active: false, disabled: false },
+            { label: 'Part One', depth: 0, active: true, disabled: false },
+            { label: 'Chapter One Note', depth: 1, active: false, disabled: false },
+            { label: 'Chapter Two', depth: 1, active: false, disabled: true },
+        ])
+        expect(reader.getTOCViewItems({
+            location: {
+                index: 1,
+                fraction: 0,
+                tocItem: { label: 'Chapter One Note', href: 'Text/chapter-1.xhtml#note' },
+            },
+        }).map(item => ({ label: item.label, active: item.active }))).toEqual([
+            { label: 'Cover', active: false },
+            { label: 'Part One', active: false },
+            { label: 'Chapter One Note', active: true },
+            { label: 'Chapter Two', active: false },
+        ])
 
         reader.destroy()
     })

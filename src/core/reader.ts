@@ -29,6 +29,26 @@ export interface ReaderSessionConfig {
     plugins?: readonly RebookPlugin[]
 }
 
+export interface TOCViewItem {
+    item: TOCItem
+    key: string
+    index: number
+    label: string
+    href: string
+    depth: number
+    parentHrefs: string[]
+    hasChildren: boolean
+    sectionIndex: number
+    sectionFraction: number
+    disabled: boolean
+    active: boolean
+}
+
+export interface TOCViewOptions {
+    items?: readonly TOCItem[]
+    location?: RelocateEvent | null
+}
+
 /**
  * High-level reader API shared by browser and Mini Program hosts.
  */
@@ -169,6 +189,35 @@ export class ReaderSession {
         const trialLimit = this.getTrialLimit()
         if (!trialLimit) return null
         return trialLimit.getCurrentTOCItem(items, this.getLocation())
+    }
+
+    /**
+     * Get flattened TOC items ready for reader UI rendering.
+     *
+     * The returned items include active and trial-disabled state so hosts do not
+     * need to duplicate href matching or trial policy logic.
+     */
+    getTOCViewItems(options: TOCViewOptions = {}): TOCViewItem[] {
+        if (!this.book) return []
+
+        const items = options.items ?? this.book.toc ?? []
+        if (!items.length) return []
+
+        const location = options.location === undefined ? this.getLocation() : options.location
+        const sectionFractions = this.getSectionFractions()
+        const trialLimit = this.getTrialLimit()
+
+        if (trialLimit) {
+            const trialItems = trialLimit.getTOCItems(sectionFractions, items)
+            const activeItem = trialLimit.getCurrentTOCItem(trialItems, location)
+            return trialItems.map(item => ({
+                ...item,
+                active: isSameTOCItem(item.item, activeItem?.item ?? null),
+            }))
+        }
+
+        const activeItem = this.getCurrentTOCItem(location)
+        return flattenTOCViewItems(this.book, items, sectionFractions, activeItem)
     }
 
     /**
@@ -381,6 +430,94 @@ function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
     return items.flatMap(item => item.subitems?.length ? [item, ...flattenTOC(item.subitems)] : [item])
 }
 
+function flattenTOCViewItems(
+    book: Book,
+    items: readonly TOCItem[],
+    sectionFractions: readonly number[],
+    activeItem: TOCItem | null,
+): TOCViewItem[] {
+    const result: TOCViewItem[] = []
+    let index = 0
+
+    const walk = (tocItems: readonly TOCItem[], depth: number, parentHrefs: string[]) => {
+        for (const item of tocItems) {
+            const itemIndex = index++
+            const sectionIndex = resolveTOCSectionIndex(book, item.href)
+            const sectionFraction = sectionIndex >= 0 ? sectionFractions[sectionIndex] ?? 0 : 0
+            const hasChildren = !!item.subitems?.length
+            result.push({
+                item,
+                key: `${depth}-${itemIndex}-${item.href}`,
+                index: itemIndex,
+                label: item.label || 'Untitled',
+                href: item.href,
+                depth,
+                parentHrefs,
+                hasChildren,
+                sectionIndex,
+                sectionFraction,
+                disabled: false,
+                active: isSameTOCItem(item, activeItem),
+            })
+
+            if (hasChildren) {
+                walk(item.subitems!, depth + 1, [...parentHrefs, item.href])
+            }
+        }
+    }
+
+    walk(items, 0, [])
+    return result
+}
+
+function isSameTOCItem(item: TOCItem, activeItem: TOCItem | null): boolean {
+    if (!activeItem) return false
+    if (item === activeItem) return true
+
+    const itemHref = normalizeTOCHref(item.href)
+    const activeHref = normalizeTOCHref(activeItem.href)
+    if (!itemHref || !activeHref) return false
+    if (itemHref === activeHref) return true
+
+    if (activeHref.includes('#')) return false
+    return normalizeNavigationHref(itemHref) === normalizeNavigationHref(activeHref)
+}
+
 function normalizeNavigationHref(href?: string | null): string {
-    return (href || '').split('#')[0]
+    return normalizeTOCHref(href).split('#')[0]
+}
+
+function normalizeTOCHref(href?: string | null): string {
+    return (href || '').trim()
+}
+
+function normalizeBookPath(href?: string | null): string {
+    const path = normalizeNavigationHref(href).replace(/\\/g, '/').replace(/^\/+/, '')
+    const parts: string[] = []
+    for (const part of path.split('/')) {
+        if (!part || part === '.') continue
+        if (part === '..') parts.pop()
+        else parts.push(part)
+    }
+    return parts.join('/')
+}
+
+function resolveTOCSectionIndex(book: Book, href: string): number {
+    const resolved = book.resolveHref?.(href)
+    if (typeof resolved?.index === 'number' && resolved.index >= 0) return resolved.index
+
+    const parts = book.splitTOCHref?.(href)
+    if (parts && Array.isArray(parts)) {
+        const [id] = parts
+        const sectionIndex = book.sections.findIndex(section => section.id === id)
+        if (sectionIndex >= 0) return sectionIndex
+    }
+
+    const normalizedHref = normalizeBookPath(href)
+    if (!normalizedHref) return -1
+
+    return book.sections.findIndex(section => {
+        const sectionId = normalizeBookPath(String(section.id ?? ''))
+        return sectionId === normalizedHref || sectionId.endsWith(`/${normalizedHref}`)
+    })
 }

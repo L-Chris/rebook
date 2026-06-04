@@ -37,9 +37,13 @@ export interface TrialSnapshotLike {
 
 export interface TrialTOCAccessItem {
     item: TOCItem
+    key: string
+    index: number
     label: string
     href: string
     depth: number
+    parentHrefs: string[]
+    hasChildren: boolean
     sectionIndex: number
     sectionFraction: number
     disabled: boolean
@@ -57,7 +61,7 @@ export interface TrialLimitController {
     getAllowedTOCHrefs(sectionFractions: readonly number[]): string[]
     getCurrentTOCItem(
         items: readonly TrialTOCAccessItem[],
-        location: Pick<RelocateEvent, 'index'> | null | undefined,
+        location: Pick<RelocateEvent, 'index' | 'tocItem'> | null | undefined,
     ): TrialTOCAccessItem | null
     getNextTotalFraction(snapshot: TrialSnapshotLike, sectionFractions: readonly number[]): number
     canGoNext(
@@ -175,8 +179,12 @@ function createTrialLimitController(
     }
 }
 
+function normalizeTOCHref(href?: string | null): string {
+    return (href || '').trim()
+}
+
 function normalizeNavigationHref(href?: string | null): string {
-    return (href || '').split('#')[0]
+    return normalizeTOCHref(href).split('#')[0]
 }
 
 function normalizeBookPath(href?: string | null): string {
@@ -237,30 +245,55 @@ function getTrialTOCItems(
     items: readonly TOCItem[] = book.toc || [],
     depth = 0,
 ): TrialTOCAccessItem[] {
-    return items.flatMap(item => {
-        const sectionIndex = resolveBookNavigation(book, item.href)?.index ?? -1
-        const sectionFraction = sectionIndex >= 0 ? sectionFractions[sectionIndex] ?? 0 : 0
-        const disabled = sectionIndex >= 0 && sectionFraction > limitFraction + epsilon
-        return [
-            {
+    const result: TrialTOCAccessItem[] = []
+    let index = 0
+
+    const walk = (tocItems: readonly TOCItem[], currentDepth: number, parentHrefs: string[]) => {
+        for (const item of tocItems) {
+            const itemIndex = index++
+            const sectionIndex = resolveBookNavigation(book, item.href)?.index ?? -1
+            const sectionFraction = sectionIndex >= 0 ? sectionFractions[sectionIndex] ?? 0 : 0
+            const disabled = sectionIndex >= 0 && sectionFraction > limitFraction + epsilon
+            const hasChildren = !!item.subitems?.length
+            result.push({
                 item,
+                key: `${currentDepth}-${itemIndex}-${item.href}`,
+                index: itemIndex,
                 label: item.label || 'Untitled',
                 href: item.href,
-                depth,
+                depth: currentDepth,
+                parentHrefs,
+                hasChildren,
                 sectionIndex,
                 sectionFraction,
                 disabled,
-            },
-            ...getTrialTOCItems(book, sectionFractions, limitFraction, epsilon, item.subitems || [], depth + 1),
-        ]
-    })
+            })
+
+            if (hasChildren) {
+                walk(item.subitems!, currentDepth + 1, [...parentHrefs, item.href])
+            }
+        }
+    }
+
+    walk(items, depth, [])
+    return result
 }
 
 function getCurrentTrialTOCItem(
     items: readonly TrialTOCAccessItem[],
-    location: Pick<RelocateEvent, 'index'> | null | undefined,
+    location: Pick<RelocateEvent, 'index' | 'tocItem'> | null | undefined,
 ): TrialTOCAccessItem | null {
     if (!items.length || !location || location.index < 0) return null
+
+    const tocHref = normalizeTOCHref(location.tocItem?.href)
+    if (tocHref) {
+        const exact = items.find(item => normalizeTOCHref(item.href) === tocHref)
+        if (exact) return exact
+
+        const sectionHref = normalizeNavigationHref(tocHref)
+        const sectionItem = items.find(item => normalizeNavigationHref(item.href) === sectionHref)
+        if (sectionItem) return sectionItem
+    }
 
     const exact = items.find(item => item.sectionIndex === location.index)
     if (exact) return exact

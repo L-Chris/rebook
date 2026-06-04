@@ -19,7 +19,7 @@ export {
     isBook,
 } from './exporter'
 export { type Renderer, type RendererConfig, type RendererStyles, type LayoutMode, type RendererFactory } from './renderer'
-export { ReaderSession, type ReaderSessionConfig } from './reader'
+export { ReaderSession, type ReaderSessionConfig, type TOCViewItem, type TOCViewOptions } from './reader'
 export {
     getAnchorIds,
     getColumnCount,

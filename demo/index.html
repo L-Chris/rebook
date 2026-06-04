@@ -762,35 +762,6 @@
             return true
         }
 
-        const flattenTOCItems = (items = []) => {
-            const result = []
-            for (const item of items) {
-                result.push(item)
-                if (item.subitems?.length) result.push(...flattenTOCItems(item.subitems))
-            }
-            return result
-        }
-
-        const getTOCSectionIndex = (href) => {
-            const resolved = currentBook?.resolveHref?.(href)
-            if (resolved) return resolved.index
-            const [id] = currentBook?.splitTOCHref?.(href) ?? href.split('#')
-            return currentBook?.sections.findIndex(section => section.id === id) ?? -1
-        }
-
-        const getActiveTOCHrefForSection = (sectionIndex) => {
-            let activeHref = null
-            let activeIndex = -1
-            for (const item of flattenTOCItems(currentBook?.toc)) {
-                const index = getTOCSectionIndex(item.href)
-                if (index >= 0 && index <= sectionIndex && index >= activeIndex) {
-                    activeHref = item.href
-                    activeIndex = index
-                }
-            }
-            return activeHref
-        }
-
         // Open a file
         const openFile = async (file, options = {}) => {
             try {
@@ -987,7 +958,7 @@
                 progressText.textContent = `${percent}%`
 
                 // Highlight current TOC item
-                const href = e.tocItem?.href ?? getActiveTOCHrefForSection(e.index)
+                const href = reader.getTOCViewItems({ location: e }).find(item => item.active)?.href
                 if (!href) {
                     activeTOCHref = null
                     applyActiveTOC(null)

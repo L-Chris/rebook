@@ -93,6 +93,8 @@ export {
 } from './core/reader'
 export type {
     ReaderSessionConfig,
+    TOCViewItem,
+    TOCViewOptions,
 } from './core/reader'
 
 export type {

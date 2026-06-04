@@ -21037,6 +21037,34 @@ class ReaderSession {
     return trialLimit.getCurrentTOCItem(items, this.getLocation());
   }
   /**
+   * Get flattened TOC items ready for reader UI rendering.
+   *
+   * The returned items include active and trial-disabled state so hosts do not
+   * need to duplicate href matching or trial policy logic.
+   */
+  getTOCViewItems(options = {}) {
+    var _a2, _b2;
+    if (!this.book) return [];
+    const items = (_b2 = (_a2 = options.items) != null ? _a2 : this.book.toc) != null ? _b2 : [];
+    if (!items.length) return [];
+    const location = options.location === void 0 ? this.getLocation() : options.location;
+    const sectionFractions = this.getSectionFractions();
+    const trialLimit = this.getTrialLimit();
+    if (trialLimit) {
+      const trialItems = trialLimit.getTOCItems(sectionFractions, items);
+      const activeItem2 = trialLimit.getCurrentTOCItem(trialItems, location);
+      return trialItems.map((item) => {
+        var _a3;
+        return {
+          ...item,
+          active: isSameTOCItem(item.item, (_a3 = activeItem2 == null ? void 0 : activeItem2.item) != null ? _a3 : null)
+        };
+      });
+    }
+    const activeItem = this.getCurrentTOCItem(location);
+    return flattenTOCViewItems(this.book, items, sectionFractions, activeItem);
+  }
+  /**
    * Navigate to a location.
    */
   async goTo(target) {
@@ -21218,8 +21246,81 @@ function flattenTOC(items) {
     return ((_a2 = item.subitems) == null ? void 0 : _a2.length) ? [item, ...flattenTOC(item.subitems)] : [item];
   });
 }
+function flattenTOCViewItems(book, items, sectionFractions, activeItem) {
+  const result = [];
+  let index = 0;
+  const walk2 = (tocItems, depth, parentHrefs) => {
+    var _a2, _b2;
+    for (const item of tocItems) {
+      const itemIndex = index++;
+      const sectionIndex = resolveTOCSectionIndex(book, item.href);
+      const sectionFraction = sectionIndex >= 0 ? (_a2 = sectionFractions[sectionIndex]) != null ? _a2 : 0 : 0;
+      const hasChildren = !!((_b2 = item.subitems) == null ? void 0 : _b2.length);
+      result.push({
+        item,
+        key: `${depth}-${itemIndex}-${item.href}`,
+        index: itemIndex,
+        label: item.label || "Untitled",
+        href: item.href,
+        depth,
+        parentHrefs,
+        hasChildren,
+        sectionIndex,
+        sectionFraction,
+        disabled: false,
+        active: isSameTOCItem(item, activeItem)
+      });
+      if (hasChildren) {
+        walk2(item.subitems, depth + 1, [...parentHrefs, item.href]);
+      }
+    }
+  };
+  walk2(items, 0, []);
+  return result;
+}
+function isSameTOCItem(item, activeItem) {
+  if (!activeItem) return false;
+  if (item === activeItem) return true;
+  const itemHref = normalizeTOCHref$1(item.href);
+  const activeHref = normalizeTOCHref$1(activeItem.href);
+  if (!itemHref || !activeHref) return false;
+  if (itemHref === activeHref) return true;
+  if (activeHref.includes("#")) return false;
+  return normalizeNavigationHref$1(itemHref) === normalizeNavigationHref$1(activeHref);
+}
 function normalizeNavigationHref$1(href) {
-  return (href || "").split("#")[0];
+  return normalizeTOCHref$1(href).split("#")[0];
+}
+function normalizeTOCHref$1(href) {
+  return (href || "").trim();
+}
+function normalizeBookPath$1(href) {
+  const path = normalizeNavigationHref$1(href).replace(/\\/g, "/").replace(/^\/+/, "");
+  const parts = [];
+  for (const part of path.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return parts.join("/");
+}
+function resolveTOCSectionIndex(book, href) {
+  var _a2, _b2;
+  const resolved = (_a2 = book.resolveHref) == null ? void 0 : _a2.call(book, href);
+  if (typeof (resolved == null ? void 0 : resolved.index) === "number" && resolved.index >= 0) return resolved.index;
+  const parts = (_b2 = book.splitTOCHref) == null ? void 0 : _b2.call(book, href);
+  if (parts && Array.isArray(parts)) {
+    const [id] = parts;
+    const sectionIndex = book.sections.findIndex((section) => section.id === id);
+    if (sectionIndex >= 0) return sectionIndex;
+  }
+  const normalizedHref = normalizeBookPath$1(href);
+  if (!normalizedHref) return -1;
+  return book.sections.findIndex((section) => {
+    var _a3;
+    const sectionId = normalizeBookPath$1(String((_a3 = section.id) != null ? _a3 : ""));
+    return sectionId === normalizedHref || sectionId.endsWith(`/${normalizedHref}`);
+  });
 }
 var lib = {};
 var conventions = {};
@@ -28060,8 +28161,11 @@ function createTrialLimitController(book, state, options) {
     }
   };
 }
+function normalizeTOCHref(href) {
+  return (href || "").trim();
+}
 function normalizeNavigationHref(href) {
-  return (href || "").split("#")[0];
+  return normalizeTOCHref(href).split("#")[0];
 }
 function normalizeBookPath(href) {
   const path = normalizeNavigationHref(href).replace(/\\/g, "/").replace(/^\/+/, "");
@@ -28102,27 +28206,48 @@ function getTargetFraction(book, target, sectionFractions) {
   return (_b2 = sectionFractions[index]) != null ? _b2 : 0;
 }
 function getTrialTOCItems(book, sectionFractions, limitFraction, epsilon, items = book.toc || [], depth = 0) {
-  return items.flatMap((item) => {
-    var _a2, _b2, _c;
-    const sectionIndex = (_b2 = (_a2 = resolveBookNavigation(book, item.href)) == null ? void 0 : _a2.index) != null ? _b2 : -1;
-    const sectionFraction = sectionIndex >= 0 ? (_c = sectionFractions[sectionIndex]) != null ? _c : 0 : 0;
-    const disabled = sectionIndex >= 0 && sectionFraction > limitFraction + epsilon;
-    return [
-      {
+  const result = [];
+  let index = 0;
+  const walk2 = (tocItems, currentDepth, parentHrefs) => {
+    var _a2, _b2, _c, _d;
+    for (const item of tocItems) {
+      const itemIndex = index++;
+      const sectionIndex = (_b2 = (_a2 = resolveBookNavigation(book, item.href)) == null ? void 0 : _a2.index) != null ? _b2 : -1;
+      const sectionFraction = sectionIndex >= 0 ? (_c = sectionFractions[sectionIndex]) != null ? _c : 0 : 0;
+      const disabled = sectionIndex >= 0 && sectionFraction > limitFraction + epsilon;
+      const hasChildren = !!((_d = item.subitems) == null ? void 0 : _d.length);
+      result.push({
         item,
+        key: `${currentDepth}-${itemIndex}-${item.href}`,
+        index: itemIndex,
         label: item.label || "Untitled",
         href: item.href,
-        depth,
+        depth: currentDepth,
+        parentHrefs,
+        hasChildren,
         sectionIndex,
         sectionFraction,
         disabled
-      },
-      ...getTrialTOCItems(book, sectionFractions, limitFraction, epsilon, item.subitems || [], depth + 1)
-    ];
-  });
+      });
+      if (hasChildren) {
+        walk2(item.subitems, currentDepth + 1, [...parentHrefs, item.href]);
+      }
+    }
+  };
+  walk2(items, depth, []);
+  return result;
 }
 function getCurrentTrialTOCItem(items, location) {
+  var _a2;
   if (!items.length || !location || location.index < 0) return null;
+  const tocHref = normalizeTOCHref((_a2 = location.tocItem) == null ? void 0 : _a2.href);
+  if (tocHref) {
+    const exact2 = items.find((item) => normalizeTOCHref(item.href) === tocHref);
+    if (exact2) return exact2;
+    const sectionHref = normalizeNavigationHref(tocHref);
+    const sectionItem = items.find((item) => normalizeNavigationHref(item.href) === sectionHref);
+    if (sectionItem) return sectionItem;
+  }
   const exact = items.find((item) => item.sectionIndex === location.index);
   if (exact) return exact;
   for (let index = items.length - 1; index >= 0; index--) {
