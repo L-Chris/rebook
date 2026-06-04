@@ -18,7 +18,17 @@ export {
     firstSectionsSelection,
     isBook,
 } from './exporter'
-export { type Renderer, type RendererConfig, type RendererStyles, type LayoutMode } from './renderer'
+export { type Renderer, type RendererConfig, type RendererStyles, type LayoutMode, type RendererFactory } from './renderer'
+export {
+    getAnchorIds,
+    getColumnCount,
+    getLineHeightMultiplier,
+    getLinePageIndex,
+    getPagePaddingBlock,
+    getPluginPrefetchPageCount,
+    getReadablePageCount,
+    parseCSSPixels,
+} from './renderer-utils'
 export { type Loader, type LoaderEntry } from './loader'
 export { type DOMAdapter, type XMLDocument, type XMLElement, type XMLAttr } from './dom-adapter'
 export { type URLFactory } from './url-factory'

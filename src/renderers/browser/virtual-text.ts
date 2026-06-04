@@ -8,6 +8,16 @@ import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, Resol
 import type { LayoutMode, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
 import { SectionProgress } from '../../utils/progress'
 import {
+    getAnchorIds,
+    getColumnCount,
+    getLineHeightMultiplier,
+    getLinePageIndex,
+    getPagePaddingBlock,
+    getPluginPrefetchPageCount,
+    getReadablePageCount,
+    parseCSSPixels,
+} from '../../core/renderer-utils'
+import {
     getVisibleLines,
     layout as layoutText,
     prepare,
@@ -28,6 +38,11 @@ interface RendererEventMap {
 }
 
 type Listener<T> = (event: T) => void
+
+export interface BrowserRendererConfig extends RendererConfig {
+    /** The browser element to render into. */
+    container: HTMLElement
+}
 
 const RESIZE_DEBOUNCE_MS = 100
 const DEFAULT_MARGIN = 32
@@ -95,7 +110,7 @@ export class VirtualTextRenderer implements Renderer {
     private suppressNextScrollRelocate = false
     private prefetchPageCount = 0
 
-    constructor(config: RendererConfig) {
+    constructor(config: BrowserRendererConfig) {
         this.container = config.container
         this.styles = config.styles ?? {}
         this.maxColumnCount = config.maxColumnCount ?? 2
@@ -153,7 +168,7 @@ export class VirtualTextRenderer implements Renderer {
         this.sections = book.sections
         this.progress = new SectionProgress(this.sections)
         this.tocPositions = []
-        this.prefetchPageCount = getTranslationPrefetchPageCount(book)
+        this.prefetchPageCount = getPluginPrefetchPageCount(book)
     }
 
     async goTo(target: number | string): Promise<void> {
@@ -1039,7 +1054,7 @@ export class VirtualTextRenderer implements Renderer {
     }
 }
 
-export const createVirtualTextRenderer = (config: RendererConfig): Renderer => {
+export const createVirtualTextRenderer = (config: BrowserRendererConfig): Renderer => {
     return new VirtualTextRenderer(config)
 }
 
@@ -1051,46 +1066,10 @@ function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
     )
 }
 
-function getTranslationPrefetchPageCount(book: Book): number {
-    const value = (book as { translationPrefetchPageCount?: unknown }).translationPrefetchPageCount
-    return typeof value === 'number' && Number.isFinite(value)
-        ? Math.max(0, Math.floor(value))
-        : 0
-}
-
 function compareTOCPosition(a: TOCPosition, b: TOCPosition): number {
     return a.index - b.index
         || a.sourceTop - b.sourceTop
         || a.order - b.order
-}
-
-function getAnchorIds(value: unknown): string[] {
-    if (typeof value !== 'string') {
-        const id = getElementLikeId(value)
-        return id ? [id] : []
-    }
-
-    const trimmed = value.trim()
-    if (!trimmed) return []
-
-    const attrMatch = trimmed.match(/^\[(?:id|name)=["']([^"']+)["']\]$/)
-    if (attrMatch) return [unescapeCSSIdentifier(attrMatch[1])]
-
-    if (trimmed.startsWith('#')) return [unescapeCSSIdentifier(trimmed.slice(1))]
-    if (/^[\w:-]+$/.test(trimmed)) return [trimmed]
-
-    return []
-}
-
-function getElementLikeId(value: unknown): string | null {
-    if (!value || typeof value !== 'object') return null
-    const maybeElement = value as { id?: unknown; getAttribute?: (name: string) => string | null }
-    if (typeof maybeElement.id === 'string' && maybeElement.id) return maybeElement.id
-    return maybeElement.getAttribute?.('id') ?? maybeElement.getAttribute?.('name') ?? null
-}
-
-function unescapeCSSIdentifier(value: string): string {
-    return value.replace(/\\(.)/g, '$1')
 }
 
 function applyTextStyle(element: HTMLElement, style: TextStyle): void {
@@ -1126,58 +1105,4 @@ function getTableTextAlign(align: 'start' | 'center' | 'end' | undefined): strin
     if (align === 'center') return 'center'
     if (align === 'end') return 'right'
     return 'left'
-}
-
-function parseCSSPixels(value: string | number | undefined, fallback: number): number {
-    if (!value) return fallback
-    if (typeof value === 'number') return Number.isFinite(value) ? value : fallback
-    const match = value.trim().match(/^([\d.]+)(px)?$/)
-    if (!match) return fallback
-    const parsed = Number(match[1])
-    return Number.isFinite(parsed) ? parsed : fallback
-}
-
-function getLineHeightMultiplier(value: RendererStyles['lineHeight'], fontSize: number): number {
-    if (typeof value === 'number') return value
-    if (typeof value === 'string') {
-        const trimmed = value.trim()
-        if (trimmed.endsWith('px')) return parseCSSPixels(trimmed, fontSize * 1.6) / fontSize
-        const parsed = Number(trimmed)
-        if (Number.isFinite(parsed)) return parsed
-    }
-    return 1.6
-}
-
-function getColumnCount(
-    mode: LayoutMode,
-    availableWidth: number,
-    minColumnWidth: number,
-    gap: number,
-    maxColumnCount: number,
-): number {
-    if (mode !== 'paginated' || maxColumnCount < 2) return 1
-    return availableWidth >= minColumnWidth * 2 + gap ? 2 : 1
-}
-
-function getReadablePageCount(lines: readonly LineRange[], columnHeight: number, columns: number): number {
-    let lastReadablePage = 0
-    for (const line of lines) {
-        if (line.height <= 0) continue
-        lastReadablePage = Math.max(lastReadablePage, getLinePageIndex(line, columnHeight, columns))
-    }
-    return Math.max(1, lastReadablePage + 1)
-}
-
-function getLinePageIndex(line: LineRange, columnHeight: number, columns: number): number {
-    const safeColumnHeight = Math.max(1, columnHeight)
-    const safeColumns = Math.max(1, columns)
-    const sourceColumn = Math.floor(Math.max(0, line.top) / safeColumnHeight)
-    return Math.floor(sourceColumn / safeColumns)
-}
-
-function getPagePaddingBlock(mode: LayoutMode, pageHeight: number, margin: number): number {
-    const preferred = mode === 'paginated'
-        ? Math.max(20, margin)
-        : Math.max(12, margin * 0.5)
-    return Math.min(preferred, Math.max(12, pageHeight * 0.14))
 }

@@ -5,19 +5,17 @@
 
 import type { Book, RelocateEvent, LoadEvent, TOCItem, RebookPlugin, BlockWindowEvent } from '../../core/types'
 import type { ParserInput, ParserOptions } from '../../core/parser'
-import type { RendererConfig, RendererStyles, LayoutMode, Renderer } from '../../core/renderer'
+import type { RendererStyles, LayoutMode, Renderer } from '../../core/renderer'
 import { registry } from '../../core/parser'
 import { applyRebookPlugins } from '../../core/plugins'
-import { VirtualTextRenderer } from './virtual-text'
+import { VirtualTextRenderer, type BrowserRendererConfig } from './virtual-text'
 import { BrowserDOMAdapter, BrowserURLFactory } from '../../adapters/browser'
 
 // ============================================================================
 // Reader View
 // ============================================================================
 
-export interface ReaderConfig extends Omit<RendererConfig, 'container'> {
-    /** Container element */
-    container: HTMLElement
+export interface ReaderConfig extends BrowserRendererConfig {
     /**
      * Browser rendering backend.
      * Default: 'virtual-text' (AST -> preset blocks -> Pretext -> visible DOM rows).

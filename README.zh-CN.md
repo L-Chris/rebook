@@ -185,7 +185,7 @@ const renderer = createWechatMiniProgramRenderer({
 })
 ```
 
-它会为 Pretext 安装基于 `wx.createOffscreenCanvas` 的 `OffscreenCanvas` polyfill，并输出可序列化的行节点供 WXML 渲染。
+它会把 `wx.createOffscreenCanvas` 传给平台中立的 Pretext 测量 polyfill，并输出可序列化的行节点供 WXML 渲染。
 
 ## 文档
 
@@ -212,7 +212,7 @@ npm test          # 运行测试
 | 浏览器耦合 | 解析器使用 DOM API | 解析器环境无关（适配器） |
 | 文档模型 | 无 | SlateJS 启发的树形结构，支持修改 |
 | 格式支持 | EPUB、MOBI、FB2、CBZ、PDF | EPUB、MOBI/AZW3、FB2、CBZ |
-| 测试 | 无 | Vitest（299 个测试） |
+| 测试 | 无 | Vitest 测试套件 |
 | 畸形 EPUB 容错 | 无（仅 zip.js） | CD 校正 + 逐条目 LFH 扫描 |
 
 ## 许可证

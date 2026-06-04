@@ -12,6 +12,12 @@
       "core/parser": [
         "dist/core/parser.d.ts"
       ],
+      "renderers/browser": [
+        "dist/renderers/browser/index.d.ts"
+      ],
+      "renderers/wechat-miniprogram": [
+        "dist/renderers/wechat-miniprogram/index.d.ts"
+      ],
       "parsers/*": [
         "dist/parsers/*.d.ts"
       ],
@@ -62,6 +68,14 @@
     "./core/parser": {
       "types": "./dist/core/parser.d.ts",
       "import": "./dist/core/parser.js"
+    },
+    "./renderers/browser": {
+      "types": "./dist/renderers/browser/index.d.ts",
+      "import": "./dist/renderers/browser.js"
+    },
+    "./renderers/wechat-miniprogram": {
+      "types": "./dist/renderers/wechat-miniprogram/index.d.ts",
+      "import": "./dist/renderers/wechat-miniprogram.js"
     },
     "./renderers/*": {
       "types": "./dist/renderers/*.d.ts",

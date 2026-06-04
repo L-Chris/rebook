@@ -845,7 +845,7 @@ await renderer.open(book)
 await renderer.goTo(0)
 ```
 
-The constructor installs `installWechatMiniProgramPretextPolyfill(wx)` by default so `@chenglou/pretext` can measure text through `wx.createOffscreenCanvas` in Mini Program runtimes. Pass `installPretextPolyfill: false` if the host has already installed a compatible `OffscreenCanvas` global.
+The constructor installs the platform-neutral `installPretextMeasurementPolyfill(wx)` by default so `@chenglou/pretext` can measure text through the host `createOffscreenCanvas` implementation in Mini Program runtimes. Pass `installPretextPolyfill: false` if the host has already installed a compatible `OffscreenCanvas` global.
 
 ---
 

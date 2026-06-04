@@ -189,7 +189,7 @@ Current test coverage is good but has gaps:
 
 ### Why Not Improve Now?
 
-1. **Diminishing returns**: Current 299 tests cover main use cases
+1. **Diminishing returns**: Current Vitest coverage spans the main parser, renderer, exporter, adapter, plugin, search, and MCP flows
 2. **Fixture complexity**: Encrypted EPUBs and HUFF-compressed MOBIs are hard to generate programmatically
 3. **Browser testing**: Requires jsdom or Playwright setup (significant infrastructure)
 

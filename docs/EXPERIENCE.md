@@ -288,7 +288,7 @@ const epub = createTestEPUB({
 
 ### Test coverage
 
-299 tests across 17 test files:
+Vitest coverage spans parser, renderer, exporter, adapter, plugin, search, and MCP behavior:
 - 4 parser test suites (EPUB, MOBI, FB2, CBZ)
 - Document Model tests (query, mutation, serialization)
 - Zip loader tests (including malformed zip recovery)

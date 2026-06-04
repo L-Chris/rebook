@@ -1,3 +1,5 @@
+import './renderers/wechat-miniprogram/polyfills'
+
 export { registry } from './core/parser'
 export {
     setRebookDebug,

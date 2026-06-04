@@ -142,7 +142,7 @@ const renderer = createWechatMiniProgramRenderer({
 })
 ```
 
-It installs the Pretext `OffscreenCanvas` polyfill for `wx.createOffscreenCanvas` and emits serializable line nodes for WXML rendering.
+It installs the platform-neutral Pretext measurement polyfill with `wx.createOffscreenCanvas` and emits serializable line nodes for WXML rendering.
 
 ## MCP Server
 
@@ -211,7 +211,7 @@ npm test          # Run tests
 | Browser coupling | Parser uses DOM APIs | Parser is env-agnostic (adapters) |
 | Document Model | None | SlateJS-inspired tree with mutations |
 | Format support | EPUB, MOBI, FB2, CBZ, PDF | EPUB, MOBI/AZW3, FB2, CBZ |
-| Testing | None | Vitest (299 tests) |
+| Testing | None | Vitest suite |
 | Malformed EPUB recovery | None | CD correction + per-entry LFH scan |
 
 ## License

@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Book } from '../../src/core/types'
-import { installWechatMiniProgramPretextPolyfill } from '../../src/core/pretext'
+import { installPretextMeasurementPolyfill } from '../../src/core/pretext'
 import { WechatMiniProgramRenderer, createWechatMiniProgramRenderer } from '../../src/renderers/wechat-miniprogram'
 
 describe('WechatMiniProgramRenderer', () => {
     it('installs a wx.createOffscreenCanvas polyfill for Pretext measurement', () => {
         vi.stubGlobal('OffscreenCanvas', undefined)
         let measured = ''
-        const installed = installWechatMiniProgramPretextPolyfill({
+        const installed = installPretextMeasurementPolyfill({
             createOffscreenCanvas: () => ({
                 getContext: () => ({
                     font: '16px serif',

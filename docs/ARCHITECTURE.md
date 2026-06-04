@@ -14,10 +14,12 @@ source file
 
 Primary boundaries:
 
-- `src/core`: shared contracts, document model, metadata helpers, error types, Pretext adapter
+- `src/core`: shared contracts, document model, metadata helpers, error types, Pretext adapter, renderer helpers
 - `src/adapters`: browser and Node-compatible DOM/URL adapters
 - `src/parsers`: format-specific input handling
 - `src/renderers/browser`: browser `ReaderView` and virtual text renderer
+- `src/renderers/wechat-miniprogram`: DOM-free snapshot renderer for Mini Program hosts
+- `src/plugins`: book middleware that can wrap or extend `Book` before rendering
 - `src/exporters`: format-neutral export registry plus EPUB, CBZ, TXT, and HTML exporters
 - `src/loaders`: zip loading and malformed archive recovery
 
@@ -53,7 +55,9 @@ Parsers produce `Book`. Renderers and exporters consume `Book`. Adding a parser 
 
 ### Renderers Own Platform Behavior
 
-Platform-specific layout, event handling, DOM updates, and navigation state live in renderers. The default browser path is:
+Platform-specific event handling, DOM/snapshot updates, and host integration live in renderers. Shared pagination math, CSS unit parsing, anchor selector parsing, and readable-page detection live in `src/core/renderer-utils.ts` so browser and Mini Program renderers do not drift.
+
+The default browser path is:
 
 ```text
 Section XHTML
@@ -65,6 +69,18 @@ Section XHTML
 ```
 
 `VirtualTextRenderer` keeps only visible line rows in the live DOM and supports scrolled, paginated, and auto-spread layouts.
+
+The Mini Program renderer uses the same `TextBlock -> Pretext -> LineRange` pipeline and emits serializable line snapshots instead of DOM rows. Its host canvas adapter is passed into the platform-neutral `installPretextMeasurementPolyfill()` helper.
+
+### Plugins Are Book Middleware
+
+Plugins run after parsing and before rendering. They wrap `Book` rather than a platform renderer, which keeps official plugins usable in browser, Mini Program, and future hosts.
+
+```typescript
+type RebookPlugin = (book: Book) => Book | Promise<Book>
+```
+
+`ReaderView` applies plugins after `registry.open()`. Renderers that accept already parsed books, such as `WechatMiniProgramRenderer`, apply the same plugin chain in `open(book)`.
 
 ### Exporters Are Format-Neutral
 
@@ -197,6 +213,7 @@ src/
     types.ts          Book, Section, DocumentNode, text block contracts
     parser.ts         Parser interface and registry
     renderer.ts       Renderer interface
+    renderer-utils.ts shared renderer math and anchor helpers
     exporter.ts       Exporter interface and registry
     document.ts       immutable document model
     pretext.ts        TextBlock extraction and Pretext adapter
@@ -226,6 +243,14 @@ src/
     browser/
       virtual-text.ts Pretext-backed virtual renderer
       view.ts         ReaderView high-level API
+    wechat-miniprogram/
+      index.ts        public renderer exports
+      renderer.ts     DOM-free snapshot renderer
+      polyfills.ts    Mini Program runtime polyfills
+  plugins/
+    index.ts          official plugin exports
+    translation.ts    block/TOC translation plugin
+    trial-limit.ts    trial-reading access controller plugin
   utils/
     progress.ts       section and TOC progress helpers
 ```

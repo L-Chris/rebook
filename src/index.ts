@@ -21,8 +21,8 @@
  * await reader.prev()
  *
  * // Access document model (AI-friendly)
- * const section = reader.sections[0]
- * const doc = await section.getDocument()
+ * const section = reader.getBook()?.sections[0]
+ * const doc = await section?.getDocument?.()
  * const paragraphs = doc.query('p')
  * ```
  */
@@ -68,9 +68,9 @@ export type {
     LineRange,
     VisibleLineWindow,
     PretextRichInlineLineRange,
-    WechatMiniProgramLike,
+    CanvasProviderLike,
     PretextMeasureContext,
-    WechatMiniProgramPretextPolyfillOptions,
+    PretextMeasurementPolyfillOptions,
 } from './core/pretext'
 
 export type {
@@ -150,7 +150,7 @@ export {
     prepareBlocks,
     layout,
     getVisibleLines,
-    installWechatMiniProgramPretextPolyfill,
+    installPretextMeasurementPolyfill,
 } from './core/pretext'
 
 // Search
@@ -245,7 +245,7 @@ export {
     ReaderView,
     createReader,
 } from './renderers/browser'
-export type { ReaderConfig } from './renderers/browser'
+export type { BrowserRendererConfig, ReaderConfig } from './renderers/browser'
 
 // WeChat Mini Program renderer
 export {

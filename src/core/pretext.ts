@@ -131,7 +131,7 @@ export interface VisibleLineWindow {
     lines: readonly LineRange[]
 }
 
-export interface WechatMiniProgramLike {
+export interface CanvasProviderLike {
     createOffscreenCanvas?(options?: { type?: string; width?: number; height?: number }): {
         getContext(type: '2d'): PretextMeasureContext | null
     }
@@ -142,11 +142,10 @@ export interface PretextMeasureContext {
     measureText(text: string): { width: number }
 }
 
-export interface WechatMiniProgramPretextPolyfillOptions {
+export interface PretextMeasurementPolyfillOptions {
     /**
-     * Install an estimated text measurer when wx.createOffscreenCanvas is not
-     * available. This keeps layout usable on older base libraries, with less
-     * exact line breaks than native canvas measurement.
+     * Install an estimated text measurer when the host cannot provide a native
+     * offscreen canvas. This keeps layout usable with less exact line breaks.
      */
     estimatedFallback?: boolean
 }
@@ -168,17 +167,16 @@ const DEFAULT_STYLE = {
 } satisfies Required<Pick<TextStyle, 'fontFamily' | 'fontSize' | 'lineHeight'>>
 
 /**
- * Installs the canvas shape expected by @chenglou/pretext in WeChat Mini Program
- * runtimes, where OffscreenCanvas is commonly exposed through wx instead of as a
- * browser global.
+ * Installs the canvas shape expected by @chenglou/pretext in runtimes where
+ * OffscreenCanvas is exposed by a host adapter instead of as a browser global.
  */
-export function installWechatMiniProgramPretextPolyfill(
-    wxLike: WechatMiniProgramLike = (globalThis as { wx?: WechatMiniProgramLike }).wx ?? {},
-    options: WechatMiniProgramPretextPolyfillOptions = {},
+export function installPretextMeasurementPolyfill(
+    canvasProvider: CanvasProviderLike = {},
+    options: PretextMeasurementPolyfillOptions = {},
 ): boolean {
     if (typeof globalThis.OffscreenCanvas !== 'undefined') return false
 
-    const createNativeCanvas = wxLike.createOffscreenCanvas
+    const createNativeCanvas = canvasProvider.createOffscreenCanvas
     if (createNativeCanvas) {
         const PolyfilledOffscreenCanvas = class {
             private readonly width: number

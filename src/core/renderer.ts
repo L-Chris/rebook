@@ -49,11 +49,10 @@ export interface RendererStyles {
 export type LayoutMode = 'paginated' | 'scrolled'
 
 /**
- * Configuration for creating a renderer.
+ * Platform-neutral configuration shared by renderer implementations.
+ * Browser-specific renderers add their host container in their own modules.
  */
 export interface RendererConfig {
-    /** The container element to render into */
-    container: HTMLElement
     /** Initial layout mode */
     layout?: LayoutMode
     /** Initial styles */
@@ -152,4 +151,4 @@ export interface Renderer {
 /**
  * A renderer factory creates renderer instances.
  */
-export type RendererFactory = (config: RendererConfig) => Renderer
+export type RendererFactory<TConfig extends RendererConfig = RendererConfig> = (config: TConfig) => Renderer

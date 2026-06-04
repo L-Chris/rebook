@@ -18,19 +18,19 @@ var __privateWrapper = (obj, member, setter, getter) => ({
   }
 });
 var _start, _resourceStart, _decoder, _encoder, _decompress, _removeTrailingEntries, _pdb, _MOBI_instances, getHeaders_fn, setup_fn, _mobi, _domAdapter, _urlFactory, _resourceCache, _textCache, _cache, _sections, _fileposList, _urls, _MOBI6_instances, createURL_fn, revokeURL_fn, _mobi2, _domAdapter2, _urlFactory2, _cache2, _fragmentOffsets, _fragmentSelectors, _tables, _sections2, _sectionIndexMap, _fullRawLength, _rawHead, _rawTail, _lastLoadedHead, _lastLoadedTail, _type, _urls2, _KF8_instances, setFragmentSelector_fn, createURL_fn2, revokeURL_fn2;
-;
-(function(global) {
-  if (typeof global.TextEncoder === "undefined") {
-    global.TextEncoder = function TextEncoder2() {
-      this.encoding = "utf-8";
-    };
-    global.TextEncoder.prototype.encode = function(value2) {
-      var input = String(value2);
-      var bytes = [];
-      for (var i = 0; i < input.length; i++) {
-        var code2 = input.charCodeAt(i);
+const globalScope = globalThis;
+if (typeof globalScope.TextEncoder === "undefined") {
+  globalScope.TextEncoder = class TextEncoder {
+    constructor() {
+      __publicField(this, "encoding", "utf-8");
+    }
+    encode(value2) {
+      const input = String(value2);
+      const bytes = [];
+      for (let i = 0; i < input.length; i++) {
+        let code2 = input.charCodeAt(i);
         if (code2 >= 55296 && code2 <= 56319 && i + 1 < input.length) {
-          var next = input.charCodeAt(i + 1);
+          const next = input.charCodeAt(i + 1);
           if (next >= 56320 && next <= 57343) {
             code2 = 65536 + (code2 - 55296 << 10) + (next - 56320);
             i++;
@@ -47,61 +47,63 @@ var _start, _resourceStart, _decoder, _encoder, _decompress, _removeTrailingEntr
         }
       }
       return new Uint8Array(bytes);
-    };
-  }
-  if (typeof global.TextDecoder === "undefined") {
-    var windows1252 = {
-      128: 8364,
-      130: 8218,
-      131: 402,
-      132: 8222,
-      133: 8230,
-      134: 8224,
-      135: 8225,
-      136: 710,
-      137: 8240,
-      138: 352,
-      139: 8249,
-      140: 338,
-      142: 381,
-      145: 8216,
-      146: 8217,
-      147: 8220,
-      148: 8221,
-      149: 8226,
-      150: 8211,
-      151: 8212,
-      152: 732,
-      153: 8482,
-      154: 353,
-      155: 8250,
-      156: 339,
-      158: 382,
-      159: 376
-    };
-    global.TextDecoder = function TextDecoder2(label) {
+    }
+  };
+}
+if (typeof globalScope.TextDecoder === "undefined") {
+  const windows1252 = {
+    128: 8364,
+    130: 8218,
+    131: 402,
+    132: 8222,
+    133: 8230,
+    134: 8224,
+    135: 8225,
+    136: 710,
+    137: 8240,
+    138: 352,
+    139: 8249,
+    140: 338,
+    142: 381,
+    145: 8216,
+    146: 8217,
+    147: 8220,
+    148: 8221,
+    149: 8226,
+    150: 8211,
+    151: 8212,
+    152: 732,
+    153: 8482,
+    154: 353,
+    155: 8250,
+    156: 339,
+    158: 382,
+    159: 376
+  };
+  globalScope.TextDecoder = class TextDecoder {
+    constructor(label) {
+      __publicField(this, "encoding");
       this.encoding = String(label || "utf-8").toLowerCase();
-    };
-    global.TextDecoder.prototype.decode = function(input) {
-      var bytes = input == null ? new Uint8Array(0) : input instanceof Uint8Array ? input : input.buffer instanceof ArrayBuffer ? new Uint8Array(input.buffer, input.byteOffset || 0, input.byteLength) : new Uint8Array(input);
+    }
+    decode(input) {
+      const bytes = getBytes(input);
       if (this.encoding === "windows-1252" || this.encoding === "latin1" || this.encoding === "iso-8859-1") {
-        var out = "";
-        for (var i = 0; i < bytes.length; i++) {
-          var byte = bytes[i];
+        let out = "";
+        for (const byte of bytes) {
           out += String.fromCharCode(windows1252[byte] || byte);
         }
         return out;
       }
-      var result = "";
-      for (var j = 0; j < bytes.length; ) {
-        var b1 = bytes[j++];
-        var code2 = b1;
-        if (b1 >= 194 && b1 <= 223 && j < bytes.length) {
-          code2 = (b1 & 31) << 6 | bytes[j++] & 63;
-        } else if (b1 >= 224 && b1 <= 239 && j + 1 < bytes.length) {
-          code2 = (b1 & 15) << 12 | (bytes[j++] & 63) << 6 | bytes[j++] & 63;
-        } else if (b1 >= 240 && b1 <= 244 && j + 2 < bytes.length) {
-          code2 = (b1 & 7) << 18 | (bytes[j++] & 63) << 12 | (bytes[j++] & 63) << 6 | bytes[j++] & 63;
+      let result = "";
+      for (let index = 0; index < bytes.length; ) {
+        const b1 = bytes[index++];
+        let code2 = b1;
+        if (b1 >= 194 && b1 <= 223 && index < bytes.length) {
+          code2 = (b1 & 31) << 6 | bytes[index++] & 63;
+        } else if (b1 >= 224 && b1 <= 239 && index + 1 < bytes.length) {
+          code2 = (b1 & 15) << 12 | (bytes[index++] & 63) << 6 | bytes[index++] & 63;
+        } else if (b1 >= 240 && b1 <= 244 && index + 2 < bytes.length) {
+          code2 = (b1 & 7) << 18 | (bytes[index++] & 63) << 12 | (bytes[index++] & 63) << 6 | bytes[index++] & 63;
         }
         if (code2 <= 65535) {
           result += String.fromCharCode(code2);
@@ -111,81 +113,97 @@ var _start, _resourceStart, _decoder, _encoder, _decompress, _removeTrailingEntr
         }
       }
       return result;
-    };
-  }
-  if (typeof global.Intl === "undefined") global.Intl = {};
-  if (typeof global.Intl.Segmenter === "undefined") {
-    var isHighSurrogate = function(code2) {
-      return code2 >= 55296 && code2 <= 56319;
-    };
-    var isLowSurrogate = function(code2) {
-      return code2 >= 56320 && code2 <= 57343;
-    };
-    var codePointLengthAt = function(input, index) {
-      var first = input.charCodeAt(index);
-      if (isHighSurrogate(first) && index + 1 < input.length && isLowSurrogate(input.charCodeAt(index + 1))) return 2;
-      return 1;
-    };
-    var codePointAt = function(input, index) {
-      var first = input.charCodeAt(index);
-      if (isHighSurrogate(first) && index + 1 < input.length) {
-        var second = input.charCodeAt(index + 1);
-        if (isLowSurrogate(second)) return 65536 + (first - 55296 << 10) + (second - 56320);
-      }
-      return first;
-    };
-    var charKind = function(input, index) {
-      var code2 = codePointAt(input, index);
-      if (code2 === 9 || code2 === 10 || code2 === 13 || code2 === 32 || code2 === 160) return "space";
-      if (code2 >= 19968 && code2 <= 40959 || code2 >= 13312 && code2 <= 19903 || code2 >= 12352 && code2 <= 12543 || code2 >= 44032 && code2 <= 55215) return "cjk";
-      if (code2 >= 48 && code2 <= 57 || code2 >= 65 && code2 <= 90 || code2 >= 97 && code2 <= 122 || code2 >= 192 && code2 <= 591) return "word";
-      return "punct";
-    };
-    var makeSegment = function(segment, index, isWordLike) {
-      return { segment, index, input: void 0, isWordLike };
-    };
-    global.Intl.Segmenter = function Segmenter(locale, options) {
-      this.locale = locale;
-      this.granularity = options && options.granularity || "grapheme";
-    };
-    global.Intl.Segmenter.prototype.segment = function(value2) {
-      var input = String(value2);
-      var segments = [];
+    }
+  };
+}
+const segmenterScope = globalThis;
+if (typeof segmenterScope.Intl === "undefined") {
+  globalThis.Intl = {};
+}
+if (typeof segmenterScope.Intl.Segmenter === "undefined") {
+  segmenterScope.Intl.Segmenter = class Segmenter {
+    constructor(_locale, options) {
+      __publicField(this, "granularity");
+      this.granularity = (options == null ? void 0 : options.granularity) || "grapheme";
+    }
+    static supportedLocalesOf(locales) {
+      if (typeof locales === "string") return [locales];
+      return Array.isArray(locales) ? locales.map(String) : [];
+    }
+    segment(value2) {
+      const input = String(value2);
+      const segments = [];
       if (this.granularity === "word") {
-        for (var i = 0; i < input.length; ) {
-          var start = i;
-          var kind = charKind(input, i);
-          var firstLen = codePointLengthAt(input, i);
+        for (let index = 0; index < input.length; ) {
+          const start = index;
+          const kind = charKind(input, index);
+          const firstLength = codePointLengthAt(input, index);
           if (kind === "cjk") {
-            i += firstLen;
+            index += firstLength;
           } else {
-            i += firstLen;
-            while (i < input.length) {
-              var nextKind = charKind(input, i);
-              if (nextKind !== kind || nextKind === "cjk") break;
-              i += codePointLengthAt(input, i);
+            index += firstLength;
+            while (index < input.length) {
+              const nextKind = charKind(input, index);
+              if (nextKind !== kind) break;
+              index += codePointLengthAt(input, index);
             }
           }
-          segments.push(makeSegment(input.slice(start, i), start, kind === "word" || kind === "cjk"));
+          segments.push(makeSegment(input.slice(start, index), start, kind === "word" || kind === "cjk"));
         }
       } else {
-        for (var j = 0; j < input.length; ) {
-          var length2 = codePointLengthAt(input, j);
-          segments.push(makeSegment(input.slice(j, j + length2), j, true));
-          j += length2;
+        for (let index = 0; index < input.length; ) {
+          const length2 = codePointLengthAt(input, index);
+          segments.push(makeSegment(input.slice(index, index + length2), index, true));
+          index += length2;
         }
       }
-      segments.containing = function(index) {
-        for (var k = 0; k < segments.length; k++) {
-          var item = segments[k];
+      segments.containing = (index) => {
+        for (const item of segments) {
           if (index >= item.index && index < item.index + item.segment.length) return item;
         }
         return segments[segments.length - 1];
       };
       return segments;
-    };
+    }
+  };
+}
+function getBytes(input) {
+  if (input == null) return new Uint8Array(0);
+  if (input instanceof Uint8Array) return input;
+  if (ArrayBuffer.isView(input)) {
+    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
   }
-})(typeof globalThis !== "undefined" ? globalThis : void 0);
+  return new Uint8Array(input);
+}
+function makeSegment(segment, index, isWordLike) {
+  return { segment, index, input: void 0, isWordLike };
+}
+function codePointLengthAt(input, index) {
+  const first = input.charCodeAt(index);
+  if (isHighSurrogate(first) && index + 1 < input.length && isLowSurrogate(input.charCodeAt(index + 1))) return 2;
+  return 1;
+}
+function codePointAt(input, index) {
+  const first = input.charCodeAt(index);
+  if (isHighSurrogate(first) && index + 1 < input.length) {
+    const second = input.charCodeAt(index + 1);
+    if (isLowSurrogate(second)) return 65536 + (first - 55296 << 10) + (second - 56320);
+  }
+  return first;
+}
+function charKind(input, index) {
+  const code2 = codePointAt(input, index);
+  if (code2 === 9 || code2 === 10 || code2 === 13 || code2 === 32 || code2 === 160) return "space";
+  if (code2 >= 19968 && code2 <= 40959 || code2 >= 13312 && code2 <= 19903 || code2 >= 12352 && code2 <= 12543 || code2 >= 44032 && code2 <= 55215) return "cjk";
+  if (code2 >= 48 && code2 <= 57 || code2 >= 65 && code2 <= 90 || code2 >= 97 && code2 <= 122 || code2 >= 192 && code2 <= 591) return "word";
+  return "punct";
+}
+function isHighSurrogate(code2) {
+  return code2 >= 55296 && code2 <= 56319;
+}
+function isLowSurrogate(code2) {
+  return code2 >= 56320 && code2 <= 57343;
+}
 class EBookError extends Error {
   constructor(message, code2) {
     super(message);
@@ -15709,9 +15727,9 @@ const DEFAULT_STYLE = {
   fontSize: 16,
   lineHeight: 1.6
 };
-function installWechatMiniProgramPretextPolyfill(wxLike = ((_a2) => (_a2 = globalThis.wx) != null ? _a2 : {})(), options = {}) {
+function installPretextMeasurementPolyfill(canvasProvider = {}, options = {}) {
   if (typeof globalThis.OffscreenCanvas !== "undefined") return false;
-  const createNativeCanvas = wxLike.createOffscreenCanvas;
+  const createNativeCanvas = canvasProvider.createOffscreenCanvas;
   if (createNativeCanvas) {
     const PolyfilledOffscreenCanvas = class {
       constructor(width = 1, height = 1) {
@@ -20012,6 +20030,73 @@ class SectionProgress {
     return this.sectionFractions.map((x) => x + Number.EPSILON);
   }
 }
+function getPluginPrefetchPageCount(book) {
+  const value2 = book.translationPrefetchPageCount;
+  return typeof value2 === "number" && Number.isFinite(value2) ? Math.max(0, Math.floor(value2)) : 0;
+}
+function parseCSSPixels(value2, fallback) {
+  if (!value2) return fallback;
+  if (typeof value2 === "number") return Number.isFinite(value2) ? value2 : fallback;
+  const match = value2.trim().match(/^([\d.]+)(px)?$/);
+  if (!match) return fallback;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+function getLineHeightMultiplier(value2, fontSize) {
+  if (typeof value2 === "number") return value2;
+  if (typeof value2 === "string") {
+    const trimmed = value2.trim();
+    if (trimmed.endsWith("px")) return parseCSSPixels(trimmed, fontSize * 1.6) / fontSize;
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 1.6;
+}
+function getColumnCount(mode, availableWidth, minColumnWidth, gap, maxColumnCount) {
+  if (mode !== "paginated" || maxColumnCount < 2) return 1;
+  return availableWidth >= minColumnWidth * 2 + gap ? 2 : 1;
+}
+function getReadablePageCount(lines, columnHeight, columns) {
+  let lastReadablePage = 0;
+  for (const line of lines) {
+    if (line.height <= 0) continue;
+    lastReadablePage = Math.max(lastReadablePage, getLinePageIndex(line, columnHeight, columns));
+  }
+  return Math.max(1, lastReadablePage + 1);
+}
+function getLinePageIndex(line, columnHeight, columns) {
+  const safeColumnHeight = Math.max(1, columnHeight);
+  const safeColumns = Math.max(1, columns);
+  const sourceColumn = Math.floor(Math.max(0, line.top) / safeColumnHeight);
+  return Math.floor(sourceColumn / safeColumns);
+}
+function getPagePaddingBlock(mode, pageHeight, margin) {
+  const preferred = mode === "paginated" ? Math.max(20, margin) : Math.max(12, margin * 0.5);
+  return Math.min(preferred, Math.max(12, pageHeight * 0.14));
+}
+function getAnchorIds(value2) {
+  if (typeof value2 !== "string") {
+    const id = getElementLikeId(value2);
+    return id ? [id] : [];
+  }
+  const trimmed = value2.trim();
+  if (!trimmed) return [];
+  const attrMatch = trimmed.match(/^\[(?:id|name)=["']([^"']+)["']\]$/);
+  if (attrMatch) return [unescapeCSSIdentifier(attrMatch[1])];
+  if (trimmed.startsWith("#")) return [unescapeCSSIdentifier(trimmed.slice(1))];
+  if (/^[\w:-]+$/.test(trimmed)) return [trimmed];
+  return [];
+}
+function getElementLikeId(value2) {
+  var _a2, _b2, _c, _d;
+  if (!value2 || typeof value2 !== "object") return null;
+  const maybeElement = value2;
+  if (typeof maybeElement.id === "string" && maybeElement.id) return maybeElement.id;
+  return (_d = (_c = (_a2 = maybeElement.getAttribute) == null ? void 0 : _a2.call(maybeElement, "id")) != null ? _c : (_b2 = maybeElement.getAttribute) == null ? void 0 : _b2.call(maybeElement, "name")) != null ? _d : null;
+}
+function unescapeCSSIdentifier(value2) {
+  return value2.replace(/\\(.)/g, "$1");
+}
 const DEFAULT_MARGIN = 32;
 const DEFAULT_GAP = 48;
 class WechatMiniProgramRenderer {
@@ -20051,7 +20136,7 @@ class WechatMiniProgramRenderer {
     });
     var _a2, _b2, _c, _d;
     if (config.installPretextPolyfill !== false) {
-      installWechatMiniProgramPretextPolyfill(config.wx);
+      installPretextMeasurementPolyfill(config.wx);
     }
     this.width = Math.max(1, config.width);
     this.height = Math.max(1, config.height);
@@ -20067,7 +20152,7 @@ class WechatMiniProgramRenderer {
     this.book = pluginBook;
     this.sections = pluginBook.sections;
     this.progress = new SectionProgress(this.sections);
-    this.prefetchPageCount = getTranslationPrefetchPageCount(pluginBook);
+    this.prefetchPageCount = getPluginPrefetchPageCount(pluginBook);
     this.tocPositions = [];
     this.pendingTOCItem = null;
     this.currentIndex = -1;
@@ -20672,48 +20757,6 @@ function flattenTOC(items) {
 function compareTOCPosition(a, b) {
   return a.index - b.index || a.sourceTop - b.sourceTop || a.order - b.order;
 }
-function getTranslationPrefetchPageCount(book) {
-  const value2 = book.translationPrefetchPageCount;
-  return typeof value2 === "number" && Number.isFinite(value2) ? Math.max(0, Math.floor(value2)) : 0;
-}
-function parseCSSPixels(value2, fallback) {
-  if (!value2) return fallback;
-  if (typeof value2 === "number") return Number.isFinite(value2) ? value2 : fallback;
-  const match = value2.trim().match(/^([\d.]+)(px)?$/);
-  if (!match) return fallback;
-  const parsed = Number(match[1]);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-function getLineHeightMultiplier(value2, fontSize) {
-  if (typeof value2 === "number") return value2;
-  if (typeof value2 === "string") {
-    const trimmed = value2.trim();
-    if (trimmed.endsWith("px")) return parseCSSPixels(trimmed, fontSize * 1.6) / fontSize;
-    const parsed = Number(trimmed);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return 1.6;
-}
-function getColumnCount(mode, availableWidth, minColumnWidth, gap, maxColumnCount) {
-  if (mode !== "paginated" || maxColumnCount < 2) return 1;
-  return availableWidth >= minColumnWidth * 2 + gap ? 2 : 1;
-}
-function getReadablePageCount(lines, columnHeight, columns) {
-  let lastReadablePage = 0;
-  for (const line of lines) {
-    if (line.height <= 0) continue;
-    lastReadablePage = Math.max(lastReadablePage, getLinePageIndex(line, columnHeight, columns));
-  }
-  return Math.max(1, lastReadablePage + 1);
-}
-function getLinePageIndex(line, columnHeight, columns) {
-  const sourceColumn = Math.floor(Math.max(0, line.top) / Math.max(1, columnHeight));
-  return Math.floor(sourceColumn / Math.max(1, columns));
-}
-function getPagePaddingBlock(mode, pageHeight, margin) {
-  const preferred = mode === "paginated" ? Math.max(20, margin) : Math.max(12, margin * 0.5);
-  return Math.min(Math.max(0, pageHeight / 2 - 16), preferred);
-}
 function getTextFragmentStyle(style, gapBefore) {
   return {
     ...gapBefore > 0 ? { marginLeft: `${gapBefore}px` } : {},
@@ -20732,29 +20775,6 @@ function getTableColumns(table) {
   var _a2;
   const weights = ((_a2 = table.columnWeights) == null ? void 0 : _a2.length) === table.columnCount ? table.columnWeights : Array.from({ length: table.columnCount }, () => 1);
   return weights.map((weight) => `${Math.max(0.1, weight)}fr`).join(" ");
-}
-function getAnchorIds(value2) {
-  if (typeof value2 !== "string") {
-    const id = getElementLikeId(value2);
-    return id ? [id] : [];
-  }
-  const trimmed = value2.trim();
-  if (!trimmed) return [];
-  const attrMatch = trimmed.match(/^\[(?:id|name)=["']([^"']+)["']\]$/);
-  if (attrMatch) return [unescapeCSSIdentifier(attrMatch[1])];
-  if (trimmed.startsWith("#")) return [unescapeCSSIdentifier(trimmed.slice(1))];
-  if (/^[\w:-]+$/.test(trimmed)) return [trimmed];
-  return [];
-}
-function getElementLikeId(value2) {
-  var _a2, _b2, _c, _d;
-  if (!value2 || typeof value2 !== "object") return null;
-  const maybeElement = value2;
-  if (typeof maybeElement.id === "string" && maybeElement.id) return maybeElement.id;
-  return (_d = (_c = (_a2 = maybeElement.getAttribute) == null ? void 0 : _a2.call(maybeElement, "id")) != null ? _c : (_b2 = maybeElement.getAttribute) == null ? void 0 : _b2.call(maybeElement, "name")) != null ? _d : null;
-}
-function unescapeCSSIdentifier(value2) {
-  return value2.replace(/\\(.)/g, "$1");
 }
 function clamp01$1(value2) {
   return Math.max(0, Math.min(1, value2));
