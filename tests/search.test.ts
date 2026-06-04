@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import type { Book, TextBlock } from '../src/core/types'
+import type { Renderer } from '../src/core/renderer'
+import { ReaderSession } from '../src/core/reader'
 import { searchBook, searchChapters } from '../src/search'
 import { EPUBParser } from '../src/parsers/epub'
 import { NodeDOMAdapter, NodeURLFactory } from '../src/adapters/node'
@@ -46,6 +48,23 @@ const makeBook = (): Book => {
     }
 }
 
+const createNoopRenderer = (): Renderer => ({
+    open: async () => {},
+    goTo: async () => {},
+    next: async () => {},
+    prev: async () => {},
+    goToFraction: async () => {},
+    setStyles: () => {},
+    setLayout: () => {},
+    setSpread: () => {},
+    getLocation: () => null,
+    getSectionFractions: () => [],
+    refresh: async () => {},
+    on: () => {},
+    off: () => {},
+    destroy: () => {},
+})
+
 describe('searchBook', () => {
     it('searches full text across chapters with chapter metadata', async () => {
         const results = await searchBook(makeBook(), 'beta')
@@ -82,6 +101,26 @@ describe('searchChapters', () => {
         expect(groups[0].chapterLabel).toBe('One')
         expect(groups[0].results).toHaveLength(1)
         expect(groups[1].chapterLabel).toBe('Two')
+    })
+})
+
+describe('ReaderSession search', () => {
+    it('searches the current book without making search a plugin', async () => {
+        const reader = new ReaderSession({
+            createRenderer: createNoopRenderer,
+        })
+
+        expect(await reader.search('beta')).toHaveLength(0)
+
+        await reader.openBook(makeBook())
+        const results = await reader.search('beta')
+        const groups = await reader.searchChapters('beta')
+
+        expect(results.map(result => result.sectionIndex)).toEqual([0, 1])
+        expect(groups).toHaveLength(2)
+        expect(groups[0].chapterLabel).toBe('One')
+
+        reader.destroy()
     })
 })
 

@@ -12,6 +12,9 @@
       "core/parser": [
         "dist/core/parser.d.ts"
       ],
+      "core/reader": [
+        "dist/core/reader.d.ts"
+      ],
       "renderers/browser": [
         "dist/renderers/browser/index.d.ts"
       ],
@@ -68,6 +71,10 @@
     "./core/parser": {
       "types": "./dist/core/parser.d.ts",
       "import": "./dist/core/parser.js"
+    },
+    "./core/reader": {
+      "types": "./dist/core/reader.d.ts",
+      "import": "./dist/core/reader.js"
     },
     "./renderers/browser": {
       "types": "./dist/renderers/browser/index.d.ts",

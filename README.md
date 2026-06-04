@@ -129,12 +129,12 @@ const visible = getVisibleLines(lines, scrollTop, viewportHeight)
 
 The browser package also exports `BrowserRenderer` / `createBrowserRenderer`, which uses this pipeline to render only visible line rows as simple DOM spans.
 
-For WeChat Mini Programs, use the DOM-free renderer:
+For WeChat Mini Programs, use the platform reader:
 
 ```typescript
-import { createWechatMiniProgramRenderer } from 'rebook/renderers/wechat-miniprogram'
+import { createWechatMiniProgramReader } from 'rebook/renderers/wechat-miniprogram'
 
-const renderer = createWechatMiniProgramRenderer({
+const reader = createWechatMiniProgramReader({
     width: 375,
     height: 667,
     wx,
@@ -142,7 +142,7 @@ const renderer = createWechatMiniProgramRenderer({
 })
 ```
 
-It installs the platform-neutral Pretext measurement polyfill with `wx.createOffscreenCanvas` and emits serializable line nodes for WXML rendering.
+It installs the platform-neutral Pretext measurement polyfill with `wx.createOffscreenCanvas`, uses Mini Program parser adapters by default, and emits serializable line nodes for WXML rendering.
 
 ## MCP Server
 

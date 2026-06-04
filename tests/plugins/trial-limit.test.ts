@@ -1,11 +1,32 @@
 import { describe, expect, it } from 'vitest'
 import type { Book } from '../../src/core/types'
+import type { Renderer } from '../../src/core/renderer'
+import { ReaderSession } from '../../src/core/reader'
 import {
     estimateBookPageCount,
     estimateTrialLimitState,
     withTrialLimit,
     type TrialLimitedBook,
 } from '../../src/plugins/trial-limit'
+
+const sectionFractions = [0, 0.2, 0.7, 1]
+
+const createNoopRenderer = (): Renderer => ({
+    open: async () => {},
+    goTo: async () => {},
+    next: async () => {},
+    prev: async () => {},
+    goToFraction: async () => {},
+    setStyles: () => {},
+    setLayout: () => {},
+    setSpread: () => {},
+    getLocation: () => ({ index: 1, fraction: 0.2 }),
+    getSectionFractions: () => sectionFractions,
+    refresh: async () => {},
+    on: () => {},
+    off: () => {},
+    destroy: () => {},
+})
 
 const makeBook = (): Book => ({
     metadata: {},
@@ -99,7 +120,6 @@ describe('Trial limit plugin', () => {
             estimatedTextUnitsPerPage: 500,
         })
         const book = await plugin(makeBook()) as TrialLimitedBook
-        const sectionFractions = [0, 0.2, 0.7, 1]
 
         expect(book.trialLimit.state).toMatchObject({
             maxPages: 2,
@@ -109,7 +129,7 @@ describe('Trial limit plugin', () => {
             estimatedBy: 'sampled-text',
         })
 
-        const items = book.trialLimit.getTOCAccessItems(sectionFractions)
+        const items = book.trialLimit.getTOCItems(sectionFractions)
         expect(items.map(item => ({
             label: item.label,
             depth: item.depth,
@@ -124,16 +144,45 @@ describe('Trial limit plugin', () => {
             'Text/cover.xhtml',
             'Text/chapter-1.xhtml',
         ])
-        expect(book.trialLimit.canAccessTarget(sectionFractions, 'Text/chapter-2.xhtml')).toBe(false)
-        expect(book.trialLimit.getCurrentTOCAccessItem(items, { index: 2, fraction: 0 })?.label).toBe('Chapter Two')
-        expect(book.trialLimit.estimateNextTotalFractionFromSnapshot({
+        expect(book.trialLimit.canGoTo('Text/chapter-2.xhtml', sectionFractions)).toBe(false)
+        expect(book.trialLimit.getCurrentTOCItem(items, { index: 2, fraction: 0 })?.label).toBe('Chapter Two')
+        expect(book.trialLimit.getNextTotalFraction({
             sectionIndex: 1,
             sectionCount: 3,
             pageIndex: 0,
             pageCount: 3,
             fraction: 0,
         }, sectionFractions)).toBeCloseTo(0.45)
-        expect(book.trialLimit.willForwardExceedLimit({ index: 1, fraction: 0.2 }, sectionFractions)).toBe(true)
+        expect(book.trialLimit.canGoNext({ index: 1, fraction: 0.2 }, sectionFractions)).toBe(false)
+    })
+
+    it('exposes reader-level trial navigation helpers', async () => {
+        const reader = new ReaderSession({
+            createRenderer: createNoopRenderer,
+            plugins: [withTrialLimit({
+                maxPages: 2,
+                sampleSections: 1,
+                estimatedTextUnitsPerPage: 500,
+            })],
+        })
+
+        expect(reader.canGoTo('Text/chapter-2.xhtml')).toBe(true)
+        expect(reader.canGoNext()).toBe(true)
+
+        await reader.openBook(makeBook())
+
+        expect(reader.getTrialLimit()).toBeDefined()
+        expect(reader.canGoTo('Text/chapter-1.xhtml')).toBe(true)
+        expect(reader.canGoTo('Text/chapter-2.xhtml')).toBe(false)
+        expect(reader.canGoNext()).toBe(false)
+        expect(reader.getAllowedTOCHrefs()).toEqual([
+            'Text/cover.xhtml',
+            'Text/chapter-1.xhtml',
+        ])
+        expect(reader.getTrialTOCItems().at(-1)?.disabled).toBe(true)
+        expect(reader.getCurrentTrialTOCItem()?.label).toBe('Part One')
+
+        reader.destroy()
     })
 
     it('leaves trial access unrestricted when maxPages is not set', async () => {

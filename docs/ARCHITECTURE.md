@@ -14,11 +14,11 @@ source file
 
 Primary boundaries:
 
-- `src/core`: shared contracts, document model, metadata helpers, error types, Pretext adapter, renderer helpers
+- `src/core`: shared contracts, reader session, document model, metadata helpers, error types, Pretext adapter, renderer helpers
 - `src/adapters`: browser and Node-compatible DOM/URL adapters
 - `src/parsers`: format-specific input handling
 - `src/renderers/browser`: browser `ReaderView` and browser renderer
-- `src/renderers/wechat-miniprogram`: DOM-free snapshot renderer for Mini Program hosts
+- `src/renderers/wechat-miniprogram`: Mini Program reader and DOM-free snapshot renderer
 - `src/plugins`: book middleware that can wrap or extend `Book` before rendering
 - `src/exporters`: format-neutral export registry plus EPUB, CBZ, TXT, and HTML exporters
 - `src/loaders`: zip loading and malformed archive recovery
@@ -80,7 +80,7 @@ Plugins run after parsing and before rendering. They wrap `Book` rather than a p
 type RebookPlugin = (book: Book) => Book | Promise<Book>
 ```
 
-`ReaderView` applies plugins after `registry.open()`. Renderers that accept already parsed books, such as `WechatMiniProgramRenderer`, apply the same plugin chain in `open(book)`.
+`ReaderSession` applies plugins after `registry.open()` or `openBook()`. Platform wrappers such as `ReaderView` and `WechatMiniProgramReader` provide default adapters and renderer factories; renderers receive the final `Book` and stay focused on rendering.
 
 ### Exporters Are Format-Neutral
 
@@ -244,7 +244,8 @@ src/
       renderer.ts      Pretext-backed browser renderer
       view.ts         ReaderView high-level API
     wechat-miniprogram/
-      index.ts        public renderer exports
+      index.ts        public reader/renderer exports
+      view.ts         WechatMiniProgramReader high-level API
       renderer.ts     DOM-free snapshot renderer
       polyfills.ts    Mini Program runtime polyfills
   plugins/

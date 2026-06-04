@@ -29,7 +29,8 @@ Complete API documentation for rebook.
 
 `searchBook()` searches readable text from parsed books. By default it scans
 every section. Use `scope: 'chapter'` and `chapterIndex` to search within one
-chapter/section.
+chapter/section. Reader instances expose the same current-book capability as
+`reader.search()` and `reader.searchChapters()`.
 
 ```typescript
 import { searchBook, searchChapters } from 'rebook'
@@ -45,6 +46,7 @@ const chapterResults = await searchBook(book, 'ownership', {
 })
 
 const grouped = await searchChapters(book, 'worker')
+const readerResults = await reader.search('platform cooperative')
 ```
 
 Search prefers `section.getBlocks()` so browser renderer extraction rules are
@@ -308,6 +310,7 @@ const metadata = reader.getMetadata()    // BookMetadata
 const toc = reader.getTOC()              // TOCItem[]
 const location = reader.getLocation()    // Current location (contains index, fraction, tocItem, cfi)
 const fractions = reader.getSectionFractions() // Per-section progress ticks
+const matches = await reader.search('ownership') // SearchResult[]
 ```
 
 ### Cleanup
@@ -320,9 +323,7 @@ reader.destroy() // Release all resources
 
 ## Plugins
 
-Plugins are `Book` middleware. They run after parsing and before rendering in
-`ReaderView`, and the WeChat Mini Program renderer accepts the same `plugins`
-configuration when a parsed book is opened directly.
+Plugins are `Book` middleware. They run after parsing or `openBook()` and before rendering in the shared reader session used by browser and Mini Program readers.
 
 ```typescript
 import { createReader, withTrialLimit, type TrialLimitedBook } from 'rebook'
@@ -333,24 +334,25 @@ const reader = createReader({
 })
 
 const book = await reader.open(file) as TrialLimitedBook
-const sectionFractions = reader.getSectionFractions()
 
-if (!book.trialLimit.canAccessTarget(sectionFractions, 'chapter-20.xhtml')) {
+if (!reader.canGoTo('chapter-20.xhtml')) {
   // Show locked-state UI in the host app.
 }
 ```
 
 The trial-limit plugin adds `book.trialLimit`, a controller for trial reader
 state: estimated page count, limit fraction, page step fraction, TOC access
-items, target access checks, and forward-navigation checks. Page estimates use
+items, target navigation checks, and next-page checks. Reader instances expose
+`canGoTo()`, `canGoNext()`, and trial-aware TOC helpers so host apps usually do
+not need to pass section fractions into the controller directly. Page estimates use
 explicit page lists first, pre-paginated section counts second, and sampled text
 density for reflowable books before falling back to section sizes.
 
 ```typescript
-import { createWechatMiniProgramRenderer } from 'rebook/renderers/wechat-miniprogram'
+import { createWechatMiniProgramReader } from 'rebook/renderers/wechat-miniprogram'
 import { withTrialLimit } from 'rebook/plugins/trial-limit'
 
-const renderer = createWechatMiniProgramRenderer({
+const reader = createWechatMiniProgramReader({
   width,
   height,
   wx,
@@ -358,7 +360,7 @@ const renderer = createWechatMiniProgramRenderer({
   setData: snapshot => page.setData({ reader: snapshot }),
 })
 
-await renderer.open(book)
+await reader.openBook(book)
 ```
 
 ---

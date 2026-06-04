@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Book } from '../../src/core/types'
 import { installPretextMeasurementPolyfill } from '../../src/core/pretext'
-import { WechatMiniProgramRenderer, createWechatMiniProgramRenderer } from '../../src/renderers/wechat-miniprogram'
+import { WechatMiniProgramRenderer, createWechatMiniProgramReader, createWechatMiniProgramRenderer } from '../../src/renderers/wechat-miniprogram'
 
 describe('WechatMiniProgramRenderer', () => {
     it('installs a wx.createOffscreenCanvas polyfill for Pretext measurement', () => {
@@ -109,7 +109,7 @@ describe('WechatMiniProgramRenderer', () => {
         expect(blocks.some(block => block.id === blockWindow[0])).toBe(true)
     })
 
-    it('applies configured book plugins before rendering', async () => {
+    it('applies configured book plugins in the Mini Program reader before rendering', async () => {
         vi.stubGlobal('OffscreenCanvas', undefined)
         const book: Book = {
             sections: [{
@@ -124,7 +124,7 @@ describe('WechatMiniProgramRenderer', () => {
                 }],
             }],
         }
-        const renderer = createWechatMiniProgramRenderer({
+        const reader = createWechatMiniProgramReader({
             width: 320,
             height: 120,
             layout: 'paginated',
@@ -145,11 +145,13 @@ describe('WechatMiniProgramRenderer', () => {
             ],
         })
 
-        await renderer.open(book)
-        await renderer.goTo(0)
+        await reader.openBook(book)
+        await reader.goTo(0)
 
-        expect(JSON.stringify(renderer.getSnapshot())).toContain('Plugin rendered text')
-        expect(JSON.stringify(renderer.getSnapshot())).not.toContain('Original text')
+        expect(JSON.stringify(reader.getSnapshot())).toContain('Plugin rendered text')
+        expect(JSON.stringify(reader.getSnapshot())).not.toContain('Original text')
+
+        reader.destroy()
     })
 })
 

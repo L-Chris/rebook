@@ -23,6 +23,11 @@ export { mobi, MOBIParser } from './parsers/mobi'
 export {
     createWechatMiniProgramRenderer,
     WechatMiniProgramRenderer,
+    createWechatMiniProgramReader,
+    WechatMiniProgramReader,
+} from './renderers/wechat-miniprogram'
+export type {
+    WechatMiniProgramReaderConfig,
 } from './renderers/wechat-miniprogram'
 
 export {

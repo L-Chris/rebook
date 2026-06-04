@@ -1,0 +1,69 @@
+/**
+ * WeChat Mini Program reader view.
+ *
+ * Provides Mini Program defaults for the shared ReaderSession.
+ */
+
+import type { ParserOptions } from '../../core/parser'
+import type { RebookPlugin } from '../../core/types'
+import { ReaderSession, type ReaderSessionConfig } from '../../core/reader'
+import {
+    WechatMiniProgramDOMAdapter,
+    WechatMiniProgramURLFactory,
+} from '../../adapters/wechat-miniprogram'
+import {
+    WechatMiniProgramRenderer,
+    type WechatMiniProgramRendererConfig,
+    type WechatMiniProgramRendererSnapshot,
+} from './renderer'
+
+export interface WechatMiniProgramReaderConfig extends WechatMiniProgramRendererConfig {
+    /** Parser options */
+    parserOptions?: ParserOptions
+    /** Plugins to transform the book before rendering */
+    plugins?: readonly RebookPlugin[]
+}
+
+/**
+ * Mini Program reader that combines parsing and WechatMiniProgramRenderer.
+ */
+export class WechatMiniProgramReader extends ReaderSession {
+    constructor(config: WechatMiniProgramReaderConfig) {
+        super(createWechatMiniProgramReaderSessionConfig(config))
+    }
+
+    getSnapshot(): WechatMiniProgramRendererSnapshot {
+        return (this.getRenderer() as WechatMiniProgramRenderer).getSnapshot()
+    }
+
+    setViewport(width: number, height: number): void {
+        (this.getRenderer() as WechatMiniProgramRenderer).setViewport(width, height)
+    }
+
+    setScrollTop(scrollTop: number): void {
+        (this.getRenderer() as WechatMiniProgramRenderer).setScrollTop(scrollTop)
+    }
+}
+
+function createWechatMiniProgramReaderSessionConfig(
+    config: WechatMiniProgramReaderConfig,
+): ReaderSessionConfig {
+    return {
+        parserOptions: () => ({
+            domAdapter: new WechatMiniProgramDOMAdapter(),
+            urlFactory: new WechatMiniProgramURLFactory(),
+            ...config.parserOptions,
+        }),
+        plugins: config.plugins,
+        createRenderer: () => new WechatMiniProgramRenderer(config),
+    }
+}
+
+/**
+ * Create a new Mini Program reader instance.
+ */
+export const createWechatMiniProgramReader = (
+    config: WechatMiniProgramReaderConfig,
+): WechatMiniProgramReader => {
+    return new WechatMiniProgramReader(config)
+}

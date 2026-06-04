@@ -51,16 +51,16 @@ export interface TrialLimitController {
         location: Pick<RelocateEvent, 'index' | 'fraction' | 'totalFraction'> | null | undefined,
         sectionFractions: readonly number[],
     ): number
-    getTargetStartFraction(sectionFractions: readonly number[], target: string | number): number
-    canAccessTarget(sectionFractions: readonly number[], target: string | number): boolean
-    getTOCAccessItems(sectionFractions: readonly number[], items?: readonly TOCItem[]): TrialTOCAccessItem[]
+    getTargetFraction(target: string | number, sectionFractions: readonly number[]): number
+    canGoTo(target: string | number, sectionFractions: readonly number[]): boolean
+    getTOCItems(sectionFractions: readonly number[], items?: readonly TOCItem[]): TrialTOCAccessItem[]
     getAllowedTOCHrefs(sectionFractions: readonly number[]): string[]
-    getCurrentTOCAccessItem(
+    getCurrentTOCItem(
         items: readonly TrialTOCAccessItem[],
         location: Pick<RelocateEvent, 'index'> | null | undefined,
     ): TrialTOCAccessItem | null
-    estimateNextTotalFractionFromSnapshot(snapshot: TrialSnapshotLike, sectionFractions: readonly number[]): number
-    willForwardExceedLimit(
+    getNextTotalFraction(snapshot: TrialSnapshotLike, sectionFractions: readonly number[]): number
+    canGoNext(
         location: Pick<RelocateEvent, 'index' | 'fraction' | 'totalFraction'> | null | undefined,
         sectionFractions: readonly number[],
     ): boolean
@@ -149,28 +149,28 @@ function createTrialLimitController(
         getTotalFraction(location, sectionFractions) {
             return getTotalFraction(location, sectionFractions)
         },
-        getTargetStartFraction(sectionFractions, target) {
-            return getTargetStartFraction(book, sectionFractions, target)
+        getTargetFraction(target, sectionFractions) {
+            return getTargetFraction(book, target, sectionFractions)
         },
-        canAccessTarget(sectionFractions, target) {
-            return getTargetStartFraction(book, sectionFractions, target) <= state.limitFraction + epsilon
+        canGoTo(target, sectionFractions) {
+            return getTargetFraction(book, target, sectionFractions) <= state.limitFraction + epsilon
         },
-        getTOCAccessItems(sectionFractions, items = book.toc || []) {
-            return getTOCAccessItems(book, sectionFractions, state.limitFraction, epsilon, items)
+        getTOCItems(sectionFractions, items = book.toc || []) {
+            return getTrialTOCItems(book, sectionFractions, state.limitFraction, epsilon, items)
         },
         getAllowedTOCHrefs(sectionFractions) {
-            return this.getTOCAccessItems(sectionFractions)
+            return this.getTOCItems(sectionFractions)
                 .filter(item => !item.disabled)
                 .map(item => normalizeNavigationHref(item.href))
         },
-        getCurrentTOCAccessItem(items, location) {
-            return getCurrentTOCAccessItem(items, location)
+        getCurrentTOCItem(items, location) {
+            return getCurrentTrialTOCItem(items, location)
         },
-        estimateNextTotalFractionFromSnapshot(snapshot, sectionFractions) {
-            return estimateNextTotalFractionFromSnapshot(snapshot, sectionFractions)
+        getNextTotalFraction(snapshot, sectionFractions) {
+            return getNextTotalFraction(snapshot, sectionFractions)
         },
-        willForwardExceedLimit(location, sectionFractions) {
-            return getTotalFraction(location, sectionFractions) + state.pageStepFraction > state.limitFraction + epsilon
+        canGoNext(location, sectionFractions) {
+            return getTotalFraction(location, sectionFractions) + state.pageStepFraction <= state.limitFraction + epsilon
         },
     }
 }
@@ -217,10 +217,10 @@ function getTotalFraction(
     return clamp01(sectionStart + sectionSpan * (location.fraction || 0))
 }
 
-function getTargetStartFraction(
+function getTargetFraction(
     book: Book,
-    sectionFractions: readonly number[],
     target: string | number,
+    sectionFractions: readonly number[],
 ): number {
     const index = typeof target === 'number'
         ? target
@@ -229,7 +229,7 @@ function getTargetStartFraction(
     return sectionFractions[index] ?? 0
 }
 
-function getTOCAccessItems(
+function getTrialTOCItems(
     book: Book,
     sectionFractions: readonly number[],
     limitFraction: number,
@@ -251,12 +251,12 @@ function getTOCAccessItems(
                 sectionFraction,
                 disabled,
             },
-            ...getTOCAccessItems(book, sectionFractions, limitFraction, epsilon, item.subitems || [], depth + 1),
+            ...getTrialTOCItems(book, sectionFractions, limitFraction, epsilon, item.subitems || [], depth + 1),
         ]
     })
 }
 
-function getCurrentTOCAccessItem(
+function getCurrentTrialTOCItem(
     items: readonly TrialTOCAccessItem[],
     location: Pick<RelocateEvent, 'index'> | null | undefined,
 ): TrialTOCAccessItem | null {
@@ -272,7 +272,7 @@ function getCurrentTOCAccessItem(
     return null
 }
 
-function estimateNextTotalFractionFromSnapshot(
+function getNextTotalFraction(
     snapshot: TrialSnapshotLike,
     sectionFractions: readonly number[],
 ): number {

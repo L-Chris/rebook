@@ -5,9 +5,8 @@
  * Mini Program pages/components can feed into setData and render with WXML.
  */
 
-import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, RebookPlugin, ResolvedNavigation, Section, TOCItem } from '../../core/types'
+import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
 import type { LayoutMode, Renderer, RendererStyles } from '../../core/renderer'
-import { applyRebookPlugins } from '../../core/plugins'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
@@ -54,7 +53,6 @@ export interface WechatMiniProgramRendererConfig {
     layout?: LayoutMode
     styles?: RendererStyles
     maxColumnCount?: number
-    plugins?: RebookPlugin[]
     overscan?: number
     wx?: CanvasProviderLike
     /**
@@ -165,7 +163,6 @@ export class WechatMiniProgramRenderer implements Renderer {
     private layoutMode: LayoutMode
     private maxColumnCount: number
     private overscan: number
-    private plugins?: readonly RebookPlugin[]
     private setData?: (snapshot: WechatMiniProgramRendererSnapshot) => void
     private book: Book | null = null
     private sections: readonly Section[] = []
@@ -202,17 +199,15 @@ export class WechatMiniProgramRenderer implements Renderer {
         this.styles = config.styles ?? {}
         this.layoutMode = config.layout ?? 'paginated'
         this.maxColumnCount = config.maxColumnCount ?? 1
-        this.plugins = config.plugins
         this.overscan = config.overscan ?? 4
         this.setData = config.setData
     }
 
     async open(book: Book): Promise<void> {
-        const pluginBook = await applyRebookPlugins(book, this.plugins)
-        this.book = pluginBook
-        this.sections = pluginBook.sections
+        this.book = book
+        this.sections = book.sections
         this.progress = new SectionProgress(this.sections)
-        this.prefetchPageCount = getPluginPrefetchPageCount(pluginBook)
+        this.prefetchPageCount = getPluginPrefetchPageCount(book)
         this.tocPositions = []
         this.pendingTOCItem = null
         this.currentIndex = -1

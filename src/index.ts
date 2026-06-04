@@ -88,6 +88,13 @@ export type {
     RendererFactory,
 } from './core/renderer'
 
+export {
+    ReaderSession,
+} from './core/reader'
+export type {
+    ReaderSessionConfig,
+} from './core/reader'
+
 export type {
     Loader,
     LoaderEntry,
@@ -251,8 +258,11 @@ export type { BrowserRendererConfig, ReaderConfig } from './renderers/browser'
 export {
     WechatMiniProgramRenderer,
     createWechatMiniProgramRenderer,
+    WechatMiniProgramReader,
+    createWechatMiniProgramReader,
 } from './renderers/wechat-miniprogram'
 export type {
+    WechatMiniProgramReaderConfig,
     WechatMiniProgramRendererConfig,
     WechatMiniProgramRendererSnapshot,
     WechatMiniProgramLineNode,

@@ -19958,13 +19958,6 @@ class MOBIParser {
   }
 }
 const mobi = () => new MOBIParser();
-async function applyRebookPlugins(book, plugins) {
-  let current = book;
-  for (const plugin of plugins != null ? plugins : []) {
-    current = await plugin(current);
-  }
-  return current;
-}
 class SectionProgress {
   constructor(sections, sizePerLoc = 1500) {
     __publicField(this, "sizes");
@@ -20107,7 +20100,6 @@ class WechatMiniProgramRenderer {
     __publicField(this, "layoutMode");
     __publicField(this, "maxColumnCount");
     __publicField(this, "overscan");
-    __publicField(this, "plugins");
     __publicField(this, "setData");
     __publicField(this, "book", null);
     __publicField(this, "sections", []);
@@ -20143,16 +20135,14 @@ class WechatMiniProgramRenderer {
     this.styles = (_a2 = config.styles) != null ? _a2 : {};
     this.layoutMode = (_b2 = config.layout) != null ? _b2 : "paginated";
     this.maxColumnCount = (_c = config.maxColumnCount) != null ? _c : 1;
-    this.plugins = config.plugins;
     this.overscan = (_d = config.overscan) != null ? _d : 4;
     this.setData = config.setData;
   }
   async open(book) {
-    const pluginBook = await applyRebookPlugins(book, this.plugins);
-    this.book = pluginBook;
-    this.sections = pluginBook.sections;
+    this.book = book;
+    this.sections = book.sections;
     this.progress = new SectionProgress(this.sections);
-    this.prefetchPageCount = getPluginPrefetchPageCount(pluginBook);
+    this.prefetchPageCount = getPluginPrefetchPageCount(book);
     this.tocPositions = [];
     this.pendingTOCItem = null;
     this.currentIndex = -1;
@@ -20551,7 +20541,7 @@ class WechatMiniProgramRenderer {
     var _a2, _b2, _c, _d;
     this.tocPositions = [];
     if (!((_a2 = this.book) == null ? void 0 : _a2.toc)) return;
-    for (const [order, item] of flattenTOC(this.book.toc).entries()) {
+    for (const [order, item] of flattenTOC$2(this.book.toc).entries()) {
       const resolved = (_c = (_b2 = this.book).resolveHref) == null ? void 0 : _c.call(_b2, item.href);
       const index = (_d = resolved == null ? void 0 : resolved.index) != null ? _d : this.getTOCSectionIndex(item.href);
       if (index == null || index < 0) continue;
@@ -20586,7 +20576,7 @@ class WechatMiniProgramRenderer {
   findTOCItem(href) {
     var _a2, _b2;
     if (!((_a2 = this.book) == null ? void 0 : _a2.toc)) return null;
-    return (_b2 = flattenTOC(this.book.toc).find((item) => item.href === href)) != null ? _b2 : null;
+    return (_b2 = flattenTOC$2(this.book.toc).find((item) => item.href === href)) != null ? _b2 : null;
   }
   getCurrentTOCItem() {
     var _a2;
@@ -20746,11 +20736,11 @@ class WechatMiniProgramRenderer {
 const createWechatMiniProgramRenderer = (config) => {
   return new WechatMiniProgramRenderer(config);
 };
-function flattenTOC(items) {
+function flattenTOC$2(items) {
   return items.flatMap(
     (item) => {
       var _a2;
-      return ((_a2 = item.subitems) == null ? void 0 : _a2.length) ? [item, ...flattenTOC(item.subitems)] : [item];
+      return ((_a2 = item.subitems) == null ? void 0 : _a2.length) ? [item, ...flattenTOC$2(item.subitems)] : [item];
     }
   );
 }
@@ -20778,6 +20768,458 @@ function getTableColumns(table) {
 }
 function clamp01$1(value2) {
   return Math.max(0, Math.min(1, value2));
+}
+async function applyRebookPlugins(book, plugins) {
+  let current = book;
+  for (const plugin of plugins != null ? plugins : []) {
+    current = await plugin(current);
+  }
+  return current;
+}
+async function searchBook(book, query, options = {}) {
+  var _a2, _b2;
+  const normalizedQuery = options.caseSensitive ? query : query.toLocaleLowerCase();
+  if (!normalizedQuery) return [];
+  const maxResults = Math.max(0, Math.floor((_a2 = options.maxResults) != null ? _a2 : 100));
+  if (maxResults === 0) return [];
+  const sections = await getSearchableSections(book, options);
+  const results = [];
+  for (const item of sections) {
+    const haystack = options.caseSensitive ? item.text : item.text.toLocaleLowerCase();
+    let fromIndex = 0;
+    let matchIndex = 0;
+    while (results.length < maxResults) {
+      const index = haystack.indexOf(normalizedQuery, fromIndex);
+      if (index < 0) break;
+      const end = index + query.length;
+      fromIndex = Math.max(index + 1, end);
+      if (options.wholeWord && !isWholeWordMatch(item.text, index, end)) continue;
+      results.push(createSearchResult(item, query, index, end, matchIndex++, (_b2 = options.contextChars) != null ? _b2 : 48));
+    }
+    if (results.length >= maxResults) break;
+  }
+  return results;
+}
+async function searchChapters(book, query, options = {}) {
+  const groups = [];
+  for (let sectionIndex = 0; sectionIndex < book.sections.length; sectionIndex++) {
+    const results = await searchBook(book, query, {
+      ...options,
+      scope: "chapter",
+      chapterIndex: sectionIndex
+    });
+    if (!results.length) continue;
+    const section = book.sections[sectionIndex];
+    groups.push({
+      sectionIndex,
+      sectionId: section.id,
+      chapterLabel: getChapterLabel(book, sectionIndex, section),
+      results
+    });
+  }
+  return groups;
+}
+async function getSectionSearchText(section) {
+  if (section.getBlocks) return blocksToText(await section.getBlocks());
+  if (section.getSegments) return segmentsToText(await section.getSegments());
+  if (section.getDocument) {
+    const document2 = await section.getDocument();
+    if (document2) return normalizeSearchText(document2.getText());
+  }
+  if (section.loadText) return normalizeSearchText(await section.loadText());
+  if (section.format === "image") return "";
+  return htmlToText(await section.load());
+}
+function createSearchResult(item, query, start, end, matchIndex, contextChars) {
+  const contextStart = Math.max(0, start - Math.max(0, contextChars));
+  const contextEnd = Math.min(item.text.length, end + Math.max(0, contextChars));
+  const before = item.text.slice(contextStart, start);
+  const match = item.text.slice(start, end);
+  const after = item.text.slice(end, contextEnd);
+  return {
+    query,
+    sectionIndex: item.sectionIndex,
+    sectionId: item.section.id,
+    chapterLabel: item.chapterLabel,
+    matchIndex,
+    start,
+    end,
+    before,
+    match,
+    after,
+    excerpt: `${contextStart > 0 ? "..." : ""}${before}${match}${after}${contextEnd < item.text.length ? "..." : ""}`
+  };
+}
+async function getSearchableSections(book, options) {
+  const indexes = getSectionIndexes(book, options);
+  return Promise.all(indexes.map(async (sectionIndex) => {
+    const section = book.sections[sectionIndex];
+    return {
+      sectionIndex,
+      section,
+      chapterLabel: getChapterLabel(book, sectionIndex, section),
+      text: await getSectionSearchText(section)
+    };
+  }));
+}
+function getSectionIndexes(book, options) {
+  var _a2;
+  if (options.sectionIndexes) return uniqueValidIndexes(book, options.sectionIndexes);
+  if (options.scope === "chapter") return uniqueValidIndexes(book, [(_a2 = options.chapterIndex) != null ? _a2 : 0]);
+  return book.sections.map((_, index) => index);
+}
+function uniqueValidIndexes(book, indexes) {
+  return [...new Set(indexes)].map((index) => Math.floor(index)).filter((index) => index >= 0 && index < book.sections.length);
+}
+function getChapterLabel(book, sectionIndex, section) {
+  const tocItem = findTOCItemForSection(book, sectionIndex, section);
+  return tocItem == null ? void 0 : tocItem.label;
+}
+function findTOCItemForSection(book, sectionIndex, section) {
+  var _a2, _b2, _c, _d;
+  const items = flattenTOC$1((_a2 = book.toc) != null ? _a2 : []);
+  if (!items.length) return null;
+  for (const item of items) {
+    const resolved = (_b2 = book.resolveHref) == null ? void 0 : _b2.call(book, item.href);
+    if ((resolved == null ? void 0 : resolved.index) === sectionIndex) return item;
+    const [id] = (_d = (_c = book.splitTOCHref) == null ? void 0 : _c.call(book, item.href)) != null ? _d : [item.href];
+    if (id === section.id) return item;
+  }
+  return null;
+}
+function flattenTOC$1(items) {
+  return items.flatMap((item) => {
+    var _a2;
+    return ((_a2 = item.subitems) == null ? void 0 : _a2.length) ? [item, ...flattenTOC$1(item.subitems)] : [item];
+  });
+}
+function blocksToText(blocks) {
+  return normalizeSearchText(blocks.map((block) => {
+    var _a2, _b2, _c, _d, _e, _f;
+    if (block.type === "image") return (_d = (_c = (_a2 = block.image) == null ? void 0 : _a2.alt) != null ? _c : (_b2 = block.image) == null ? void 0 : _b2.title) != null ? _d : "";
+    if (block.type === "table") return (_f = (_e = block.table) == null ? void 0 : _e.rows.flatMap((row) => row.cells.map((cell) => cell.text)).join(" ")) != null ? _f : "";
+    return segmentsToText(block.segments);
+  }).filter(Boolean).join("\n"));
+}
+function segmentsToText(segments) {
+  return normalizeSearchText(segments.filter((segment) => {
+    var _a2;
+    return ((_a2 = segment.source) == null ? void 0 : _a2.nodeType) !== "img";
+  }).map((segment) => segment.text).join(""));
+}
+function htmlToText(html) {
+  return normalizeSearchText(html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
+}
+function normalizeSearchText(value2) {
+  return value2.replace(/\s+/g, " ").trim();
+}
+function isWholeWordMatch(text, start, end) {
+  return !isWordCharacter(text[start - 1]) && !isWordCharacter(text[end]);
+}
+function isWordCharacter(value2) {
+  return Boolean(value2 && /[\p{L}\p{N}_]/u.test(value2));
+}
+class ReaderSession {
+  constructor(config) {
+    __publicField(this, "renderer");
+    __publicField(this, "book", null);
+    __publicField(this, "config");
+    __publicField(this, "registeredListeners", []);
+    this.config = config;
+    this.renderer = config.createRenderer();
+  }
+  /**
+   * Open a book from a file, URL, Blob, or ArrayBuffer.
+   */
+  async open(input) {
+    this.close();
+    this.resetRenderer();
+    const book = await applyRebookPlugins(
+      await registry.open(input, this.getParserOptions()),
+      this.config.plugins
+    );
+    this.book = book;
+    await this.renderer.open(book);
+    return book;
+  }
+  /**
+   * Open an already-parsed book.
+   */
+  async openBook(inputBook) {
+    this.close();
+    this.resetRenderer();
+    const book = await applyRebookPlugins(inputBook, this.config.plugins);
+    this.book = book;
+    await this.renderer.open(book);
+  }
+  /**
+   * Get the current book.
+   */
+  getBook() {
+    return this.book;
+  }
+  /**
+   * Get book metadata.
+   */
+  getMetadata() {
+    var _a2;
+    return (_a2 = this.book) == null ? void 0 : _a2.metadata;
+  }
+  /**
+   * Get table of contents.
+   */
+  getTOC() {
+    var _a2;
+    return (_a2 = this.book) == null ? void 0 : _a2.toc;
+  }
+  /**
+   * Search the current book's readable text.
+   */
+  async search(query, options = {}) {
+    if (!this.book) return [];
+    return searchBook(this.book, query, options);
+  }
+  /**
+   * Search the current book and group matches by chapter.
+   */
+  async searchChapters(query, options = {}) {
+    if (!this.book) return [];
+    return searchChapters(this.book, query, options);
+  }
+  /**
+   * Get the current book's trial policy controller, if installed.
+   */
+  getTrialLimit() {
+    var _a2, _b2;
+    return (_b2 = (_a2 = this.book) == null ? void 0 : _a2.trialLimit) != null ? _b2 : null;
+  }
+  /**
+   * Check whether the current trial policy allows navigation to a target.
+   * Books without a trial policy are unrestricted.
+   */
+  canGoTo(target) {
+    const trialLimit = this.getTrialLimit();
+    if (!trialLimit) return true;
+    return trialLimit.canGoTo(target, this.getSectionFractions());
+  }
+  /**
+   * Check whether the current trial policy allows moving to the next page.
+   * Books without a trial policy are unrestricted.
+   */
+  canGoNext() {
+    const trialLimit = this.getTrialLimit();
+    if (!trialLimit) return true;
+    return trialLimit.canGoNext(this.getLocation(), this.getSectionFractions());
+  }
+  /**
+   * Get trial-aware TOC items for the current book.
+   */
+  getTrialTOCItems(items) {
+    const trialLimit = this.getTrialLimit();
+    if (!trialLimit) return [];
+    return trialLimit.getTOCItems(this.getSectionFractions(), items);
+  }
+  /**
+   * Get TOC hrefs allowed by the current trial policy.
+   */
+  getAllowedTOCHrefs() {
+    var _a2;
+    const trialLimit = this.getTrialLimit();
+    if (!trialLimit) return flattenTOC((_a2 = this.getTOC()) != null ? _a2 : []).map((item) => normalizeNavigationHref$1(item.href));
+    return trialLimit.getAllowedTOCHrefs(this.getSectionFractions());
+  }
+  /**
+   * Get the current trial-aware TOC item for the reader location.
+   */
+  getCurrentTrialTOCItem(items = this.getTrialTOCItems()) {
+    const trialLimit = this.getTrialLimit();
+    if (!trialLimit) return null;
+    return trialLimit.getCurrentTOCItem(items, this.getLocation());
+  }
+  /**
+   * Navigate to a location.
+   */
+  async goTo(target) {
+    await this.renderer.goTo(target);
+  }
+  /**
+   * Go to next page.
+   */
+  async next() {
+    await this.renderer.next();
+  }
+  /**
+   * Go to previous page.
+   */
+  async prev() {
+    await this.renderer.prev();
+  }
+  /**
+   * Navigate right (respects RTL).
+   */
+  async goRight() {
+    var _a2;
+    if (((_a2 = this.book) == null ? void 0 : _a2.dir) === "rtl") {
+      await this.prev();
+    } else {
+      await this.next();
+    }
+  }
+  /**
+   * Navigate left (respects RTL).
+   */
+  async goLeft() {
+    var _a2;
+    if (((_a2 = this.book) == null ? void 0 : _a2.dir) === "rtl") {
+      await this.next();
+    } else {
+      await this.prev();
+    }
+  }
+  /**
+   * Navigate by fraction (0-1).
+   */
+  async goToFraction(fraction) {
+    await this.renderer.goToFraction(fraction);
+  }
+  /**
+   * Get section fractions for progress bar.
+   */
+  getSectionFractions() {
+    return this.renderer.getSectionFractions();
+  }
+  /**
+   * Reload the current section while preserving the current reading position.
+   */
+  async refresh() {
+    await this.renderer.refresh();
+  }
+  /**
+   * Get current reading location.
+   */
+  getLocation() {
+    const location = this.renderer.getLocation();
+    if (location && location.tocItem === void 0) {
+      location.tocItem = this.getCurrentTOCItem(location);
+    }
+    return location;
+  }
+  /**
+   * Get current TOC item based on location.
+   */
+  getCurrentTOCItem(location) {
+    if (!this.book || !this.book.toc) return null;
+    const loc = location != null ? location : this.getLocation();
+    if (!loc) return null;
+    if (loc.tocItem !== void 0) return loc.tocItem;
+    let activeItem = null;
+    let maxIndex = -1;
+    const checkItem = (item) => {
+      if (this.book.splitTOCHref) {
+        try {
+          const parts = this.book.splitTOCHref(item.href);
+          if (parts && Array.isArray(parts)) {
+            const [id] = parts;
+            const index = this.book.sections.findIndex((s) => s.id === id);
+            if (index >= 0 && index <= loc.index && index >= maxIndex) {
+              maxIndex = index;
+              activeItem = item;
+            }
+          }
+        } catch (e) {
+          console.error("Error in splitTOCHref:", e);
+        }
+      }
+      if (item.subitems) {
+        for (const sub of item.subitems) checkItem(sub);
+      }
+    };
+    for (const item of this.book.toc) {
+      checkItem(item);
+    }
+    return activeItem;
+  }
+  /**
+   * Update styles.
+   */
+  setStyles(styles) {
+    this.renderer.setStyles(styles);
+  }
+  /**
+   * Set layout mode.
+   */
+  setLayout(mode) {
+    this.renderer.setLayout(mode);
+  }
+  /**
+   * Set maximum number of visible columns (pages).
+   */
+  setSpread(maxColumns) {
+    this.renderer.setSpread(maxColumns);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on(event, listener) {
+    let wrappedListener = listener;
+    if (event === "relocate") {
+      wrappedListener = (e) => {
+        if (e.tocItem === void 0) e.tocItem = this.getCurrentTOCItem(e);
+        listener(e);
+      };
+    }
+    this.renderer.on(event, wrappedListener);
+    this.registeredListeners.push({ event, listener, wrappedListener });
+  }
+  /**
+   * Remove an event listener.
+   */
+  off(event, listener) {
+    const index = this.registeredListeners.findIndex(
+      (item) => item.event === event && item.listener === listener
+    );
+    if (index >= 0) {
+      const { wrappedListener } = this.registeredListeners[index];
+      this.renderer.off(event, wrappedListener);
+      this.registeredListeners.splice(index, 1);
+    }
+  }
+  /**
+   * Close the current book and clean up book resources.
+   */
+  close() {
+    var _a2, _b2;
+    (_b2 = (_a2 = this.book) == null ? void 0 : _a2.destroy) == null ? void 0 : _b2.call(_a2);
+    this.book = null;
+  }
+  /**
+   * Destroy the reader and release all resources.
+   */
+  destroy() {
+    this.close();
+    this.renderer.destroy();
+    this.registeredListeners = [];
+  }
+  getRenderer() {
+    return this.renderer;
+  }
+  resetRenderer() {
+    this.renderer.destroy();
+    this.renderer = this.config.createRenderer();
+    for (const item of this.registeredListeners) {
+      this.renderer.on(item.event, item.wrappedListener);
+    }
+  }
+  getParserOptions() {
+    return typeof this.config.parserOptions === "function" ? this.config.parserOptions() : this.config.parserOptions;
+  }
+}
+function flattenTOC(items) {
+  return items.flatMap((item) => {
+    var _a2;
+    return ((_a2 = item.subitems) == null ? void 0 : _a2.length) ? [item, ...flattenTOC(item.subitems)] : [item];
+  });
+}
+function normalizeNavigationHref$1(href) {
+  return (href || "").split("#")[0];
 }
 var lib = {};
 var conventions = {};
@@ -27506,6 +27948,34 @@ class WechatMiniProgramURLFactory {
     return this.urls.get(url);
   }
 }
+class WechatMiniProgramReader extends ReaderSession {
+  constructor(config) {
+    super(createWechatMiniProgramReaderSessionConfig(config));
+  }
+  getSnapshot() {
+    return this.getRenderer().getSnapshot();
+  }
+  setViewport(width, height) {
+    this.getRenderer().setViewport(width, height);
+  }
+  setScrollTop(scrollTop) {
+    this.getRenderer().setScrollTop(scrollTop);
+  }
+}
+function createWechatMiniProgramReaderSessionConfig(config) {
+  return {
+    parserOptions: () => ({
+      domAdapter: new WechatMiniProgramDOMAdapter(),
+      urlFactory: new WechatMiniProgramURLFactory(),
+      ...config.parserOptions
+    }),
+    plugins: config.plugins,
+    createRenderer: () => new WechatMiniProgramRenderer(config)
+  };
+}
+const createWechatMiniProgramReader = (config) => {
+  return new WechatMiniProgramReader(config);
+};
 const DEFAULT_EPSILON = 1e-4;
 const DEFAULT_BYTES_PER_TEXT_UNIT = 2.4;
 const DEFAULT_SAMPLE_SECTIONS = 4;
@@ -27567,26 +28037,26 @@ function createTrialLimitController(book, state, options) {
     getTotalFraction(location, sectionFractions) {
       return getTotalFraction(location, sectionFractions);
     },
-    getTargetStartFraction(sectionFractions, target) {
-      return getTargetStartFraction(book, sectionFractions, target);
+    getTargetFraction(target, sectionFractions) {
+      return getTargetFraction(book, target, sectionFractions);
     },
-    canAccessTarget(sectionFractions, target) {
-      return getTargetStartFraction(book, sectionFractions, target) <= state.limitFraction + epsilon;
+    canGoTo(target, sectionFractions) {
+      return getTargetFraction(book, target, sectionFractions) <= state.limitFraction + epsilon;
     },
-    getTOCAccessItems(sectionFractions, items = book.toc || []) {
-      return getTOCAccessItems(book, sectionFractions, state.limitFraction, epsilon, items);
+    getTOCItems(sectionFractions, items = book.toc || []) {
+      return getTrialTOCItems(book, sectionFractions, state.limitFraction, epsilon, items);
     },
     getAllowedTOCHrefs(sectionFractions) {
-      return this.getTOCAccessItems(sectionFractions).filter((item) => !item.disabled).map((item) => normalizeNavigationHref(item.href));
+      return this.getTOCItems(sectionFractions).filter((item) => !item.disabled).map((item) => normalizeNavigationHref(item.href));
     },
-    getCurrentTOCAccessItem(items, location) {
-      return getCurrentTOCAccessItem(items, location);
+    getCurrentTOCItem(items, location) {
+      return getCurrentTrialTOCItem(items, location);
     },
-    estimateNextTotalFractionFromSnapshot(snapshot, sectionFractions) {
-      return estimateNextTotalFractionFromSnapshot(snapshot, sectionFractions);
+    getNextTotalFraction(snapshot, sectionFractions) {
+      return getNextTotalFraction(snapshot, sectionFractions);
     },
-    willForwardExceedLimit(location, sectionFractions) {
-      return getTotalFraction(location, sectionFractions) + state.pageStepFraction > state.limitFraction + epsilon;
+    canGoNext(location, sectionFractions) {
+      return getTotalFraction(location, sectionFractions) + state.pageStepFraction <= state.limitFraction + epsilon;
     }
   };
 }
@@ -27625,13 +28095,13 @@ function getTotalFraction(location, sectionFractions) {
   const sectionSpan = Math.max(0, nextSectionStart - sectionStart);
   return clamp01(sectionStart + sectionSpan * (location.fraction || 0));
 }
-function getTargetStartFraction(book, sectionFractions, target) {
+function getTargetFraction(book, target, sectionFractions) {
   var _a2, _b2;
   const index = typeof target === "number" ? target : (_a2 = resolveBookNavigation(book, target)) == null ? void 0 : _a2.index;
   if (typeof index !== "number" || index < 0) return 0;
   return (_b2 = sectionFractions[index]) != null ? _b2 : 0;
 }
-function getTOCAccessItems(book, sectionFractions, limitFraction, epsilon, items = book.toc || [], depth = 0) {
+function getTrialTOCItems(book, sectionFractions, limitFraction, epsilon, items = book.toc || [], depth = 0) {
   return items.flatMap((item) => {
     var _a2, _b2, _c;
     const sectionIndex = (_b2 = (_a2 = resolveBookNavigation(book, item.href)) == null ? void 0 : _a2.index) != null ? _b2 : -1;
@@ -27647,11 +28117,11 @@ function getTOCAccessItems(book, sectionFractions, limitFraction, epsilon, items
         sectionFraction,
         disabled
       },
-      ...getTOCAccessItems(book, sectionFractions, limitFraction, epsilon, item.subitems || [], depth + 1)
+      ...getTrialTOCItems(book, sectionFractions, limitFraction, epsilon, item.subitems || [], depth + 1)
     ];
   });
 }
-function getCurrentTOCAccessItem(items, location) {
+function getCurrentTrialTOCItem(items, location) {
   if (!items.length || !location || location.index < 0) return null;
   const exact = items.find((item) => item.sectionIndex === location.index);
   if (exact) return exact;
@@ -27661,7 +28131,7 @@ function getCurrentTOCAccessItem(items, location) {
   }
   return null;
 }
-function estimateNextTotalFractionFromSnapshot(snapshot, sectionFractions) {
+function getNextTotalFraction(snapshot, sectionFractions) {
   var _a2;
   if (snapshot.pageIndex < snapshot.pageCount - 1) {
     return getTotalFraction({
@@ -30090,9 +30560,11 @@ export {
   UnsupportedFormatError,
   UnsupportedInputError,
   WechatMiniProgramDOMAdapter,
+  WechatMiniProgramReader,
   WechatMiniProgramRenderer,
   WechatMiniProgramURLFactory,
   cbz,
+  createWechatMiniProgramReader,
   createWechatMiniProgramRenderer,
   epub,
   estimateBookPageCount,
