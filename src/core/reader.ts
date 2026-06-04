@@ -8,7 +8,7 @@
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, RebookPlugin, TOCItem } from './types'
 import type { ParserInput, ParserOptions } from './parser'
-import type { LayoutMode, Renderer, RendererStyles } from './renderer'
+import type { LayoutMode, NavigationDirection, Renderer, RendererNavigationHooks, RendererStyles } from './renderer'
 import type { TrialLimitController, TrialTOCAccessItem } from '../plugins/trial-limit'
 import { registry } from './parser'
 import { applyRebookPlugins } from './plugins'
@@ -22,7 +22,7 @@ import {
 
 export interface ReaderSessionConfig {
     /** Create a renderer instance for the current platform. */
-    createRenderer: () => Renderer
+    createRenderer: (hooks?: RendererNavigationHooks) => Renderer
     /** Parser options, including platform adapters. */
     parserOptions?: ParserOptions | (() => ParserOptions)
     /** Plugins to transform the book before rendering. */
@@ -64,7 +64,7 @@ export class ReaderSession {
 
     constructor(config: ReaderSessionConfig) {
         this.config = config
-        this.renderer = config.createRenderer()
+        this.renderer = this.createRenderer()
     }
 
     /**
@@ -224,6 +224,7 @@ export class ReaderSession {
      * Navigate to a location.
      */
     async goTo(target: number | string): Promise<void> {
+        if (!this.canGoTo(target)) return
         await this.renderer.goTo(target)
     }
 
@@ -231,6 +232,7 @@ export class ReaderSession {
      * Go to next page.
      */
     async next(): Promise<void> {
+        if (!this.canGoNext()) return
         await this.renderer.next()
     }
 
@@ -411,9 +413,20 @@ export class ReaderSession {
         return this.renderer
     }
 
+    private createRenderer(): Renderer {
+        return this.config.createRenderer({
+            beforeNavigate: direction => this.canNavigate(direction),
+        })
+    }
+
+    private canNavigate(direction: NavigationDirection): boolean {
+        if (direction === 'next') return this.canGoNext()
+        return true
+    }
+
     private resetRenderer(): void {
         this.renderer.destroy()
-        this.renderer = this.config.createRenderer()
+        this.renderer = this.createRenderer()
         for (const item of this.registeredListeners) {
             this.renderer.on(item.event, item.wrappedListener)
         }

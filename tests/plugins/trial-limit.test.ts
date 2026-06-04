@@ -11,7 +11,7 @@ import {
 
 const sectionFractions = [0, 0.2, 0.7, 1]
 
-const createNoopRenderer = (): Renderer => ({
+const createNoopRenderer = (overrides: Partial<Renderer> = {}): Renderer => ({
     open: async () => {},
     goTo: async () => {},
     next: async () => {},
@@ -26,6 +26,7 @@ const createNoopRenderer = (): Renderer => ({
     on: () => {},
     off: () => {},
     destroy: () => {},
+    ...overrides,
 })
 
 const makeBook = (): Book => ({
@@ -181,8 +182,13 @@ describe('Trial limit plugin', () => {
     })
 
     it('exposes reader-level trial navigation helpers', async () => {
+        let nextCalls = 0
+        const goToTargets: Array<string | number> = []
         const reader = new ReaderSession({
-            createRenderer: createNoopRenderer,
+            createRenderer: () => createNoopRenderer({
+                goTo: async target => { goToTargets.push(target) },
+                next: async () => { nextCalls++ },
+            }),
             plugins: [withTrialLimit({
                 maxPages: 2,
                 sampleSections: 1,
@@ -229,6 +235,14 @@ describe('Trial limit plugin', () => {
             { label: 'Chapter One Note', active: true },
             { label: 'Chapter Two', active: false },
         ])
+
+        await reader.next()
+        await reader.goTo('Text/chapter-2.xhtml')
+        expect(nextCalls).toBe(0)
+        expect(goToTargets).toEqual([])
+
+        await reader.goTo('Text/chapter-1.xhtml')
+        expect(goToTargets).toEqual(['Text/chapter-1.xhtml'])
 
         reader.destroy()
     })

@@ -48,11 +48,17 @@ export interface RendererStyles {
  */
 export type LayoutMode = 'paginated' | 'scrolled'
 
+export type NavigationDirection = 'next' | 'prev'
+
+export interface RendererNavigationHooks {
+    beforeNavigate?: (direction: NavigationDirection) => boolean | Promise<boolean>
+}
+
 /**
  * Platform-neutral configuration shared by renderer implementations.
  * Browser-specific renderers add their host container in their own modules.
  */
-export interface RendererConfig {
+export interface RendererConfig extends RendererNavigationHooks {
     /** Initial layout mode */
     layout?: LayoutMode
     /** Initial styles */

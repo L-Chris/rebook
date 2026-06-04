@@ -5,6 +5,7 @@
  */
 
 import type { ParserOptions } from '../../core/parser'
+import type { NavigationDirection, RendererNavigationHooks } from '../../core/renderer'
 import type { RebookPlugin } from '../../core/types'
 import { ReaderSession, type ReaderSessionConfig } from '../../core/reader'
 import {
@@ -55,7 +56,21 @@ function createWechatMiniProgramReaderSessionConfig(
             ...config.parserOptions,
         }),
         plugins: config.plugins,
-        createRenderer: () => new WechatMiniProgramRenderer(config),
+        createRenderer: hooks => new WechatMiniProgramRenderer({
+            ...config,
+            beforeNavigate: createBeforeNavigate(config.beforeNavigate, hooks?.beforeNavigate),
+        }),
+    }
+}
+
+function createBeforeNavigate(
+    configHook?: RendererNavigationHooks['beforeNavigate'],
+    sessionHook?: RendererNavigationHooks['beforeNavigate'],
+): (direction: NavigationDirection) => Promise<boolean> {
+    return async direction => {
+        if (configHook && await configHook(direction) === false) return false
+        if (sessionHook && await sessionHook(direction) === false) return false
+        return true
     }
 }
 

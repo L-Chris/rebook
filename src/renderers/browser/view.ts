@@ -5,6 +5,7 @@
  */
 
 import type { ParserOptions } from '../../core/parser'
+import type { NavigationDirection, RendererNavigationHooks } from '../../core/renderer'
 import type { RebookPlugin } from '../../core/types'
 import { ReaderSession, type ReaderSessionConfig } from '../../core/reader'
 import { BrowserDOMAdapter, BrowserURLFactory } from '../../adapters/browser'
@@ -34,7 +35,21 @@ function createBrowserReaderSessionConfig(config: ReaderConfig): ReaderSessionCo
             ...config.parserOptions,
         }),
         plugins: config.plugins,
-        createRenderer: () => new BrowserRenderer(config),
+        createRenderer: hooks => new BrowserRenderer({
+            ...config,
+            beforeNavigate: createBeforeNavigate(config.beforeNavigate, hooks?.beforeNavigate),
+        }),
+    }
+}
+
+function createBeforeNavigate(
+    configHook?: RendererNavigationHooks['beforeNavigate'],
+    sessionHook?: RendererNavigationHooks['beforeNavigate'],
+): (direction: NavigationDirection) => Promise<boolean> {
+    return async direction => {
+        if (configHook && await configHook(direction) === false) return false
+        if (sessionHook && await sessionHook(direction) === false) return false
+        return true
     }
 }
 

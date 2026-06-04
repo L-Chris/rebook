@@ -6,7 +6,7 @@
  */
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
-import type { LayoutMode, Renderer, RendererStyles } from '../../core/renderer'
+import type { LayoutMode, NavigationDirection, Renderer, RendererNavigationHooks, RendererStyles } from '../../core/renderer'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
@@ -45,7 +45,7 @@ interface RendererEventMap {
 type Listener<T> = (event: T) => void
 type AnchorResolver = (doc: unknown) => unknown
 
-export interface WechatMiniProgramRendererConfig {
+export interface WechatMiniProgramRendererConfig extends RendererNavigationHooks {
     /** Viewport width in CSS pixels/rpx-equivalent layout units. */
     width: number
     /** Viewport height in CSS pixels/rpx-equivalent layout units. */
@@ -178,6 +178,7 @@ export class WechatMiniProgramRenderer implements Renderer {
     private prefetchPageCount = 0
     private tocPositions: TOCPosition[] = []
     private pendingTOCItem: TOCItem | null = null
+    private beforeNavigate: RendererNavigationHooks['beforeNavigate']
     private columnLayout: ColumnLayout = {
         margin: DEFAULT_MARGIN,
         gap: DEFAULT_GAP,
@@ -201,6 +202,7 @@ export class WechatMiniProgramRenderer implements Renderer {
         this.maxColumnCount = config.maxColumnCount ?? 1
         this.overscan = config.overscan ?? 4
         this.setData = config.setData
+        this.beforeNavigate = config.beforeNavigate
     }
 
     async open(book: Book): Promise<void> {
@@ -230,6 +232,8 @@ export class WechatMiniProgramRenderer implements Renderer {
     }
 
     async next(): Promise<void> {
+        if (!await this.canNavigate('next')) return
+
         if (this.layoutMode === 'paginated') {
             const nextPage = this.findReadablePage(this.pageIndex + 1, 1)
             if (nextPage != null) {
@@ -252,6 +256,8 @@ export class WechatMiniProgramRenderer implements Renderer {
     }
 
     async prev(): Promise<void> {
+        if (!await this.canNavigate('prev')) return
+
         if (this.layoutMode === 'paginated') {
             const previousPage = this.findReadablePage(this.pageIndex - 1, -1)
             if (previousPage != null) {
@@ -857,6 +863,10 @@ export class WechatMiniProgramRenderer implements Renderer {
     private hasReadableLinesOnPage(pageIndex: number): boolean {
         const { columns, columnHeight } = this.columnLayout
         return this.lines.some(line => getLinePageIndex(line, columnHeight, columns) === pageIndex)
+    }
+
+    private async canNavigate(direction: NavigationDirection): Promise<boolean> {
+        return await this.beforeNavigate?.(direction) !== false
     }
 
     private emit<K extends keyof RendererEventMap>(event: K, data: RendererEventMap[K]): void {

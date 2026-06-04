@@ -5,7 +5,7 @@
  */
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
-import type { LayoutMode, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
+import type { LayoutMode, NavigationDirection, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
@@ -109,12 +109,14 @@ export class BrowserRenderer implements Renderer {
     private pendingTOCItem: TOCItem | null = null
     private suppressNextScrollRelocate = false
     private prefetchPageCount = 0
+    private beforeNavigate: RendererConfig['beforeNavigate']
 
     constructor(config: BrowserRendererConfig) {
         this.container = config.container
         this.styles = config.styles ?? {}
         this.maxColumnCount = config.maxColumnCount ?? 2
         this.layoutMode = config.layout ?? 'paginated'
+        this.beforeNavigate = config.beforeNavigate
 
         this.scroller = document.createElement('div')
         this.scroller.style.cssText = `
@@ -188,6 +190,8 @@ export class BrowserRenderer implements Renderer {
     }
 
     async next(): Promise<void> {
+        if (!await this.canNavigate('next')) return
+
         if (this.layoutMode === 'paginated') {
             const nextPage = this.findReadablePage(this.pageIndex + 1, 1)
             if (nextPage != null) {
@@ -212,6 +216,8 @@ export class BrowserRenderer implements Renderer {
     }
 
     async prev(): Promise<void> {
+        if (!await this.canNavigate('prev')) return
+
         if (this.layoutMode === 'paginated') {
             const previousPage = this.findReadablePage(this.pageIndex - 1, -1)
             if (previousPage != null) {
@@ -809,6 +815,10 @@ export class BrowserRenderer implements Renderer {
     private findTOCItem(href: string): TOCItem | null {
         if (!this.book?.toc) return null
         return flattenTOC(this.book.toc).find(item => item.href === href) ?? null
+    }
+
+    private async canNavigate(direction: NavigationDirection): Promise<boolean> {
+        return await this.beforeNavigate?.(direction) !== false
     }
 
     private getCurrentTOCItem(): TOCItem | null {

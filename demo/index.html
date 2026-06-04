@@ -716,6 +716,13 @@
                 maxColumnCount: Number(spreadSelect.value),
                 parserOptions,
                 plugins,
+                beforeNavigate: direction => {
+                    if (direction === 'next' && trialCheck.checked && reader && !reader.canGoNext()) {
+                        showTrialBlocked()
+                        return false
+                    }
+                    return true
+                },
                 styles: {
                     ...getThemeStyles(),
                     fontSize: fontSizeSelect.value,

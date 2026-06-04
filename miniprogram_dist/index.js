@@ -20115,6 +20115,7 @@ class WechatMiniProgramRenderer {
     __publicField(this, "prefetchPageCount", 0);
     __publicField(this, "tocPositions", []);
     __publicField(this, "pendingTOCItem", null);
+    __publicField(this, "beforeNavigate");
     __publicField(this, "columnLayout", {
       margin: DEFAULT_MARGIN,
       gap: DEFAULT_GAP,
@@ -20137,6 +20138,7 @@ class WechatMiniProgramRenderer {
     this.maxColumnCount = (_c = config.maxColumnCount) != null ? _c : 1;
     this.overscan = (_d = config.overscan) != null ? _d : 4;
     this.setData = config.setData;
+    this.beforeNavigate = config.beforeNavigate;
   }
   async open(book) {
     this.book = book;
@@ -20163,6 +20165,7 @@ class WechatMiniProgramRenderer {
     await this.loadSection(resolved.index, resolved.anchor);
   }
   async next() {
+    if (!await this.canNavigate("next")) return;
     if (this.layoutMode === "paginated") {
       const nextPage = this.findReadablePage(this.pageIndex + 1, 1);
       if (nextPage != null) {
@@ -20184,6 +20187,7 @@ class WechatMiniProgramRenderer {
   }
   async prev() {
     var _a2;
+    if (!await this.canNavigate("prev")) return;
     if (this.layoutMode === "paginated") {
       const previousPage = this.findReadablePage(this.pageIndex - 1, -1);
       if (previousPage != null) {
@@ -20728,6 +20732,10 @@ class WechatMiniProgramRenderer {
     const { columns, columnHeight } = this.columnLayout;
     return this.lines.some((line) => getLinePageIndex(line, columnHeight, columns) === pageIndex);
   }
+  async canNavigate(direction) {
+    var _a2;
+    return await ((_a2 = this.beforeNavigate) == null ? void 0 : _a2.call(this, direction)) !== false;
+  }
   emit(event, data) {
     var _a2;
     (_a2 = this.listeners.get(event)) == null ? void 0 : _a2.forEach((fn) => fn(data));
@@ -20926,7 +20934,7 @@ class ReaderSession {
     __publicField(this, "config");
     __publicField(this, "registeredListeners", []);
     this.config = config;
-    this.renderer = config.createRenderer();
+    this.renderer = this.createRenderer();
   }
   /**
    * Open a book from a file, URL, Blob, or ArrayBuffer.
@@ -21068,12 +21076,14 @@ class ReaderSession {
    * Navigate to a location.
    */
   async goTo(target) {
+    if (!this.canGoTo(target)) return;
     await this.renderer.goTo(target);
   }
   /**
    * Go to next page.
    */
   async next() {
+    if (!this.canGoNext()) return;
     await this.renderer.next();
   }
   /**
@@ -21229,9 +21239,18 @@ class ReaderSession {
   getRenderer() {
     return this.renderer;
   }
+  createRenderer() {
+    return this.config.createRenderer({
+      beforeNavigate: (direction) => this.canNavigate(direction)
+    });
+  }
+  canNavigate(direction) {
+    if (direction === "next") return this.canGoNext();
+    return true;
+  }
   resetRenderer() {
     this.renderer.destroy();
-    this.renderer = this.config.createRenderer();
+    this.renderer = this.createRenderer();
     for (const item of this.registeredListeners) {
       this.renderer.on(item.event, item.wrappedListener);
     }
@@ -28071,7 +28090,17 @@ function createWechatMiniProgramReaderSessionConfig(config) {
       ...config.parserOptions
     }),
     plugins: config.plugins,
-    createRenderer: () => new WechatMiniProgramRenderer(config)
+    createRenderer: (hooks) => new WechatMiniProgramRenderer({
+      ...config,
+      beforeNavigate: createBeforeNavigate(config.beforeNavigate, hooks == null ? void 0 : hooks.beforeNavigate)
+    })
+  };
+}
+function createBeforeNavigate(configHook, sessionHook) {
+  return async (direction) => {
+    if (configHook && await configHook(direction) === false) return false;
+    if (sessionHook && await sessionHook(direction) === false) return false;
+    return true;
   };
 }
 const createWechatMiniProgramReader = (config) => {
