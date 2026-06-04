@@ -47,7 +47,7 @@ const chapterResults = await searchBook(book, 'ownership', {
 const grouped = await searchChapters(book, 'worker')
 ```
 
-Search prefers `section.getBlocks()` so virtual-text extraction rules are
+Search prefers `section.getBlocks()` so browser renderer extraction rules are
 respected. Inline footnote markers remain searchable as markers, while hidden
 footnote content is not mixed into the visible body text.
 
@@ -224,7 +224,6 @@ import { createReader } from 'rebook'
 
 const reader = createReader({
     container: document.getElementById('viewer')!,
-    renderer: 'virtual-text', // default
     styles: {
         fontSize: '18px',
         lineHeight: 1.7,
@@ -233,7 +232,7 @@ const reader = createReader({
 })
 ```
 
-The default browser backend is `VirtualTextRenderer`: XHTML AST -> structural blocks -> preset styles -> Pretext line ranges -> visible DOM rows.
+The default browser backend is `BrowserRenderer`: XHTML AST -> structural blocks -> preset styles -> Pretext line ranges -> visible DOM rows.
 
 ### Opening
 
@@ -266,7 +265,7 @@ reader.setSpread(1) // Force single page
 
 #### Auto-Spread Layout
 
-In the default virtual text renderer, wide containers display two text columns side-by-side using the Pretext line list.
+In the default browser renderer, wide containers display two text columns side-by-side using the Pretext line list.
 
 - **Container width >=2 x `maxInlineSize` + `gap`**: Shows 2 pages (spread)
 - **Container width < 2 x `maxInlineSize` + `gap`**: Shows 1 page (single)
@@ -470,7 +469,7 @@ Returns styled text fragments extracted from the parsed XHTML tree. EPUB section
 
 ### `getBlocks()`
 
-Returns AST-derived reading blocks such as `chapter`, `heading`, `paragraph`, `listItem`, `blockquote`, and `pre`. The virtual browser renderer uses these blocks as its primary input and applies preset styles instead of trusting arbitrary EPUB CSS.
+Returns AST-derived reading blocks such as `chapter`, `heading`, `paragraph`, `listItem`, `blockquote`, and `pre`. The browser renderer uses these blocks as its primary input and applies preset styles instead of trusting arbitrary EPUB CSS.
 
 ---
 
@@ -723,11 +722,11 @@ interface LineRange {
 }
 ```
 
-Each `LineSegmentRange` maps a rendered fragment back to the original EPUB segment index and Pretext cursor range, which is the data a virtual list, Canvas renderer, or SVG renderer needs to render only visible lines.
+Each `LineSegmentRange` maps a rendered fragment back to the original EPUB segment index and Pretext cursor range, which is the data a windowed list, Canvas renderer, or SVG renderer needs to render only visible lines.
 
 ### `getVisibleLines(lines, scrollTop, viewportHeight, overscan?)`
 
-Returns a virtual window:
+Returns a visible line window:
 
 ```typescript
 {
@@ -806,12 +805,12 @@ interface Renderer {
 
 ### Browser Renderer
 
-`VirtualTextRenderer` consumes `section.getBlocks()`, Pretext prepared blocks, and `LineRange[]` to render only the visible text rows as simple DOM spans. It supports auto-spread two-column layout through `maxColumnCount`, `maxInlineSize`, `gap`, and `setSpread()`.
+`BrowserRenderer` consumes `section.getBlocks()`, Pretext prepared blocks, and `LineRange[]` to render only the visible text rows as simple DOM spans. It supports auto-spread two-column layout through `maxColumnCount`, `maxInlineSize`, `gap`, and `setSpread()`.
 
 ```typescript
-import { createVirtualTextRenderer } from 'rebook'
+import { createBrowserRenderer } from 'rebook'
 
-const renderer = createVirtualTextRenderer({
+const renderer = createBrowserRenderer({
     container: document.getElementById('viewer')!,
     styles: {
         fontSize: '18px',

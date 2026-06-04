@@ -1,2 +1,2 @@
-export { VirtualTextRenderer, createVirtualTextRenderer, type BrowserRendererConfig } from './virtual-text'
+export { BrowserRenderer, createBrowserRenderer, type BrowserRendererConfig } from './renderer'
 export { ReaderView, createReader, type ReaderConfig } from './view'

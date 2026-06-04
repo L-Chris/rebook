@@ -79,7 +79,7 @@ export interface DocumentResource {
 // ============================================================================
 
 /**
- * Preset inline text style used by the virtual text rendering pipeline.
+ * Preset inline text style used by line-based rendering pipelines.
  * This is intentionally smaller than CSS: it captures the portable subset
  * needed for Pretext measurement and DOM/Canvas rendering.
  */
@@ -111,7 +111,7 @@ export interface TextSegment {
 }
 
 /**
- * Portable image sizing/alignment metadata used by virtual renderers.
+ * Portable image sizing/alignment metadata used by line-based renderers.
  */
 export interface ImageStyle {
     width?: number
@@ -139,7 +139,7 @@ export interface TextImage {
 }
 
 /**
- * Normalized table payload for virtual reading blocks.
+ * Normalized table payload for structured reading blocks.
  */
 export interface TextTableCell {
     text: string
@@ -306,7 +306,7 @@ export interface Section {
     /**
      * Optional: return text/style segments for pre-measured layout engines.
      * This is useful for renderers that avoid full chapter DOM layout and
-     * instead virtualize line ranges or paint text on Canvas.
+     * instead render visible line ranges or paint text on Canvas.
      */
     getSegments?(): Promise<TextSegment[]> | TextSegment[]
     /**

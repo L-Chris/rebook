@@ -17,7 +17,7 @@ Primary boundaries:
 - `src/core`: shared contracts, document model, metadata helpers, error types, Pretext adapter, renderer helpers
 - `src/adapters`: browser and Node-compatible DOM/URL adapters
 - `src/parsers`: format-specific input handling
-- `src/renderers/browser`: browser `ReaderView` and virtual text renderer
+- `src/renderers/browser`: browser `ReaderView` and browser renderer
 - `src/renderers/wechat-miniprogram`: DOM-free snapshot renderer for Mini Program hosts
 - `src/plugins`: book middleware that can wrap or extend `Book` before rendering
 - `src/exporters`: format-neutral export registry plus EPUB, CBZ, TXT, and HTML exporters
@@ -68,7 +68,7 @@ Section XHTML
   -> visible DOM rows
 ```
 
-`VirtualTextRenderer` keeps only visible line rows in the live DOM and supports scrolled, paginated, and auto-spread layouts.
+`BrowserRenderer` keeps only visible line rows in the live DOM and supports scrolled, paginated, and auto-spread layouts.
 
 The Mini Program renderer uses the same `TextBlock -> Pretext -> LineRange` pipeline and emits serializable line snapshots instead of DOM rows. Its host canvas adapter is passed into the platform-neutral `installPretextMeasurementPolyfill()` helper.
 
@@ -170,7 +170,7 @@ This supports translation, annotation, summarization, and accessibility workflow
 - `extractDocumentBlocks()` maps `DocumentNode[]` to reading blocks
 - `prepareBlocks()` maps blocks to Pretext rich-inline input
 - `layout()` maps Pretext line ranges back to `LineRange[]`
-- `getVisibleLines()` computes virtualized windows
+- `getVisibleLines()` computes visible line windows
 
 The parser only guarantees that sections can load content and, where supported, provide document/block helpers. Measurement and display remain renderer concerns.
 
@@ -241,7 +241,7 @@ src/
     zip-loader.ts     zip archive loader with malformed recovery
   renderers/
     browser/
-      virtual-text.ts Pretext-backed virtual renderer
+      renderer.ts      Pretext-backed browser renderer
       view.ts         ReaderView high-level API
     wechat-miniprogram/
       index.ts        public renderer exports

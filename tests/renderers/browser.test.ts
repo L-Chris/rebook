@@ -5,7 +5,7 @@ import type { Book } from '../../src/core/types'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import { epub } from '../../src/parsers/epub'
 import { mobi } from '../../src/parsers/mobi'
-import { createReader, VirtualTextRenderer } from '../../src/renderers/browser'
+import { createReader, BrowserRenderer } from '../../src/renderers/browser'
 
 class MockResizeObserver {
     observe() {}
@@ -47,7 +47,7 @@ beforeEach(() => {
     })
 })
 
-describe('VirtualTextRenderer', () => {
+describe('BrowserRenderer', () => {
     it('renders only visible Pretext line ranges into minimal DOM rows', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
@@ -69,7 +69,7 @@ describe('VirtualTextRenderer', () => {
             }],
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '260px' },
         })
@@ -142,7 +142,7 @@ describe('VirtualTextRenderer', () => {
             }],
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             maxColumnCount: 1,
@@ -218,7 +218,7 @@ describe('VirtualTextRenderer', () => {
             }],
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             maxColumnCount: 2,
             styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '320px', gap: '48px' },
@@ -267,7 +267,7 @@ describe('VirtualTextRenderer', () => {
             }],
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             maxColumnCount: 2,
@@ -319,7 +319,7 @@ describe('VirtualTextRenderer', () => {
             }],
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             maxColumnCount: 1,
@@ -359,7 +359,7 @@ describe('VirtualTextRenderer', () => {
         const chapter2Index = book.sections.findIndex(section => String(section.id).endsWith('part0009.html'))
         expect(chapter2Index).toBeGreaterThanOrEqual(0)
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             maxColumnCount: 2,
@@ -390,13 +390,13 @@ describe('VirtualTextRenderer', () => {
         container.setAttribute('data-height', '664')
         document.body.appendChild(container)
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             maxColumnCount: 2,
             styles: { fontSize: '16px', lineHeight: 1.7, maxInlineSize: '320px', margin: '32px' },
         })
-        const internal = renderer as unknown as VirtualTextRenderer & {
+        const internal = renderer as unknown as BrowserRenderer & {
             lines: Array<{ top: number; height: number }>
             columnLayout: { pageCount: number; columnHeight: number; columns: number }
             findReadablePage(pageIndex: number, direction: -1 | 0 | 1): number | null
@@ -456,7 +456,7 @@ describe('VirtualTextRenderer', () => {
             }],
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             styles: { margin: '20px', fontSize: '16px', lineHeight: 1.5 },
@@ -507,7 +507,7 @@ describe('VirtualTextRenderer', () => {
             }],
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             styles: { margin: '20px', fontSize: '16px', lineHeight: 1.5 },
@@ -556,7 +556,7 @@ describe('VirtualTextRenderer', () => {
             }],
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             maxColumnCount: 1,
@@ -613,7 +613,7 @@ describe('VirtualTextRenderer', () => {
             }],
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '280px', margin: '16px' },
@@ -632,7 +632,7 @@ describe('VirtualTextRenderer', () => {
         renderer.destroy()
     })
 
-    it('navigates to anchors inside a virtual text section and reports the active TOC item', async () => {
+    it('navigates to anchors inside a browser renderer section and reports the active TOC item', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
         container.setAttribute('data-height', '96')
@@ -676,7 +676,7 @@ describe('VirtualTextRenderer', () => {
             resolveHref: href => ({ index: 0, anchor: () => `[id="${href}"]` }),
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'scrolled',
             styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '280px', margin: '16px' },
@@ -698,7 +698,7 @@ describe('VirtualTextRenderer', () => {
         renderer.destroy()
     })
 
-    it('ignores unresolved TOC anchors in the current virtual text section', async () => {
+    it('ignores unresolved TOC anchors in the current browser renderer section', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
         container.setAttribute('data-height', '96')
@@ -731,7 +731,7 @@ describe('VirtualTextRenderer', () => {
             resolveHref: href => ({ index: 0, anchor: () => `[id="${href}"]` }),
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'scrolled',
             styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '280px', margin: '16px' },
@@ -770,7 +770,7 @@ describe('VirtualTextRenderer', () => {
             splitTOCHref: href => [href.split('#')[0], href.split('#')[1] ?? null],
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             styles: { fontSize: '16px', lineHeight: 1.5 },
@@ -825,7 +825,7 @@ describe('VirtualTextRenderer', () => {
             resolveHref: href => ({ index: 0, anchor: () => `[id="${href}"]` }),
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             maxColumnCount: 2,
@@ -873,7 +873,7 @@ describe('VirtualTextRenderer', () => {
             resolveHref: href => ({ index: href === 'two.xhtml' ? 1 : 0, anchor: 0 }),
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '280px', margin: '16px' },
@@ -893,7 +893,7 @@ describe('VirtualTextRenderer', () => {
         renderer.destroy()
     })
 
-    it('keeps Gui Women TOC navigation after chapter 2 on non-empty virtual pages', async () => {
+    it('keeps Gui Women TOC navigation after chapter 2 on non-empty rendered pages', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '620')
         container.setAttribute('data-height', '600')
@@ -910,7 +910,7 @@ describe('VirtualTextRenderer', () => {
         const tocItems = book.toc?.slice(2) ?? []
         expect(tocItems.length).toBeGreaterThan(0)
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             maxColumnCount: 2,
@@ -969,7 +969,7 @@ describe('VirtualTextRenderer', () => {
             resolveHref: href => ({ index: 0, anchor: () => `[id="${href}"]` }),
         }
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             maxColumnCount: 2,
@@ -1007,7 +1007,7 @@ describe('VirtualTextRenderer', () => {
         container.setAttribute('data-height', '180')
         document.body.appendChild(container)
 
-        const renderer = new VirtualTextRenderer({
+        const renderer = new BrowserRenderer({
             container,
             layout: 'paginated',
             maxColumnCount: 2,

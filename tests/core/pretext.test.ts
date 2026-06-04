@@ -276,7 +276,7 @@ describe('Pretext pipeline', () => {
         expect(lines[0].text).toBe(`<ol>\n${indent}<li>Dogs</li>\n${indent}<li>Cats</li>\n</ol>`)
     })
 
-    it('returns a virtualized visible line window', () => {
+    it('returns a visible line window', () => {
         const prepared = prepare([{ text: 'a b c d e f g h i j' }], { baseStyle: { fontSize: 10, lineHeight: 1 } })
         const lines = layout(prepared, { inlineSize: 12 })
         const visible = getVisibleLines(lines, 20, 20, 1)

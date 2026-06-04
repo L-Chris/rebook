@@ -80,7 +80,7 @@ const blob = await exportFirstSections(file, 5, {
 
 ### 浏览器渲染
 
-`createReader()` 默认使用 `VirtualTextRenderer`。它会把 XHTML 解析成结构化阅读块（`chapter`、`heading`、`paragraph`、`listItem`、`blockquote`、`pre`），套用适合中英文阅读的预设文本样式，用 Pretext 做测量和行切片，然后只渲染可视区行。
+`createReader()` 默认使用 `BrowserRenderer`。它会把 XHTML 解析成结构化阅读块（`chapter`、`heading`、`paragraph`、`listItem`、`blockquote`、`pre`），套用适合中英文阅读的预设文本样式，用 Pretext 做测量和行切片，然后只渲染可视区行。
 
 在 `paginated` 布局下，滚轮和 `next()` / `prev()` 会按视口高度翻页，不再自由垂直漂移。宽屏时支持自动双列阅读：当可用宽度能容纳 `2 × maxInlineSize + gap` 时，可视行会分布到左右两列，并保留页内上下留白，避免文字贴到裁切边缘。`reader.setSpread(1)` 强制单列，`reader.setSpread(2)` 恢复自动双列。
 
@@ -170,7 +170,7 @@ const visible = getVisibleLines(lines, scrollTop, viewportHeight)
 
 `prepareBlocks()` 内部使用 `@chenglou/pretext` 做一次性 Canvas 测量，`layout()` 遍历 Pretext 行范围并映射回 EPUB 的 segment/style 来源。输出的 `LineRange` 包含文本片段范围、宽度和行位置，虚拟列表或 Canvas 渲染器可以只渲染可视区内容。
 
-浏览器包也导出了 `VirtualTextRenderer` / `createVirtualTextRenderer`，它基于这条管线只把可视行渲染为简单 DOM spans。
+浏览器包也导出了 `BrowserRenderer` / `createBrowserRenderer`，它基于这条管线只把可视行渲染为简单 DOM spans。
 
 微信小程序可使用无 DOM 渲染器：
 

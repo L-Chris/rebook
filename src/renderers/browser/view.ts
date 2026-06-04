@@ -8,7 +8,7 @@ import type { ParserInput, ParserOptions } from '../../core/parser'
 import type { RendererStyles, LayoutMode, Renderer } from '../../core/renderer'
 import { registry } from '../../core/parser'
 import { applyRebookPlugins } from '../../core/plugins'
-import { VirtualTextRenderer, type BrowserRendererConfig } from './virtual-text'
+import { BrowserRenderer, type BrowserRendererConfig } from './renderer'
 import { BrowserDOMAdapter, BrowserURLFactory } from '../../adapters/browser'
 
 // ============================================================================
@@ -16,11 +16,6 @@ import { BrowserDOMAdapter, BrowserURLFactory } from '../../adapters/browser'
 // ============================================================================
 
 export interface ReaderConfig extends BrowserRendererConfig {
-    /**
-     * Browser rendering backend.
-     * Default: 'virtual-text' (AST -> preset blocks -> Pretext -> visible DOM rows).
-     */
-    renderer?: 'virtual-text'
     /** Parser options */
     parserOptions?: ParserOptions
     /** Auto-register default parsers */
@@ -296,7 +291,7 @@ export class ReaderView {
     }
 
     private createRenderer(): Renderer {
-        return new VirtualTextRenderer(this.config)
+        return new BrowserRenderer(this.config)
     }
 
     private resetRenderer(): void {

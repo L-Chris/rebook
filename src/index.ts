@@ -240,8 +240,8 @@ export type {
 
 // Browser renderer
 export {
-    VirtualTextRenderer,
-    createVirtualTextRenderer,
+    BrowserRenderer,
+    createBrowserRenderer,
     ReaderView,
     createReader,
 } from './renderers/browser'

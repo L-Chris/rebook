@@ -15,7 +15,7 @@ The core design separates **parsers** (file format handling), **renderers** (pla
 - **Pretext layout pipeline**: EPUB sections can expose styled text segments for one-time measurement and pure in-memory line slicing
 - **Environment-agnostic parsers**: All parsers run in browser, Node.js, or workers via adapter injection
 - **Pluggable exporters**: Export parsed books through a format-neutral exporter registry, with EPUB, CBZ, TXT, and HTML output built in
-- **Browser renderer**: Fast AST/Pretext virtual text renderer built-in
+- **Browser renderer**: Fast AST/Pretext browser renderer built-in
 - **Malformed EPUB recovery**: Multi-layer fallback for broken zip archives
 - **Framework-agnostic**: Core library works with any framework
 
@@ -49,7 +49,7 @@ registry.register('mobi', mobi)
 registry.register('fb2', fb2)
 registry.register('cbz', cbz)
 
-// Create reader with the default virtual text renderer
+// Create reader with the default browser renderer
 const reader = createReader({
     container: document.getElementById('viewer')!,
     styles: {
@@ -80,7 +80,7 @@ Exporters are registered through `exporterRegistry`. Built-in formats are `epub`
 
 ### Browser Rendering
 
-`createReader()` uses `VirtualTextRenderer` by default. It parses XHTML into structural reading blocks (`chapter`, `heading`, `paragraph`, `listItem`, `blockquote`, `pre`), applies preset Chinese/English-friendly text styles, uses Pretext for measurement/layout, and renders only the visible line rows.
+`createReader()` uses `BrowserRenderer` by default. It parses XHTML into structural reading blocks (`chapter`, `heading`, `paragraph`, `listItem`, `blockquote`, `pre`), applies preset Chinese/English-friendly text styles, uses Pretext for measurement/layout, and renders only the visible line rows.
 
 In `paginated` layout, wheel and `next()` / `prev()` turn viewport-height pages instead of allowing free vertical drift. On wide containers it supports auto-spread two-column reading: when the available width fits `2 × maxInlineSize + gap`, visible rows are flowed into left and right columns with page padding so text does not touch the clipped edge. `reader.setSpread(1)` forces single column, and `reader.setSpread(2)` restores auto-spread.
 
@@ -111,7 +111,7 @@ This enables AI-powered workflows: translation, content summarization, annotatio
 
 ## Pretext Line Layout
 
-For renderers that need fast style changes or virtualized text, EPUB sections expose structural blocks and styled segments that can be measured once and laid out repeatedly without reflowing a full chapter DOM:
+For renderers that need fast style changes or windowed text, EPUB sections expose structural blocks and styled segments that can be measured once and laid out repeatedly without reflowing a full chapter DOM:
 
 ```typescript
 import { prepareBlocks, layout, getVisibleLines } from 'rebook'
@@ -125,9 +125,9 @@ const lines = layout(prepared, { inlineSize: 680, lineHeight: 32 })
 const visible = getVisibleLines(lines, scrollTop, viewportHeight)
 ```
 
-`prepareBlocks()` delegates to `@chenglou/pretext` for one-time Canvas measurement, while `layout()` walks Pretext line ranges and maps every visible fragment back to its EPUB segment/style source. The resulting `LineRange` objects can feed a virtual list or Canvas renderer while keeping the live DOM minimal.
+`prepareBlocks()` delegates to `@chenglou/pretext` for one-time Canvas measurement, while `layout()` walks Pretext line ranges and maps every visible fragment back to its EPUB segment/style source. The resulting `LineRange` objects can feed a windowed list or Canvas renderer while keeping the live DOM minimal.
 
-The browser package also exports `VirtualTextRenderer` / `createVirtualTextRenderer`, which uses this pipeline to render only visible line rows as simple DOM spans.
+The browser package also exports `BrowserRenderer` / `createBrowserRenderer`, which uses this pipeline to render only visible line rows as simple DOM spans.
 
 For WeChat Mini Programs, use the DOM-free renderer:
 

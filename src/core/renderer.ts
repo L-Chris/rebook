@@ -33,9 +33,9 @@ export interface RendererStyles {
     gap?: string | number
     /** Maximum column width (for paginated mode) */
     maxInlineSize?: string | number
-    /** Minimum column width — switch to single column below this (virtual-text renderer) */
+    /** Minimum column width — switch to single column below this */
     minColumnWidth?: string | number
-    /** Maximum column width per column (virtual-text renderer) */
+    /** Maximum column width per column */
     maxColumnWidth?: string | number
     /** Maximum page height (for paginated mode) */
     maxBlockSize?: string | number

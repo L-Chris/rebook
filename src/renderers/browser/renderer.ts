@@ -1,5 +1,5 @@
 /**
- * Virtual text renderer backed by the Pretext adapter.
+ * Browser renderer backed by the Pretext adapter.
  *
  * This renderer keeps the DOM small by rendering only visible line ranges.
  */
@@ -75,7 +75,7 @@ const debounce = <T extends (...args: unknown[]) => void>(fn: T, wait: number): 
     }) as T
 }
 
-export class VirtualTextRenderer implements Renderer {
+export class BrowserRenderer implements Renderer {
     private container: HTMLElement
     private scroller: HTMLElement
     private spacer: HTMLElement
@@ -1054,8 +1054,8 @@ export class VirtualTextRenderer implements Renderer {
     }
 }
 
-export const createVirtualTextRenderer = (config: BrowserRendererConfig): Renderer => {
-    return new VirtualTextRenderer(config)
+export const createBrowserRenderer = (config: BrowserRendererConfig): Renderer => {
+    return new BrowserRenderer(config)
 }
 
 function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
