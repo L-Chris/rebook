@@ -2,22 +2,19 @@
 
 [English](./README.md) | [API 参考](./docs/API.md) | [架构设计](./docs/ARCHITECTURE.md) | [经验总结](./docs/EXPERIENCE.md)
 
-面向 EPUB、MOBI/AZW3、FB2、CBZ 的 TypeScript 电子书工具库，覆盖解析、浏览器渲染、文档模型处理和导出。
+rebook 是一个 TypeScript 电子书工具库，用来构建高性能阅读器和电子书处理流程，支持浏览器、微信小程序、Node.js 和 worker 类运行环境。
 
-核心设计把**解析器**（文件格式处理）、**渲染器**（平台相关展示）和**导出器**（输出封装）分离。解析器统一产出 `Book`，浏览器阅读、文档模型工作流以及 EPUB/CBZ/TXT/HTML 导出都消费同一个契约。
+它把 EPUB、MOBI/AZW3、FB2、CBZ 解析成统一的 `Book` 契约。浏览器和微信小程序渲染器、导出、搜索、插件以及 AI 文档处理工作流都基于同一套契约。
 
-## 特性
+## 主要特性
 
-- **模块化架构**：解析器、渲染器、导出器相互独立，可自由组合
-- **TypeScript**：完整的类型安全，提供全面的接口定义
-- **多格式支持**：EPUB 2.x/3.x、MOBI/AZW/AZW3、FictionBook 2、CBZ
-- **AI 友好的文档模型**：受 SlateJS 启发的树形结构，提供查询和修改 API，支持内容操作（翻译、标注、重构）
-- **Pretext 排版管线**：EPUB 章节可输出带样式文本片段，支持一次测量、多次纯内存行切片
-- **环境无关的解析器**：所有解析器通过适配器注入，可在浏览器、Node.js 或 Worker 中运行
-- **可插拔导出器**：通过格式无关的 exporter registry 导出已解析书籍，内置 EPUB、CBZ、TXT、HTML 输出
-- **浏览器渲染器**：默认使用高性能的 AST/Pretext 虚拟文本渲染器
-- **畸形 EPUB 容错**：多层回退策略处理损坏的 zip 归档
-- **框架无关**：核心库兼容任意框架
+- **高性能翻页**：rebook 先把章节排成 Pretext line ranges，再只渲染当前可见行。普通翻页只更新 page index 和一小段 DOM/snapshot，不需要重排整章 DOM 或 iframe。
+- **跨平台渲染**：浏览器端渲染轻量 DOM 行；微信小程序端输出可序列化 snapshot，适合 WXML 渲染。
+- **多格式解析**：支持 EPUB 2/3、MOBI/AZW/AZW3、FictionBook 2、CBZ。
+- **环境无关解析器**：通过 parser adapters，让同一套解析器运行在浏览器、Node.js、小程序和 worker 中。
+- **模块化架构**：解析器、渲染器、导出器、插件、适配器相互独立。
+- **AI 友好内容模型**：章节可暴露结构块、样式片段、可搜索文本和可修改文档树。
+- **内置工作流能力**：搜索、前 N 个 section 导出、试读限制、翻译插件钩子、MCP server。
 
 ## 安装
 
@@ -25,16 +22,7 @@
 npm install rebook
 ```
 
-## 支持格式
-
-| 格式 | 扩展名 | 解析器 | 说明 |
-|------|--------|--------|------|
-| EPUB 2/3 | `.epub` | `EPUBParser` | 完整支持：导航、书脊、字体解密、landmarks |
-| Mobipocket / Kindle | `.mobi`、`.azw`、`.azw3` | `MOBIParser` | MOBI6 + KF8、PalmDOC + HUFF/CDIC、EXTH 元数据、NCX |
-| FictionBook 2 | `.fb2`、`.fbz`、`.fb2.zip` | `FB2Parser` | FB2 XML 转 XHTML、FBZ 归档支持 |
-| Comic Book Zip | `.cbz` | `CBZParser` | 从 zip 归档中读取顺序图片 |
-
-## 快速开始
+## 浏览器阅读器
 
 ```typescript
 import { registry, createReader } from 'rebook'
@@ -43,57 +31,86 @@ import { mobi } from 'rebook/parsers/mobi'
 import { fb2 } from 'rebook/parsers/fb2'
 import { cbz } from 'rebook/parsers/cbz'
 
-// 注册解析器（支持自动检测格式）
 registry.register('epub', epub)
 registry.register('mobi', mobi)
 registry.register('fb2', fb2)
 registry.register('cbz', cbz)
 
-// 创建阅读器（默认使用虚拟文本渲染器）
 const reader = createReader({
     container: document.getElementById('viewer')!,
+    layout: 'paginated',
+    maxColumnCount: 2,
     styles: {
         fontSize: '18px',
         lineHeight: 1.7,
-        maxInlineSize: '720px',
+        minColumnWidth: '320px',
+        maxColumnWidth: '720px',
+        margin: '32px',
     },
 })
 
-// 打开书籍并导航
 const book = await reader.open(file)
 await reader.next()
-await reader.goTo('/path/to/chapter.xhtml#section')
+await reader.goTo('chapter.xhtml#section')
 ```
 
-### 导出前 N 个 section
+## 微信小程序阅读器
+
+没有 DOM 的小程序环境使用平台 reader。它默认安装小程序 parser adapters，并可通过 `wx.createOffscreenCanvas` 做文本测量。
 
 ```typescript
-import { exportFirstSections } from 'rebook'
+import { registry } from 'rebook'
+import { epub } from 'rebook/parsers/epub'
+import { createWechatMiniProgramReader } from 'rebook/renderers/wechat-miniprogram'
 
-const blob = await exportFirstSections(file, 5, {
-    format: 'epub',
-    parserOptions: { domAdapter, urlFactory },
+registry.register('epub', epub)
+
+const fs = wx.getFileSystemManager()
+const arrayBuffer = fs.readFileSync(filePath) as ArrayBuffer
+const unitlessStyles = new Set(['fontWeight', 'opacity', 'zIndex'])
+const toStyleText = (style: Record<string, string | number> = {}) =>
+    Object.entries(style)
+        .map(([key, value]) => {
+            const cssKey = key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`)
+            const cssValue = typeof value === 'number' && !unitlessStyles.has(key)
+                ? `${value}px`
+                : String(value)
+            return `${cssKey}:${cssValue}`
+        })
+        .join(';')
+
+const reader = createWechatMiniProgramReader({
+    width: 375,
+    height: 667,
+    wx,
+    layout: 'paginated',
+    styles: { fontSize: '18px', lineHeight: 1.7 },
+    setData: snapshot => this.setData({
+        reader: {
+            ...snapshot,
+            lines: snapshot.lines.map(line => ({
+                ...line,
+                styleText: toStyleText(line.style),
+                fragments: 'fragments' in line
+                    ? line.fragments.map(fragment => ({
+                        ...fragment,
+                        styleText: toStyleText(fragment.style),
+                    }))
+                    : undefined,
+            })),
+        },
+    }),
 })
+
+await reader.open(arrayBuffer)
+await reader.next()
 ```
 
-导出格式通过 `exporterRegistry` 注册。内置格式包括 `epub`、`cbz`、`txt`、`html`，后续新增输出格式不需要改解析器或渲染器。按数量导出使用线性阅读 section：CBZ 的 section 对应图片页，EPUB/MOBI/FB2 对应 spine 或解析器切出的阅读段，不是排版后的视觉页。
+在 WXML 中渲染 snapshot 里的 `reader.lines`。每个 line node 都包含布局 style 以及文本、图片或表格数据。传给 WXML 前需要把 style object 转成 CSS 字符串。更完整的接入方式见 [API 参考：微信小程序 Reader](./docs/API.md#wechat-mini-program-reader)。
 
-### 浏览器渲染
+## MCP Server
 
-`createReader()` 默认使用 `BrowserRenderer`。它会把 XHTML 解析成结构化阅读块（`chapter`、`heading`、`paragraph`、`listItem`、`blockquote`、`pre`），套用适合中英文阅读的预设文本样式，用 Pretext 做测量和行切片，然后只渲染可视区行。
-
-在 `paginated` 布局下，滚轮和 `next()` / `prev()` 会按视口高度翻页，不再自由垂直漂移。宽屏时支持自动双列阅读：当可用宽度能容纳 `2 × maxInlineSize + gap` 时，可视行会分布到左右两列，并保留页内上下留白，避免文字贴到裁切边缘。`reader.setSpread(1)` 强制单列，`reader.setSpread(2)` 恢复自动双列。
-
-
-## MCP 服务器
-
-安装 `rebook` 后可以为 AI 助手提供阅读和搜索书籍的 MCP（Model Context Protocol）服务器：
-
-```bash
-npm install rebook
-```
-
-然后在你的 MCP 客户端（Claude Desktop、Cursor 等）中配置：
+`rebook-mcp` 可以通过 Model Context Protocol 把本地书籍暴露给 AI 助手。支持 EPUB、MOBI/AZW3、FB2 和 CBZ。
 
 ```json
 {
@@ -106,114 +123,40 @@ npm install rebook
 }
 ```
 
-CLI 支持 EPUB、MOBI/AZW3、FB2 和 CBZ 文件。可用工具：
+内置工具包括章节列表、章节正文读取、元数据读取、整本书或单章节搜索。嵌入式 API 见 [MCP Tools](./docs/API.md#mcp-tools)。
 
-| 工具 | 描述 |
-|------|------|
-| `get_book_metadata` | 获取书名、作者、语言、主题 |
-| `get_chapter_list` | 列出所有章节及索引 |
-| `get_chapter_text` | 读取章节的文本内容 |
-| `search_book` | 在书中搜索关键词 |
+## 支持格式
 
-如果 `rebook` 安装在项目中，也可以编程使用：
+| 格式 | 扩展名 |
+|------|--------|
+| EPUB 2/3 | `.epub` |
+| Mobipocket / Kindle | `.mobi`、`.azw`、`.azw3` |
+| FictionBook 2 | `.fb2`、`.fbz`、`.fb2.zip` |
+| Comic Book Zip | `.cbz` |
 
-```typescript
-import { createBookMCPTools, callBookMCPTool } from 'rebook/mcp'
+## 更多 API
 
-const tools = createBookMCPTools(book)
-const result = await callBookMCPTool(tools, 'search_book', {
-  query: 'cooperative',
-  maxResults: 5,
-})
-```
-
-## 文档模型（AI 友好）
-
-每个章节暴露一个结构化的文档树，提供查询和修改 API：
-
-```typescript
-const section = book.sections[0]
-const doc = await section.getDocument()
-
-// CSS 风格的选择器查询
-const paragraphs = doc.query('p')
-const images = doc.getImages()
-const text = doc.getText()
-
-// 不可变修改（返回新文档）
-const newDoc = doc
-    .setNode([0], { class: 'highlight' })
-    .insertNode([1], elementNode('p', {}, [textNode('AI 添加的内容')]))
-    .replaceText([0, 0], '翻译后的文本')
-
-// 序列化回 HTML
-const html = newDoc.serialize()
-```
-
-支持 AI 驱动的工作流：翻译、内容摘要、标注、无障碍增强、布局适配等。详见 [API 参考](./docs/API.md#document-model)。
-
-## Pretext 行布局
-
-需要快速调整样式或做虚拟列表渲染时，可以从 EPUB 章节直接取得结构块和样式片段，先离屏测量一次，再在视口变化或字体缩放时只做内存中的行切片：
-
-```typescript
-import { prepareBlocks, layout, getVisibleLines } from 'rebook'
-
-const blocks = await book.sections[0].getBlocks!()
-const prepared = prepareBlocks(blocks, {
-    baseStyle: { fontSize: 18, lineHeight: 1.6 },
-})
-
-const lines = layout(prepared, { inlineSize: 680, lineHeight: 32 })
-const visible = getVisibleLines(lines, scrollTop, viewportHeight)
-```
-
-`prepareBlocks()` 内部使用 `@chenglou/pretext` 做一次性 Canvas 测量，`layout()` 遍历 Pretext 行范围并映射回 EPUB 的 segment/style 来源。输出的 `LineRange` 包含文本片段范围、宽度和行位置，虚拟列表或 Canvas 渲染器可以只渲染可视区内容。
-
-浏览器包也导出了 `BrowserRenderer` / `createBrowserRenderer`，它基于这条管线只把可视行渲染为简单 DOM spans。
-
-微信小程序可使用平台 reader：
-
-```typescript
-import { createWechatMiniProgramReader } from 'rebook/renderers/wechat-miniprogram'
-
-const reader = createWechatMiniProgramReader({
-    width: 375,
-    height: 667,
-    wx,
-    setData: snapshot => this.setData({ reader: snapshot }),
-})
-```
-
-它会把 `wx.createOffscreenCanvas` 传给平台中立的 Pretext 测量 polyfill，默认使用小程序 parser adapters，并输出可序列化的行节点供 WXML 渲染。
+- **试读限制**：`withTrialLimit({ maxPages })`、试读感知目录、受限导航。见 [Plugins](./docs/API.md#plugins)。
+- **导出**：`exportFirstSections()` 和 `exportBook()` 支持 EPUB、CBZ、TXT、HTML 输出。见 [First Sections Export](./docs/API.md#first-sections-export)。
+- **搜索**：`searchBook()`、`searchChapters()`、`reader.search()`、`reader.searchChapters()`。见 [Search](./docs/API.md#search)。
+- **文档模型**：查询和修改章节文档树，用于 AI 工作流、标注、转换和序列化。见 [Document Model](./docs/API.md#document-model)。
+- **Pretext 排版**：直接使用 `prepareBlocks()`、`layout()`、`getVisibleLines()` 构建自定义渲染器。见 [Pretext Layout](./docs/API.md#pretext-layout)。
 
 ## 文档
 
-- [**API 参考**](./docs/API.md) — 完整 API 文档：解析器、渲染器、适配器、文档模型、Pretext 布局、错误类型、元数据标准化
-- [**架构设计**](./docs/ARCHITECTURE.md) — 设计决策、解析器/渲染器分离、适配器系统、跨平台渲染
-- [**经验总结**](./docs/EXPERIENCE.md) — AI 友好设计理念、SlateJS 模式借鉴、畸形 EPUB 处理、性能注意事项
+- [**API 参考**](./docs/API.md) - readers、parsers、renderers、plugins、exporters、adapters、search、MCP 和文档 API。
+- [**架构设计**](./docs/ARCHITECTURE.md) - 解析器/渲染器分离、adapter 设计、渲染管线和项目结构。
+- [**经验总结**](./docs/EXPERIENCE.md) - 设计取舍、性能说明、AI 工作流想法和实现经验。
 
 ## 开发
 
 ```bash
-npm install       # 安装依赖
-npm run dev       # 运行示例
-npm run typecheck # 类型检查
-npm run build     # 构建
-npm test          # 运行测试
+npm install
+npm run dev
+npm run typecheck
+npm run build
+npm test
 ```
-
-## 与 foliate-js 的对比
-
-| 特性 | foliate-js | rebook |
-|------|-----------|----------|
-| 语言 | JavaScript | TypeScript |
-| 架构 | 单体 view.js | 解析器/渲染器分离 |
-| 浏览器耦合 | 解析器使用 DOM API | 解析器环境无关（适配器） |
-| 文档模型 | 无 | SlateJS 启发的树形结构，支持修改 |
-| 格式支持 | EPUB、MOBI、FB2、CBZ、PDF | EPUB、MOBI/AZW3、FB2、CBZ |
-| 测试 | 无 | Vitest 测试套件 |
-| 畸形 EPUB 容错 | 无（仅 zip.js） | CD 校正 + 逐条目 LFH 扫描 |
 
 ## 许可证
 

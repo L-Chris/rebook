@@ -827,26 +827,87 @@ await renderer.goTo(0)
 
 In `paginated` mode, this renderer hides free scrolling, maps wheel/`next()`/`prev()` to page turns, and keeps page-block padding so text is not clipped at the viewport edge. In `scrolled` mode it falls back to continuous vertical scrolling.
 
-### WeChat Mini Program Renderer
+### WeChat Mini Program Reader
 
-`WechatMiniProgramRenderer` uses the same Pretext block layout as the browser renderer, but emits a serializable snapshot instead of DOM nodes. Mini Program pages can pass `setData` and render `snapshot.lines` in WXML.
+Use `createWechatMiniProgramReader()` for app/page integration. It provides Mini Program parser adapters, installs the Pretext measurement polyfill by default, and emits a serializable snapshot instead of DOM nodes.
 
 ```typescript
-import { createWechatMiniProgramRenderer } from 'rebook/renderers/wechat-miniprogram'
+import { registry } from 'rebook'
+import { epub } from 'rebook/parsers/epub'
+import { createWechatMiniProgramReader } from 'rebook/renderers/wechat-miniprogram'
 
-const renderer = createWechatMiniProgramRenderer({
+registry.register('epub', epub)
+
+const fs = wx.getFileSystemManager()
+const arrayBuffer = fs.readFileSync(filePath) as ArrayBuffer
+const unitlessStyles = new Set(['fontWeight', 'opacity', 'zIndex'])
+const toStyleText = (style: Record<string, string | number> = {}) =>
+    Object.entries(style)
+        .map(([key, value]) => {
+            const cssKey = key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`)
+            const cssValue = typeof value === 'number' && !unitlessStyles.has(key)
+                ? `${value}px`
+                : String(value)
+            return `${cssKey}:${cssValue}`
+        })
+        .join(';')
+
+const reader = createWechatMiniProgramReader({
     width: 375,
     height: 667,
     wx,
-    setData: snapshot => this.setData({ reader: snapshot }),
     styles: { fontSize: '18px', lineHeight: 1.6 },
+    setData: snapshot => this.setData({
+        reader: {
+            ...snapshot,
+            lines: snapshot.lines.map(line => ({
+                ...line,
+                styleText: toStyleText(line.style),
+                fragments: 'fragments' in line
+                    ? line.fragments.map(fragment => ({
+                        ...fragment,
+                        styleText: toStyleText(fragment.style),
+                    }))
+                    : undefined,
+            })),
+        },
+    }),
 })
 
-await renderer.open(book)
-await renderer.goTo(0)
+await reader.open(arrayBuffer)
+await reader.goTo(0)
+await reader.next()
 ```
 
-The constructor installs the platform-neutral `installPretextMeasurementPolyfill(wx)` by default so `@chenglou/pretext` can measure text through the host `createOffscreenCanvas` implementation in Mini Program runtimes. Pass `installPretextPolyfill: false` if the host has already installed a compatible `OffscreenCanvas` global.
+Mini Program pages can render `snapshot.lines` in WXML:
+
+```xml
+<view class="reader" style="width: {{reader.width}}px; height: {{reader.height}}px;">
+  <block wx:for="{{reader.lines}}" wx:key="key">
+    <view
+      wx:if="{{item.kind === 'text'}}"
+      class="reader-line"
+      style="{{item.styleText}}"
+    >
+      <text
+        wx:for="{{item.fragments}}"
+        wx:for-item="fragment"
+        wx:key="key"
+        style="{{fragment.styleText}}"
+      >{{fragment.text}}</text>
+    </view>
+    <image
+      wx:elif="{{item.kind === 'image'}}"
+      class="reader-image"
+      style="{{item.styleText}}"
+      src="{{item.image.src}}"
+      mode="widthFix"
+    />
+  </block>
+</view>
+```
+
+For lower-level integrations, `createWechatMiniProgramRenderer()` exposes the renderer directly. Its constructor installs the platform-neutral `installPretextMeasurementPolyfill(wx)` by default so `@chenglou/pretext` can measure text through the host `createOffscreenCanvas` implementation in Mini Program runtimes. Pass `installPretextPolyfill: false` if the host has already installed a compatible `OffscreenCanvas` global.
 
 ---
 

@@ -294,7 +294,9 @@ Vitest coverage spans parser, renderer, exporter, adapter, plugin, search, and M
 - Zip loader tests (including malformed zip recovery)
 - Utility tests (progress tracking)
 
-## CSS Multi-Column Layout Lessons
+## Historical CSS Multi-Column Layout Lessons
+
+The current browser renderer no longer relies on iframe-based CSS multi-column pagination. It uses the `TextBlock -> Pretext -> LineRange -> visible rows` pipeline described in [Architecture](./ARCHITECTURE.md). The notes below are retained as historical implementation lessons and as context for why rebook moved away from full-document browser column layout.
 
 ### The `column-width` trap
 

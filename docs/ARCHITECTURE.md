@@ -72,6 +72,8 @@ Section XHTML
 
 The Mini Program renderer uses the same `TextBlock -> Pretext -> LineRange` pipeline and emits serializable line snapshots instead of DOM rows. Its host canvas adapter is passed into the platform-neutral `installPretextMeasurementPolyfill()` helper.
 
+This is the main performance boundary: normal page turns do not reparse XHTML, do not rebuild a full chapter DOM, and do not ask the browser to fragment a large document with CSS columns. They update the current page index, select a small visible line window, and render that window. Relayout is reserved for section loads, style changes, layout changes, and resizes.
+
 ### Plugins Are Book Middleware
 
 Plugins run after parsing and before rendering. They wrap `Book` rather than a platform renderer, which keeps official plugins usable in browser, Mini Program, and future hosts.

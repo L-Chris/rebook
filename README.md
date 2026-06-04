@@ -2,39 +2,27 @@
 
 [中文文档](./README.zh-CN.md) | [API Reference](./docs/API.md) | [Architecture](./docs/ARCHITECTURE.md) | [Experience & Lessons](./docs/EXPERIENCE.md)
 
-A TypeScript e-book toolkit for parsing, rendering, inspecting, and exporting EPUB, MOBI/AZW3, FB2, and CBZ books.
+rebook is a TypeScript e-book toolkit for building fast readers and book workflows across browser, Mini Program, Node.js, and worker-like runtimes.
 
-The core design separates **parsers** (file format handling), **renderers** (platform display), and **exporters** (output packaging). Parsers produce a normalized `Book`; browser rendering, document-model workflows, and EPUB/CBZ/TXT/HTML export all consume that same contract.
+It parses EPUB, MOBI/AZW3, FB2, and CBZ into a normalized `Book` contract. Browser and WeChat Mini Program renderers, exporters, search, plugins, and AI-oriented document workflows all build on that same contract.
 
-## Features
+## Highlights
 
-- **Modular architecture**: Parsers, renderers, and exporters are independent
-- **TypeScript**: Full type safety with comprehensive interfaces
-- **Multi-format support**: EPUB 2.x/3.x, MOBI/AZW/AZW3, FictionBook 2, and CBZ
-- **AI-friendly Document Model**: SlateJS-inspired tree structure with query and mutation APIs for content manipulation (translation, annotation, restructuring)
-- **Pretext layout pipeline**: EPUB sections can expose styled text segments for one-time measurement and pure in-memory line slicing
-- **Environment-agnostic parsers**: All parsers run in browser, Node.js, or workers via adapter injection
-- **Pluggable exporters**: Export parsed books through a format-neutral exporter registry, with EPUB, CBZ, TXT, and HTML output built in
-- **Browser renderer**: Fast AST/Pretext browser renderer built-in
-- **Malformed EPUB recovery**: Multi-layer fallback for broken zip archives
-- **Framework-agnostic**: Core library works with any framework
+- **Fast page turns**: rebook lays sections out into Pretext-backed line ranges, then renders only the visible lines. Normal page turns update a page index and a small DOM/snapshot window instead of reflowing a full chapter DOM or iframe.
+- **Cross-platform rendering**: browser rendering uses lightweight DOM rows; WeChat Mini Program rendering emits serializable snapshots for WXML.
+- **Multi-format parsing**: EPUB 2/3, MOBI/AZW/AZW3, FictionBook 2, and CBZ.
+- **Environment-agnostic parsers**: parser adapters make the same parser code run in browsers, Node.js, Mini Programs, and workers.
+- **Modular architecture**: parsers, renderers, exporters, plugins, and adapters are independent.
+- **AI-ready content model**: sections can expose structured blocks, styled segments, searchable text, and a mutable document tree.
+- **Built-in workflow pieces**: search, first-section export, trial-reading limits, translation plugin hooks, and an MCP server.
 
-## Installation
+## Install
 
 ```bash
 npm install rebook
 ```
 
-## Supported Formats
-
-| Format | Extensions | Parser | Notes |
-|--------|-----------|--------|-------|
-| EPUB 2/3 | `.epub` | `EPUBParser` | Full support: navigation, spine, font deobfuscation, landmarks |
-| Mobipocket / Kindle | `.mobi`, `.azw`, `.azw3` | `MOBIParser` | MOBI6 + KF8, PalmDOC + HUFF/CDIC, EXTH metadata, NCX |
-| FictionBook 2 | `.fb2`, `.fbz`, `.fb2.zip` | `FB2Parser` | FB2 XML to XHTML conversion, FBZ archive support |
-| Comic Book Zip | `.cbz` | `CBZParser` | Sequential images from zip archives |
-
-## Quick Start
+## Browser Reader
 
 ```typescript
 import { registry, createReader } from 'rebook'
@@ -43,116 +31,86 @@ import { mobi } from 'rebook/parsers/mobi'
 import { fb2 } from 'rebook/parsers/fb2'
 import { cbz } from 'rebook/parsers/cbz'
 
-// Register parsers for auto-detection
 registry.register('epub', epub)
 registry.register('mobi', mobi)
 registry.register('fb2', fb2)
 registry.register('cbz', cbz)
 
-// Create reader with the default browser renderer
 const reader = createReader({
     container: document.getElementById('viewer')!,
+    layout: 'paginated',
+    maxColumnCount: 2,
     styles: {
         fontSize: '18px',
         lineHeight: 1.7,
-        maxInlineSize: '720px',
+        minColumnWidth: '320px',
+        maxColumnWidth: '720px',
+        margin: '32px',
     },
 })
 
-// Open and navigate
 const book = await reader.open(file)
 await reader.next()
-await reader.goTo('/path/to/chapter.xhtml#section')
+await reader.goTo('chapter.xhtml#section')
 ```
 
-### Export First Sections
+## WeChat Mini Program Reader
+
+Use the Mini Program reader when there is no DOM. It installs Mini Program parser adapters by default and can use `wx.createOffscreenCanvas` for text measurement.
 
 ```typescript
-import { exportFirstSections } from 'rebook'
-
-const blob = await exportFirstSections(file, 5, {
-    format: 'epub',
-    parserOptions: { domAdapter, urlFactory },
-})
-```
-
-Exporters are registered through `exporterRegistry`. Built-in formats are `epub`, `cbz`, `txt`, and `html`; future output formats can be added without changing parser or renderer code. Exporting by count uses linear reading sections: CBZ maps sections to image pages, while EPUB/MOBI/FB2 map them to spine or parser-split sections rather than visual pages after layout.
-
-### Browser Rendering
-
-`createReader()` uses `BrowserRenderer` by default. It parses XHTML into structural reading blocks (`chapter`, `heading`, `paragraph`, `listItem`, `blockquote`, `pre`), applies preset Chinese/English-friendly text styles, uses Pretext for measurement/layout, and renders only the visible line rows.
-
-In `paginated` layout, wheel and `next()` / `prev()` turn viewport-height pages instead of allowing free vertical drift. On wide containers it supports auto-spread two-column reading: when the available width fits `2 × maxInlineSize + gap`, visible rows are flowed into left and right columns with page padding so text does not touch the clipped edge. `reader.setSpread(1)` forces single column, and `reader.setSpread(2)` restores auto-spread.
-
-## Document Model (AI-friendly)
-
-Each section exposes a structured document tree with query and mutation APIs:
-
-```typescript
-const section = book.sections[0]
-const doc = await section.getDocument()
-
-// Query with CSS-like selectors
-const paragraphs = doc.query('p')
-const images = doc.getImages()
-const text = doc.getText()
-
-// Immutable mutations (returns new document)
-const newDoc = doc
-    .setNode([0], { class: 'highlight' })
-    .insertNode([1], elementNode('p', {}, [textNode('Added by AI')]))
-    .replaceText([0, 0], 'Translated text')
-
-// Serialize back to HTML
-const html = newDoc.serialize()
-```
-
-This enables AI-powered workflows: translation, content summarization, annotation, accessibility enhancement, layout adaptation, and more. See [API Reference](./docs/API.md#document-model) for details.
-
-## Pretext Line Layout
-
-For renderers that need fast style changes or windowed text, EPUB sections expose structural blocks and styled segments that can be measured once and laid out repeatedly without reflowing a full chapter DOM:
-
-```typescript
-import { prepareBlocks, layout, getVisibleLines } from 'rebook'
-
-const blocks = await book.sections[0].getBlocks!()
-const prepared = prepareBlocks(blocks, {
-    baseStyle: { fontSize: 18, lineHeight: 1.6 },
-})
-
-const lines = layout(prepared, { inlineSize: 680, lineHeight: 32 })
-const visible = getVisibleLines(lines, scrollTop, viewportHeight)
-```
-
-`prepareBlocks()` delegates to `@chenglou/pretext` for one-time Canvas measurement, while `layout()` walks Pretext line ranges and maps every visible fragment back to its EPUB segment/style source. The resulting `LineRange` objects can feed a windowed list or Canvas renderer while keeping the live DOM minimal.
-
-The browser package also exports `BrowserRenderer` / `createBrowserRenderer`, which uses this pipeline to render only visible line rows as simple DOM spans.
-
-For WeChat Mini Programs, use the platform reader:
-
-```typescript
+import { registry } from 'rebook'
+import { epub } from 'rebook/parsers/epub'
 import { createWechatMiniProgramReader } from 'rebook/renderers/wechat-miniprogram'
+
+registry.register('epub', epub)
+
+const fs = wx.getFileSystemManager()
+const arrayBuffer = fs.readFileSync(filePath) as ArrayBuffer
+const unitlessStyles = new Set(['fontWeight', 'opacity', 'zIndex'])
+const toStyleText = (style: Record<string, string | number> = {}) =>
+    Object.entries(style)
+        .map(([key, value]) => {
+            const cssKey = key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`)
+            const cssValue = typeof value === 'number' && !unitlessStyles.has(key)
+                ? `${value}px`
+                : String(value)
+            return `${cssKey}:${cssValue}`
+        })
+        .join(';')
 
 const reader = createWechatMiniProgramReader({
     width: 375,
     height: 667,
     wx,
-    setData: snapshot => this.setData({ reader: snapshot }),
+    layout: 'paginated',
+    styles: { fontSize: '18px', lineHeight: 1.7 },
+    setData: snapshot => this.setData({
+        reader: {
+            ...snapshot,
+            lines: snapshot.lines.map(line => ({
+                ...line,
+                styleText: toStyleText(line.style),
+                fragments: 'fragments' in line
+                    ? line.fragments.map(fragment => ({
+                        ...fragment,
+                        styleText: toStyleText(fragment.style),
+                    }))
+                    : undefined,
+            })),
+        },
+    }),
 })
+
+await reader.open(arrayBuffer)
+await reader.next()
 ```
 
-It installs the platform-neutral Pretext measurement polyfill with `wx.createOffscreenCanvas`, uses Mini Program parser adapters by default, and emits serializable line nodes for WXML rendering.
+Render `reader.lines` from the snapshot in WXML. Each line node includes layout style and text/image/table data. Convert style objects to CSS strings before passing them to WXML. See [API Reference: WeChat Mini Program Reader](./docs/API.md#wechat-mini-program-reader) for a fuller integration example.
 
 ## MCP Server
 
-Install `rebook` to add an MCP (Model Context Protocol) server for AI assistants to read and search books:
-
-```bash
-npm install rebook
-```
-
-Then configure your MCP client (Claude Desktop, Cursor, etc.) with:
+`rebook-mcp` exposes a local book to AI assistants through the Model Context Protocol. It supports EPUB, MOBI/AZW3, FB2, and CBZ.
 
 ```json
 {
@@ -165,54 +123,40 @@ Then configure your MCP client (Claude Desktop, Cursor, etc.) with:
 }
 ```
 
-The CLI supports EPUB, MOBI/AZW3, FB2, and CBZ files. Available tools:
+Built-in tools include chapter listing, chapter text reading, metadata lookup, and full-book or chapter-scoped search. See [MCP Tools](./docs/API.md#mcp-tools) for embedding APIs.
 
-| Tool | Description |
-|------|-------------|
-| `get_book_metadata` | Get title, author, language, subjects |
-| `get_chapter_list` | List all chapters with indices |
-| `get_chapter_text` | Read a chapter's text content |
-| `search_book` | Search across the book with keyword |
+## Supported Formats
 
-If `rebook` is installed locally in your project, you can also use it programmatically:
+| Format | Extensions |
+|--------|------------|
+| EPUB 2/3 | `.epub` |
+| Mobipocket / Kindle | `.mobi`, `.azw`, `.azw3` |
+| FictionBook 2 | `.fb2`, `.fbz`, `.fb2.zip` |
+| Comic Book Zip | `.cbz` |
 
-```typescript
-import { createBookMCPTools, callBookMCPTool } from 'rebook/mcp'
+## More APIs
 
-const tools = createBookMCPTools(book)
-const result = await callBookMCPTool(tools, 'search_book', {
-  query: 'cooperative',
-  maxResults: 5,
-})
-```
+- **Trial reading**: `withTrialLimit({ maxPages })`, trial-aware TOC items, and guarded navigation. See [Plugins](./docs/API.md#plugins).
+- **Export**: `exportFirstSections()` and `exportBook()` support EPUB, CBZ, TXT, and HTML output. See [First Sections Export](./docs/API.md#first-sections-export).
+- **Search**: `searchBook()`, `searchChapters()`, `reader.search()`, and `reader.searchChapters()`. See [Search](./docs/API.md#search).
+- **Document Model**: query and mutate section trees for AI workflows, annotation, transformation, and serialization. See [Document Model](./docs/API.md#document-model).
+- **Pretext layout**: use `prepareBlocks()`, `layout()`, and `getVisibleLines()` directly for custom renderers. See [Pretext Layout](./docs/API.md#pretext-layout).
 
 ## Documentation
 
-- [**API Reference**](./docs/API.md) — Full API documentation: parsers, renderer, adapters, Document Model, Pretext layout, error types, metadata normalization
-- [**Architecture**](./docs/ARCHITECTURE.md) — Design decisions, parser/renderer separation, adapter system, cross-platform rendering
-- [**Experience & Lessons**](./docs/EXPERIENCE.md) — AI-friendly design rationale, SlateJS patterns, malformed EPUB handling, performance notes
+- [**API Reference**](./docs/API.md) - API details for readers, parsers, renderers, plugins, exporters, adapters, search, MCP, and document APIs.
+- [**Architecture**](./docs/ARCHITECTURE.md) - Parser/renderer separation, adapter design, rendering pipeline, and project layout.
+- [**Experience & Lessons**](./docs/EXPERIENCE.md) - Design rationale, performance notes, AI workflow ideas, and implementation lessons.
 
 ## Development
 
 ```bash
-npm install       # Install dependencies
-npm run dev       # Run demo
-npm run typecheck # Type check
-npm run build     # Build
-npm test          # Run tests
+npm install
+npm run dev
+npm run typecheck
+npm run build
+npm test
 ```
-
-## Comparison with foliate-js
-
-| Feature | foliate-js | rebook |
-|---------|-----------|----------|
-| Language | JavaScript | TypeScript |
-| Architecture | Monolithic view.js | Separated parser/renderer |
-| Browser coupling | Parser uses DOM APIs | Parser is env-agnostic (adapters) |
-| Document Model | None | SlateJS-inspired tree with mutations |
-| Format support | EPUB, MOBI, FB2, CBZ, PDF | EPUB, MOBI/AZW3, FB2, CBZ |
-| Testing | None | Vitest suite |
-| Malformed EPUB recovery | None | CD correction + per-entry LFH scan |
 
 ## License
 
