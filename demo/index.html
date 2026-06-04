@@ -140,6 +140,15 @@
             color: #007bff;
         }
 
+        .toc-item.disabled {
+            color: #aaa;
+            cursor: not-allowed;
+        }
+
+        .toc-item.disabled:hover {
+            background: transparent;
+        }
+
         .toc-item .subitems {
             padding-left: 16px;
         }
@@ -356,6 +365,13 @@
             gap: 8px;
             margin-bottom: 12px;
         }
+
+        .setting-note {
+            font-size: 12px;
+            line-height: 1.4;
+            color: #888;
+            margin: -4px 0 12px 104px;
+        }
     </style>
 </head>
 <body>
@@ -416,6 +432,15 @@
             <label>Hyphenate</label>
             <input type="checkbox" id="hyphenate-check" checked>
         </div>
+        <div class="setting-row">
+            <label>Trial</label>
+            <input type="checkbox" id="trial-check">
+        </div>
+        <div class="setting-row" id="trial-pages-row">
+            <label>Trial Pages</label>
+            <input type="number" id="trial-pages-input" min="0" max="200" value="20" title="Allowed trial pages">
+        </div>
+        <div class="setting-note" id="trial-status">Trial plugin disabled.</div>
     </div>
 
     <!-- Translation panel -->
@@ -496,6 +521,7 @@
         import { cbz } from '../src/parsers/cbz.ts'
         import { fb2 } from '../src/parsers/fb2.ts'
         import { mobi } from '../src/parsers/mobi.ts'
+        import { withTrialLimit } from '../src/plugins/trial-limit.ts'
         import { withTranslation } from '../src/plugins/translation.ts'
         import { createOpenAI } from '@ai-sdk/openai'
 
@@ -530,6 +556,10 @@
         const translationPanel = document.getElementById('translation-panel')
         const themeSelect = document.getElementById('theme-select')
         const hyphenateCheck = document.getElementById('hyphenate-check')
+        const trialCheck = document.getElementById('trial-check')
+        const trialPagesRow = document.getElementById('trial-pages-row')
+        const trialPagesInput = document.getElementById('trial-pages-input')
+        const trialStatus = document.getElementById('trial-status')
         const translateCheck = document.getElementById('translate-check')
         const translationFields = document.getElementById('translation-fields')
         const baseUrlInput = document.getElementById('baseurl-input')
@@ -549,6 +579,8 @@
             fontSize: '16px',
             theme: 'light',
             hyphenate: true,
+            trial: false,
+            trialPages: '20',
             exportSectionCount: '3',
             translate: false,
             translateTOC: false,
@@ -558,6 +590,12 @@
             translateMode: 'bilingual',
             prefetchPages: '2',
         }
+
+        let currentFile = null
+        let currentBook = null
+        let activeTOCHref = null
+        let reader = null
+        let refreshTimer = null
 
         const loadConfig = () => {
             try {
@@ -574,6 +612,8 @@
                 fontSize: fontSizeSelect.value,
                 theme: themeSelect.value,
                 hyphenate: hyphenateCheck.checked,
+                trial: trialCheck.checked,
+                trialPages: trialPagesInput.value,
                 exportSectionCount: exportSectionCount.value,
                 translate: translateCheck.checked,
                 translateTOC: translateTocCheck.checked,
@@ -591,6 +631,8 @@
             fontSizeSelect.value = config.fontSize
             themeSelect.value = config.theme
             hyphenateCheck.checked = config.hyphenate
+            trialCheck.checked = !!config.trial
+            trialPagesInput.value = config.trialPages ?? defaultConfig.trialPages
             exportSectionCount.value = config.exportSectionCount
             translateCheck.checked = config.translate
             translateTocCheck.checked = config.translateTOC
@@ -600,19 +642,32 @@
             translateModeSelect.value = config.translateMode
             prefetchPagesInput.value = config.prefetchPages ?? defaultConfig.prefetchPages
             updateTranslationFields()
+            updateTrialFields()
         }
 
         const updateTranslationFields = () => {
             translationFields.style.display = translateCheck.checked ? 'block' : 'none'
         }
 
-        applyConfig(loadConfig())
+        const updateTrialStatus = () => {
+            const trialLimit = reader?.getTrialLimit?.()
+            if (!trialCheck.checked || !trialLimit) {
+                trialStatus.textContent = trialCheck.checked
+                    ? 'Trial plugin will apply after opening or reloading a book.'
+                    : 'Trial plugin disabled.'
+                return
+            }
+            const state = trialLimit.state
+            const percent = Math.round(state.limitFraction * 100)
+            trialStatus.textContent = `Allowed ${state.maxPages} / estimated ${state.estimatedPageCount} pages (${percent}%, ${state.estimatedBy}).`
+        }
 
-        let currentFile = null
-        let currentBook = null
-        let activeTOCHref = null
-        let reader = null
-        let refreshTimer = null
+        const updateTrialFields = () => {
+            trialPagesRow.style.display = trialCheck.checked ? 'flex' : 'none'
+            updateTrialStatus()
+        }
+
+        applyConfig(loadConfig())
 
         const getThemeStyles = () => ({
             light: { color: '#000', background: '#fff' },
@@ -622,6 +677,12 @@
 
         function createDemoReader() {
             const plugins = []
+
+            if (trialCheck.checked) {
+                plugins.push(withTrialLimit({
+                    maxPages: Number(trialPagesInput.value) || 0,
+                }))
+            }
             
             if (translateCheck.checked && apiKeyInput.value.trim()) {
                 const openaiOptions = { apiKey: apiKeyInput.value.trim() }
@@ -699,6 +760,26 @@
             return formatLanguageMap(x.name)
         }
 
+        const showTrialBlocked = () => {
+            alert('Trial limit reached.')
+        }
+
+        const guardedGoTo = async (target) => {
+            if (!reader.canGoTo(target)) {
+                showTrialBlocked()
+                return
+            }
+            await reader.goTo(target)
+        }
+
+        const guardedGoRight = async () => {
+            if (!reader.canGoNext()) {
+                showTrialBlocked()
+                return
+            }
+            await reader.goRight()
+        }
+
         // Render TOC
         const renderTOC = (items, container) => {
             if (!items || items.length === 0) return
@@ -707,25 +788,21 @@
                 const li = document.createElement('li')
                 
                 const a = document.createElement('a')
-                a.className = 'toc-item'
+                a.className = `toc-item${item.disabled ? ' disabled' : ''}`
                 a.textContent = item.label
                 a.href = '#'
                 a.dataset.href = item.href
+                a.style.paddingLeft = `${12 + (item.depth || 0) * 16}px`
                 a.addEventListener('click', (e) => {
                     e.preventDefault()
-                    reader.goTo(item.href)
+                    if (item.disabled) {
+                        showTrialBlocked()
+                        return
+                    }
+                    guardedGoTo(item.href)
                 })
 
-                if (item.subitems && item.subitems.length > 0) {
-                    const details = document.createElement('details')
-                    const summary = document.createElement('summary')
-                    summary.appendChild(a)
-                    details.appendChild(summary)
-                    renderTOC(item.subitems, details)
-                    li.appendChild(details)
-                } else {
-                    li.appendChild(a)
-                }
+                li.appendChild(a)
                 ul.appendChild(li)
             }
             container.appendChild(ul)
@@ -738,8 +815,9 @@
 
         const refreshCurrentTOC = () => {
             tocList.innerHTML = ''
-            renderTOC(currentBook?.toc, tocList)
+            renderTOC(reader.getTOCViewItems(), tocList)
             applyActiveTOC(activeTOCHref)
+            updateTrialStatus()
         }
 
         const applyActiveTOC = (href) => {
@@ -788,6 +866,7 @@
 
                 // Start reading
                 await reader.goTo(0)
+                updateTrialStatus()
             } catch (e) {
                 console.error('Failed to open file:', e)
                 let message = e.message
@@ -897,6 +976,18 @@
             reader.setStyles({ hyphenate: e.target.checked })
         })
 
+        trialCheck.addEventListener('change', () => {
+            updateTrialFields()
+            saveConfig()
+            recreateReader()
+        })
+
+        trialPagesInput.addEventListener('change', () => {
+            saveConfig()
+            if (trialCheck.checked) recreateReader()
+            else updateTrialStatus()
+        })
+
         translateCheck.addEventListener('change', (e) => {
             updateTranslationFields()
             saveConfig()
@@ -942,13 +1033,18 @@
         progressBar.addEventListener('click', (e) => {
             const rect = progressBar.getBoundingClientRect()
             const fraction = (e.clientX - rect.left) / rect.width
+            const trialLimit = reader.getTrialLimit()
+            if (trialLimit && fraction > trialLimit.state.limitFraction) {
+                showTrialBlocked()
+                return
+            }
             reader.goToFraction(fraction)
         })
 
         // Keyboard navigation
         document.addEventListener('keydown', (e) => {
             if (e.key === 'ArrowLeft' || e.key === 'h') reader.goLeft()
-            else if (e.key === 'ArrowRight' || e.key === 'l') reader.goRight()
+            else if (e.key === 'ArrowRight' || e.key === 'l') guardedGoRight()
         })
 
         function wireReaderEvents() {
@@ -956,6 +1052,7 @@
                 const percent = Math.round((e.totalFraction ?? 0) * 100)
                 progressFill.style.width = `${percent}%`
                 progressText.textContent = `${percent}%`
+                updateTrialStatus()
 
                 // Highlight current TOC item
                 const href = reader.getTOCViewItems({ location: e }).find(item => item.active)?.href
