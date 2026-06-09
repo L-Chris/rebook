@@ -203,7 +203,9 @@ export class ReaderSession {
         const items = options.items ?? this.book.toc ?? []
         if (!items.length) return []
 
-        const location = options.location === undefined ? this.getLocation() : options.location
+        const location = normalizeTOCViewLocation(
+            options.location === undefined ? this.getLocation() : options.location,
+        )
         const sectionFractions = this.getSectionFractions()
         const trialLimit = this.getTrialLimit()
 
@@ -308,22 +310,20 @@ export class ReaderSession {
 
         let activeItem: TOCItem | null = null
         let maxIndex = -1
+        const sectionLookup = createSectionIndexLookup(this.book)
 
         const checkItem = (item: TOCItem) => {
-            if (this.book!.splitTOCHref) {
-                try {
-                    const parts = this.book!.splitTOCHref(item.href)
-                    if (parts && Array.isArray(parts)) {
-                        const [id] = parts
-                        const index = this.book!.sections.findIndex(s => s.id === id)
-                        if (index >= 0 && index <= loc.index && index >= maxIndex) {
-                            maxIndex = index
-                            activeItem = item
-                        }
-                    }
-                } catch (e) {
-                    console.error('Error in splitTOCHref:', e)
+            try {
+                const index = resolveTOCSectionIndex(this.book!, item.href, sectionLookup)
+                if (index >= 0 && index < loc.index && index >= maxIndex) {
+                    maxIndex = index
+                    activeItem = item
+                } else if (index === loc.index && maxIndex < loc.index) {
+                    maxIndex = index
+                    activeItem = item
                 }
+            } catch (e) {
+                console.error('Error resolving TOC item:', e)
             }
             if (item.subitems) {
                 for (const sub of item.subitems) checkItem(sub)
@@ -479,12 +479,13 @@ function flattenTOCViewItems(
     activeItem: TOCItem | null,
 ): TOCViewItem[] {
     const result: TOCViewItem[] = []
+    const sectionLookup = createSectionIndexLookup(book)
     let index = 0
 
     const walk = (tocItems: readonly TOCItem[], depth: number, parentHrefs: string[]) => {
         for (const item of tocItems) {
             const itemIndex = index++
-            const sectionIndex = resolveTOCSectionIndex(book, item.href)
+            const sectionIndex = resolveTOCSectionIndex(book, item.href, sectionLookup)
             const sectionFraction = sectionIndex >= 0 ? sectionFractions[sectionIndex] ?? 0 : 0
             const hasChildren = !!item.subitems?.length
             result.push({
@@ -533,6 +534,11 @@ function normalizeTOCHref(href?: string | null): string {
     return (href || '').trim()
 }
 
+function normalizeTOCViewLocation(location: RelocateEvent | null): RelocateEvent | null {
+    if (location?.tocItem !== null) return location
+    return { ...location, tocItem: undefined }
+}
+
 function normalizeBookPath(href?: string | null): string {
     const path = normalizeNavigationHref(href).replace(/\\/g, '/').replace(/^\/+/, '')
     const parts: string[] = []
@@ -544,22 +550,57 @@ function normalizeBookPath(href?: string | null): string {
     return parts.join('/')
 }
 
-function resolveTOCSectionIndex(book: Book, href: string): number {
+interface SectionIndexLookup {
+    byId: Map<string | number, number>
+    byPath: Map<string, number>
+}
+
+function createSectionIndexLookup(book: Book): SectionIndexLookup {
+    const byId = new Map<string | number, number>()
+    const byPath = new Map<string, number>()
+    for (const [index, section] of book.sections.entries()) {
+        byId.set(section.id, index)
+        byPath.set(normalizeBookPath(String(section.id ?? '')), index)
+    }
+    return { byId, byPath }
+}
+
+function findSectionIndex(lookup: SectionIndexLookup, id: string | number): number {
+    const exact = lookup.byId.get(id)
+    if (exact !== undefined) return exact
+
+    const normalized = normalizeBookPath(String(id))
+    if (!normalized) return -1
+    const byPath = lookup.byPath.get(normalized)
+    if (byPath !== undefined) return byPath
+
+    const suffix = `/${normalized}`
+    for (const [sectionPath, index] of lookup.byPath) {
+        if (sectionPath.endsWith(suffix)) return index
+    }
+    return -1
+}
+
+function resolveTOCSectionIndex(book: Book, href: string, sectionLookup = createSectionIndexLookup(book)): number {
     const resolved = book.resolveHref?.(href)
     if (typeof resolved?.index === 'number' && resolved.index >= 0) return resolved.index
 
     const parts = book.splitTOCHref?.(href)
     if (parts && Array.isArray(parts)) {
         const [id] = parts
-        const sectionIndex = book.sections.findIndex(section => section.id === id)
+        const sectionIndex = findSectionIndex(sectionLookup, id)
         if (sectionIndex >= 0) return sectionIndex
     }
 
     const normalizedHref = normalizeBookPath(href)
     if (!normalizedHref) return -1
 
-    return book.sections.findIndex(section => {
-        const sectionId = normalizeBookPath(String(section.id ?? ''))
-        return sectionId === normalizedHref || sectionId.endsWith(`/${normalizedHref}`)
-    })
+    const sectionIndex = sectionLookup.byPath.get(normalizedHref)
+    if (sectionIndex !== undefined) return sectionIndex
+
+    const suffix = `/${normalizedHref}`
+    for (const [sectionPath, index] of sectionLookup.byPath) {
+        if (sectionPath.endsWith(suffix)) return index
+    }
+    return -1
 }

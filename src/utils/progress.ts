@@ -17,21 +17,26 @@ export class SectionProgress {
     private sizePerLoc: number
     private sizeTotal: number
     private sectionFractions: number[]
+    private cumulativeSizes: number[]
 
     constructor(sections: readonly Section[], sizePerLoc = 1500) {
         this.sizes = sections.map(s => s.linear !== 'no' && s.size > 0 ? s.size : 0)
         this.sizePerLoc = sizePerLoc
         this.sizeTotal = this.sizes.reduce((a, b) => a + b, 0)
+        this.cumulativeSizes = this.calcCumulativeSizes()
         this.sectionFractions = this.calcSectionFractions()
     }
 
-    private calcSectionFractions(): number[] {
+    private calcCumulativeSizes(): number[] {
         const results = [0]
         let sum = 0
-        for (const size of this.sizes) {
-            results.push((sum += size) / this.sizeTotal)
-        }
+        for (const size of this.sizes) results.push(sum += size)
         return results
+    }
+
+    private calcSectionFractions(): number[] {
+        if (this.sizeTotal <= 0) return this.cumulativeSizes.map(() => 0)
+        return this.cumulativeSizes.map(size => size / this.sizeTotal)
     }
 
     /**
@@ -40,7 +45,7 @@ export class SectionProgress {
     getProgress(index: number, fractionInSection: number) {
         const { sizes, sizePerLoc, sizeTotal } = this
         const sizeInSection = sizes[index] ?? 0
-        const sizeBefore = sizes.slice(0, index).reduce((a, b) => a + b, 0)
+        const sizeBefore = this.cumulativeSizes[index] ?? 0
         const size = sizeBefore + fractionInSection * sizeInSection
         const remaining = sizeTotal - size
 
@@ -69,7 +74,7 @@ export class SectionProgress {
         if (fraction >= 1) return [this.sizes.length - 1, 1]
 
         fraction = fraction + Number.EPSILON
-        let index = this.sectionFractions.findIndex(x => x > fraction) - 1
+        let index = upperBound(this.sectionFractions, fraction) - 1
         if (index < 0) return [0, 0]
         while (!this.sizes[index]) index++
 
@@ -84,6 +89,17 @@ export class SectionProgress {
     getFractions(): number[] {
         return this.sectionFractions.map(x => x + Number.EPSILON)
     }
+}
+
+function upperBound(values: readonly number[], target: number): number {
+    let low = 0
+    let high = values.length
+    while (low < high) {
+        const mid = (low + high) >> 1
+        if (values[mid] <= target) low = mid + 1
+        else high = mid
+    }
+    return low
 }
 
 // ============================================================================

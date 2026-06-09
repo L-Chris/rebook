@@ -1110,6 +1110,45 @@ describe('BrowserRenderer', () => {
         book.destroy?.()
     }, 10000)
 
+    it('clears stale location state when opening another book', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '96')
+        document.body.appendChild(container)
+
+        const makeBook = (id: string, label: string): Book => ({
+            sections: [{
+                id,
+                size: 80,
+                format: 'xhtml',
+                load: () => `<p>${label}</p>`,
+                getBlocks: () => [{
+                    id: `${id}-body`,
+                    type: 'paragraph',
+                    segments: [{ text: label }],
+                }],
+            }],
+            toc: [{ label, href: id }],
+            splitTOCHref: href => [href, null],
+        })
+
+        const renderer = new BrowserRenderer({
+            container,
+            layout: 'paginated',
+            styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '280px', margin: '16px' },
+        })
+
+        await renderer.open(makeBook('first.xhtml', 'First Book'))
+        await renderer.goTo(0)
+        expect(renderer.getLocation()?.tocItem?.label).toBe('First Book')
+
+        await renderer.open(makeBook('second.xhtml', 'Second Book'))
+        expect(renderer.getLocation()).toBeNull()
+        expect(container.textContent).toBe('')
+
+        renderer.destroy()
+    })
+
     it('does not replace an explicit null renderer TOC item with ReaderView section fallback', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
@@ -1150,6 +1189,8 @@ describe('BrowserRenderer', () => {
 
         expect(lastLabel).toBe('null')
         expect(reader.getLocation()?.tocItem).toBeNull()
+        expect(reader.getTOCViewItems({ location: reader.getLocation() }).find(item => item.active)?.label)
+            .toBe('Missing Anchor')
 
         reader.destroy()
     })

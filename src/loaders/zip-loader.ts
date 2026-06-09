@@ -1,16 +1,15 @@
 /**
- * Zip-based loader using @zip.js/zip.js.
+ * Zip-based loader with a central-directory fast path and local-header fallback.
  * Provides file-level access to zip archive contents.
  *
  * Handles malformed zip files through multiple fallback strategies:
  *
- * 1. **Prepended data correction** — detects uniformly-shifted offsets
- *    (common in self-extracting archives or files with prepended data)
- *    and patches Central Directory offsets before retrying zip.js.
+ * 1. **Central Directory fast path** — reads the EOCD and Central Directory
+ *    for normal zip files without scanning the entire archive.
  *
- * 2. **Per-entry local header fallback** — when individual entries have
+ * 2. **Per-entry local header recovery** — when individual entries have
  *    incorrect CD offsets, scans the file for actual Local File Header
- *    positions and extracts data directly using DecompressionStream.
+ *    positions only after a failed entry read.
  *
  * 3. **Full local-header-only fallback** — when the Central Directory is
  *    completely unreadable, builds the entry list and loader entirely
@@ -25,6 +24,7 @@ import {
     hasBlobConstructor,
     toBlobLike,
 } from '../core/binary'
+import { debugRebook } from '../core/debug'
 
 /** Input types accepted by the zip loader */
 export type ZipInput = File | Blob | ArrayBuffer | BlobLike
@@ -44,6 +44,10 @@ const CENTRAL_DIR_SIG = 0x02014b50
 const EOCD_SIG = 0x06054b50
 const EOCD_MIN_SIZE = 22
 const DATA_DESCRIPTOR_SIG = 0x08074b50
+
+function nowMs(): number {
+    return typeof performance !== 'undefined' ? performance.now() : Date.now()
+}
 
 // ============================================================================
 // Prepended data detection and correction
@@ -212,6 +216,58 @@ export async function buildLocalHeaderMap(blob: BlobLike): Promise<Map<string, L
     await applyCentralDirectoryMetadata(blob, map)
 
     return map
+}
+
+async function buildCentralDirectoryMap(blob: BlobLike): Promise<Map<string, LocalHeaderEntry> | null> {
+    const readSize = Math.min(blob.size, EOCD_MIN_SIZE + 65535)
+    const start = blob.size - readSize
+    const eocdBuf = await blob.slice(start).arrayBuffer()
+    const eocdBytes = new Uint8Array(eocdBuf)
+    const eocdView = new DataView(eocdBuf)
+
+    let eocdLocalOffset = -1
+    for (let i = eocdBuf.byteLength - EOCD_MIN_SIZE; i >= 0; i--) {
+        if (eocdBytes[i] === 0x50 && eocdBytes[i + 1] === 0x4b &&
+            eocdBytes[i + 2] === 0x05 && eocdBytes[i + 3] === 0x06) {
+            eocdLocalOffset = i
+            break
+        }
+    }
+    if (eocdLocalOffset < 0) return null
+
+    const entryCount = eocdView.getUint16(eocdLocalOffset + 10, true)
+    const cdSize = eocdView.getUint32(eocdLocalOffset + 12, true)
+    const cdOffset = eocdView.getUint32(eocdLocalOffset + 16, true)
+    if (entryCount === 0 || entryCount === 0xffff || cdSize === 0 || cdOffset + cdSize > blob.size) {
+        return null
+    }
+
+    const cdBuf = await blob.slice(cdOffset, cdOffset + cdSize).arrayBuffer()
+    const cdView = new DataView(cdBuf)
+    const textDecoder = new TextDecoder()
+    const map = new Map<string, LocalHeaderEntry>()
+
+    let pos = 0
+    for (let i = 0; i < entryCount; i++) {
+        if (pos + 46 > cdBuf.byteLength) return null
+        if (cdView.getUint32(pos, true) !== CENTRAL_DIR_SIG) return null
+
+        const uncompressedSize = cdView.getUint32(pos + 24, true)
+        const fileNameLength = cdView.getUint16(pos + 28, true)
+        const extraFieldLength = cdView.getUint16(pos + 30, true)
+        const commentLength = cdView.getUint16(pos + 32, true)
+        const localOffset = cdView.getUint32(pos + 42, true)
+        const entryEnd = pos + 46 + fileNameLength + extraFieldLength + commentLength
+        if (fileNameLength === 0 || entryEnd > cdBuf.byteLength) return null
+
+        const filename = textDecoder.decode(cdBuf.slice(pos + 46, pos + 46 + fileNameLength))
+        if (!filename.includes('\0') && !/[�]/.test(filename)) {
+            map.set(filename, { offset: localOffset, uncompressedSize })
+        }
+        pos = entryEnd
+    }
+
+    return map.size > 0 ? map : null
 }
 
 async function applyCentralDirectoryMetadata(
@@ -395,6 +451,7 @@ export async function extractDirectly(
 function buildFallbackLoader(
     blob: BlobLike,
     localHeaderMap: Map<string, LocalHeaderEntry>,
+    recoverLocalHeaderMap?: () => Promise<Map<string, LocalHeaderEntry>>,
 ): Loader {
     const filenames = [...localHeaderMap.keys()]
     const entries: LoaderEntry[] = filenames.map(filename => ({
@@ -409,7 +466,16 @@ function buildFallbackLoader(
             const buffer = await extractDirectly(blob, entry.offset, localHeaderMap)
             return new TextDecoder().decode(buffer)
         } catch {
-            return null
+            if (!recoverLocalHeaderMap) return null
+            const recoveredMap = await recoverLocalHeaderMap()
+            const recoveredEntry = recoveredMap.get(filename)
+            if (!recoveredEntry || recoveredEntry.offset === entry.offset) return null
+            try {
+                const buffer = await extractDirectly(blob, recoveredEntry.offset, recoveredMap)
+                return new TextDecoder().decode(buffer)
+            } catch {
+                return null
+            }
         }
     }
 
@@ -420,7 +486,16 @@ function buildFallbackLoader(
             const buffer = await extractDirectly(blob, entry.offset, localHeaderMap)
             return createOutputBlob(buffer, type)
         } catch {
-            return null
+            if (!recoverLocalHeaderMap) return null
+            const recoveredMap = await recoverLocalHeaderMap()
+            const recoveredEntry = recoveredMap.get(filename)
+            if (!recoveredEntry || recoveredEntry.offset === entry.offset) return null
+            try {
+                const buffer = await extractDirectly(blob, recoveredEntry.offset, recoveredMap)
+                return createOutputBlob(buffer, type)
+            } catch {
+                return null
+            }
         }
     }
 
@@ -436,18 +511,50 @@ function buildFallbackLoader(
 /**
  * Create a Loader from a File/Blob/ArrayBuffer that is a zip archive.
  *
- * Uses @zip.js/zip.js for reading, with multiple fallback strategies for
- * malformed zip files:
+ * Uses the Central Directory for normal zip files, with local-header fallback
+ * strategies for malformed zip files:
  *
- * 1. Prepended data correction (uniformly shifted CD offsets)
- * 2. Per-entry local header extraction (individually corrupted CD offsets)
- * 3. Full local-header-only loader (completely destroyed Central Directory)
+ * 1. Central Directory fast path
+ * 2. Per-entry local header recovery for corrupted CD offsets
+ * 3. Full local-header-only loader for unreadable Central Directories
  */
 export async function createZipLoader(input: ZipInput): Promise<Loader> {
-    // Use local-header scanning instead of @zip.js/zip.js so Mini Program
-    // bundles do not pull in ESM-only code that references import.meta.
+    // Avoid @zip.js/zip.js here so Mini Program bundles do not pull in
+    // ESM-only code that references import.meta.
     const blob = toBlobLike(input)
+    const start = nowMs()
+    const centralDirectoryMap = await buildCentralDirectoryMap(blob)
+    if (centralDirectoryMap) {
+        debugRebook('zip', 'loader timing', {
+            stage: 'central-directory',
+            ms: Number((nowMs() - start).toFixed(1)),
+            entries: centralDirectoryMap.size,
+        })
+        let recoveredMapPromise: Promise<Map<string, LocalHeaderEntry>> | null = null
+        const recoverLocalHeaderMap = (): Promise<Map<string, LocalHeaderEntry>> => {
+            recoveredMapPromise ??= (async () => {
+                const recoverStart = nowMs()
+                const map = await buildLocalHeaderMap(blob)
+                debugRebook('zip', 'loader timing', {
+                    stage: 'local-header-recovery',
+                    ms: Number((nowMs() - recoverStart).toFixed(1)),
+                    entries: map.size,
+                })
+                return map
+            })()
+            return recoveredMapPromise
+        }
+        return buildFallbackLoader(blob, centralDirectoryMap, recoverLocalHeaderMap)
+    }
+
+    const fallbackStart = nowMs()
     const localHeaderMap = await buildLocalHeaderMap(blob)
+    debugRebook('zip', 'loader timing', {
+        stage: 'local-header-scan',
+        ms: Number((nowMs() - fallbackStart).toFixed(1)),
+        totalMs: Number((nowMs() - start).toFixed(1)),
+        entries: localHeaderMap.size,
+    })
     return buildFallbackLoader(blob, localHeaderMap)
 }
 

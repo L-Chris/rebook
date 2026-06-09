@@ -367,6 +367,9 @@ const LOCAL_HEADER_SIZE = 30;
 const CENTRAL_DIR_SIG = 33639248;
 const EOCD_MIN_SIZE = 22;
 const DATA_DESCRIPTOR_SIG = 134695760;
+function nowMs$1() {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
 async function readZipComment(blob) {
   const readSize = Math.min(blob.size, 22 + 65535);
   const start = blob.size - readSize;
@@ -415,6 +418,49 @@ async function buildLocalHeaderMap(blob) {
   }
   await applyCentralDirectoryMetadata(blob, map);
   return map;
+}
+async function buildCentralDirectoryMap(blob) {
+  const readSize = Math.min(blob.size, EOCD_MIN_SIZE + 65535);
+  const start = blob.size - readSize;
+  const eocdBuf = await blob.slice(start).arrayBuffer();
+  const eocdBytes = new Uint8Array(eocdBuf);
+  const eocdView = new DataView(eocdBuf);
+  let eocdLocalOffset = -1;
+  for (let i = eocdBuf.byteLength - EOCD_MIN_SIZE; i >= 0; i--) {
+    if (eocdBytes[i] === 80 && eocdBytes[i + 1] === 75 && eocdBytes[i + 2] === 5 && eocdBytes[i + 3] === 6) {
+      eocdLocalOffset = i;
+      break;
+    }
+  }
+  if (eocdLocalOffset < 0) return null;
+  const entryCount = eocdView.getUint16(eocdLocalOffset + 10, true);
+  const cdSize = eocdView.getUint32(eocdLocalOffset + 12, true);
+  const cdOffset = eocdView.getUint32(eocdLocalOffset + 16, true);
+  if (entryCount === 0 || entryCount === 65535 || cdSize === 0 || cdOffset + cdSize > blob.size) {
+    return null;
+  }
+  const cdBuf = await blob.slice(cdOffset, cdOffset + cdSize).arrayBuffer();
+  const cdView = new DataView(cdBuf);
+  const textDecoder2 = new TextDecoder();
+  const map = /* @__PURE__ */ new Map();
+  let pos = 0;
+  for (let i = 0; i < entryCount; i++) {
+    if (pos + 46 > cdBuf.byteLength) return null;
+    if (cdView.getUint32(pos, true) !== CENTRAL_DIR_SIG) return null;
+    const uncompressedSize = cdView.getUint32(pos + 24, true);
+    const fileNameLength = cdView.getUint16(pos + 28, true);
+    const extraFieldLength = cdView.getUint16(pos + 30, true);
+    const commentLength = cdView.getUint16(pos + 32, true);
+    const localOffset = cdView.getUint32(pos + 42, true);
+    const entryEnd = pos + 46 + fileNameLength + extraFieldLength + commentLength;
+    if (fileNameLength === 0 || entryEnd > cdBuf.byteLength) return null;
+    const filename = textDecoder2.decode(cdBuf.slice(pos + 46, pos + 46 + fileNameLength));
+    if (!filename.includes("\0") && !/[�]/.test(filename)) {
+      map.set(filename, { offset: localOffset, uncompressedSize });
+    }
+    pos = entryEnd;
+  }
+  return map.size > 0 ? map : null;
 }
 async function applyCentralDirectoryMetadata(blob, localHeaderMap) {
   const readSize = Math.min(blob.size, EOCD_MIN_SIZE + 65535);
@@ -480,10 +526,10 @@ async function extractDirectly(blob, localOffset, localHeaderMap) {
       throw new CorruptedFileError("Cannot determine compressed size (data descriptor)", "zip");
     }
     const nextLFH = findNextLFHOffset(localHeaderMap, localOffset);
-    const upperBound = nextLFH > 0 ? nextLFH : blob.size;
-    const regionSize = upperBound - dataStart;
+    const upperBound2 = nextLFH > 0 ? nextLFH : blob.size;
+    const regionSize = upperBound2 - dataStart;
     if (regionSize <= 0) throw new CorruptedFileError("No data between headers", "zip");
-    const regionBuf = await blob.slice(dataStart, upperBound).arrayBuffer();
+    const regionBuf = await blob.slice(dataStart, upperBound2).arrayBuffer();
     const regionView = new DataView(regionBuf);
     let found = false;
     for (let i = regionBuf.byteLength - 16; i >= 0; i--) {
@@ -499,7 +545,7 @@ async function extractDirectly(blob, localOffset, localHeaderMap) {
     if (!found) {
       for (let i = regionBuf.byteLength - 12; i >= 0; i--) {
         const descCompSize = regionView.getUint32(i + 4, true);
-        if (dataStart + descCompSize + 12 === upperBound || dataStart + descCompSize + 16 === upperBound) {
+        if (dataStart + descCompSize + 12 === upperBound2 || dataStart + descCompSize + 16 === upperBound2) {
           compressedSize = descCompSize;
           found = true;
           break;
@@ -529,7 +575,7 @@ async function extractDirectly(blob, localOffset, localHeaderMap) {
   }
   throw new CorruptedFileError(`Unsupported compression method: ${compressionMethod}`, "zip");
 }
-function buildFallbackLoader(blob, localHeaderMap) {
+function buildFallbackLoader(blob, localHeaderMap, recoverLocalHeaderMap) {
   const filenames = [...localHeaderMap.keys()];
   const entries = filenames.map((filename) => {
     var _a2, _b2;
@@ -545,7 +591,16 @@ function buildFallbackLoader(blob, localHeaderMap) {
       const buffer = await extractDirectly(blob, entry.offset, localHeaderMap);
       return new TextDecoder().decode(buffer);
     } catch (e) {
-      return null;
+      if (!recoverLocalHeaderMap) return null;
+      const recoveredMap = await recoverLocalHeaderMap();
+      const recoveredEntry = recoveredMap.get(filename);
+      if (!recoveredEntry || recoveredEntry.offset === entry.offset) return null;
+      try {
+        const buffer = await extractDirectly(blob, recoveredEntry.offset, recoveredMap);
+        return new TextDecoder().decode(buffer);
+      } catch (e2) {
+        return null;
+      }
     }
   };
   const loadBlob = async (filename, type) => {
@@ -555,7 +610,16 @@ function buildFallbackLoader(blob, localHeaderMap) {
       const buffer = await extractDirectly(blob, entry.offset, localHeaderMap);
       return createOutputBlob$1(buffer, type);
     } catch (e) {
-      return null;
+      if (!recoverLocalHeaderMap) return null;
+      const recoveredMap = await recoverLocalHeaderMap();
+      const recoveredEntry = recoveredMap.get(filename);
+      if (!recoveredEntry || recoveredEntry.offset === entry.offset) return null;
+      try {
+        const buffer = await extractDirectly(blob, recoveredEntry.offset, recoveredMap);
+        return createOutputBlob$1(buffer, type);
+      } catch (e2) {
+        return null;
+      }
     }
   };
   const getSize = (filename) => {
@@ -566,7 +630,38 @@ function buildFallbackLoader(blob, localHeaderMap) {
 }
 async function createZipLoader(input) {
   const blob = toBlobLike(input);
+  const start = nowMs$1();
+  const centralDirectoryMap = await buildCentralDirectoryMap(blob);
+  if (centralDirectoryMap) {
+    debugRebook("zip", "loader timing", {
+      stage: "central-directory",
+      ms: Number((nowMs$1() - start).toFixed(1)),
+      entries: centralDirectoryMap.size
+    });
+    let recoveredMapPromise = null;
+    const recoverLocalHeaderMap = () => {
+      recoveredMapPromise != null ? recoveredMapPromise : recoveredMapPromise = (async () => {
+        const recoverStart = nowMs$1();
+        const map = await buildLocalHeaderMap(blob);
+        debugRebook("zip", "loader timing", {
+          stage: "local-header-recovery",
+          ms: Number((nowMs$1() - recoverStart).toFixed(1)),
+          entries: map.size
+        });
+        return map;
+      })();
+      return recoveredMapPromise;
+    };
+    return buildFallbackLoader(blob, centralDirectoryMap, recoverLocalHeaderMap);
+  }
+  const fallbackStart = nowMs$1();
   const localHeaderMap = await buildLocalHeaderMap(blob);
+  debugRebook("zip", "loader timing", {
+    stage: "local-header-scan",
+    ms: Number((nowMs$1() - fallbackStart).toFixed(1)),
+    totalMs: Number((nowMs$1() - start).toFixed(1)),
+    entries: localHeaderMap.size
+  });
   return buildFallbackLoader(blob, localHeaderMap);
 }
 async function isZipFile(input) {
@@ -17027,7 +17122,6 @@ const NS = {
   OPF: "http://www.idpf.org/2007/opf",
   EPUB: "http://www.idpf.org/2007/ops",
   DC: "http://purl.org/dc/elements/1.1/",
-  NCX: "http://www.daisy.org/z3986/2005/ncx/",
   XLINK: "http://www.w3.org/1999/xlink"
 };
 const MIME = {
@@ -17085,8 +17179,46 @@ const normalizeArchivePath = (path) => {
   }
   return parts.join("/");
 };
+function findSectionIndexByNormalizedSuffix(sections, normalizedPath) {
+  if (!normalizedPath) return -1;
+  const suffix = `/${normalizedPath}`;
+  return sections.findIndex((section) => normalizeArchivePath(String(section.id)).endsWith(suffix));
+}
+function createArchiveEntryLookup(entries) {
+  const byPath = /* @__PURE__ */ new Map();
+  const normalizedEntries = entries.map((entry) => ({
+    filename: entry.filename,
+    normalized: normalizeArchivePath(entry.filename),
+    size: entry.size
+  }));
+  for (const entry of normalizedEntries) {
+    if (entry.normalized && !byPath.has(entry.normalized)) {
+      byPath.set(entry.normalized, { filename: entry.filename, size: entry.size });
+    }
+  }
+  return { byPath, entries: normalizedEntries };
+}
+function findArchiveEntryHref(lookup, normalizedPath) {
+  var _a2;
+  if (!normalizedPath) return null;
+  const exact = lookup.byPath.get(normalizedPath);
+  if (exact) return exact.filename;
+  const suffix = `/${normalizedPath}`;
+  const match = lookup.entries.find((entry) => entry.normalized.endsWith(suffix));
+  return (_a2 = match == null ? void 0 : match.filename) != null ? _a2 : null;
+}
 function debugEPUB(message, details) {
   debugRebook("epub", message, details);
+}
+function nowMs() {
+  return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+}
+function flattenTOCForTiming(items) {
+  var _a2;
+  return (_a2 = items == null ? void 0 : items.flatMap((item) => {
+    var _a3;
+    return ((_a3 = item.subitems) == null ? void 0 : _a3.length) ? [item, ...flattenTOCForTiming(item.subitems)] : [item];
+  })) != null ? _a2 : [];
 }
 const isExternal = (uri) => uri.startsWith("//") || /^(?!blob)\w+:/i.test(uri);
 function readImageSize(buf) {
@@ -17350,46 +17482,151 @@ const parseNav = (doc, resolve) => {
   return { toc, pageList, landmarks };
 };
 const parseNCX = (doc, resolve) => {
-  const { $, $$ } = childGetter(doc, NS.NCX);
   const resolveHref = (href) => href ? decodeURI(resolve(href)) : null;
   const parseItem = (el) => {
     var _a2;
-    const $label = $(el, "navLabel");
-    const $content = $(el, "content");
+    let $label = null;
+    let $content = null;
+    const childItems = [];
+    for (const child of Array.from(el.children)) {
+      if (child.localName === "navLabel") $label = child;
+      else if (child.localName === "content") $content = child;
+      else if (child.localName === "navPoint") childItems.push(child);
+    }
     const label = getElementText($label);
     const href = resolveHref((_a2 = $content == null ? void 0 : $content.getAttribute("src")) != null ? _a2 : null);
     if (el.localName === "navPoint") {
-      const els = $$(el, "navPoint");
       return {
         label,
         href: href != null ? href : "",
-        subitems: els.length ? els.map(parseItem) : void 0
+        subitems: childItems.length ? childItems.map(parseItem) : void 0
       };
     }
     return { label, href: href != null ? href : "" };
   };
-  const parseList = (el, itemName) => $$(el, itemName).map(parseItem);
   const getSingle = (container2, itemName) => {
-    const $container = $(doc.documentElement, container2);
-    return $container ? parseList($container, itemName) : null;
+    let $container = null;
+    for (const child of Array.from(doc.documentElement.children)) {
+      if (child.localName === container2) {
+        $container = child;
+        break;
+      }
+    }
+    if (!$container) return null;
+    const items = [];
+    for (const child of Array.from($container.children)) {
+      if (child.localName === itemName) items.push(parseItem(child));
+    }
+    return items;
   };
   return {
     toc: getSingle("navMap", "navPoint"),
     pageList: getSingle("pageList", "pageTarget")
   };
 };
+const parseNCXText = (xml, resolve) => ({
+  toc: parseNCXTextList(xml, "navMap", "navPoint", resolve),
+  pageList: parseNCXTextList(xml, "pageList", "pageTarget", resolve)
+});
+function parseNCXTextList(xml, containerName, itemName, resolve) {
+  var _a2;
+  const container2 = getXMLContainerContent(xml, containerName);
+  if (!container2) return null;
+  const rootItems = [];
+  const stack = [];
+  const tagPattern = /<[^>]+>/g;
+  let textStart = null;
+  let match;
+  while (match = tagPattern.exec(container2)) {
+    const tag = match[0];
+    if (tag.startsWith("<!--") || tag.startsWith("<?") || tag.startsWith("<!")) continue;
+    const closing = /^<\s*\//.test(tag);
+    const name2 = getXMLTagName(tag);
+    if (!name2) continue;
+    if (!closing && name2 === itemName) {
+      const item = { label: "", href: "" };
+      const parent = stack[stack.length - 1];
+      if (parent) {
+        (_a2 = parent.subitems) != null ? _a2 : parent.subitems = [];
+        parent.subitems.push(item);
+      } else {
+        rootItems.push(item);
+      }
+      if (!/\/\s*>$/.test(tag)) stack.push(item);
+      continue;
+    }
+    if (closing && name2 === itemName) {
+      const item = stack.pop();
+      if ((item == null ? void 0 : item.subitems) && item.subitems.length === 0) delete item.subitems;
+      continue;
+    }
+    const current = stack[stack.length - 1];
+    if (!current) continue;
+    if (!closing && name2 === "content") {
+      const src = getXMLAttribute(tag, "src");
+      current.href = src ? decodeURI(resolve(decodeXMLText(src))) : "";
+      continue;
+    }
+    if (!closing && name2 === "text") {
+      textStart = tagPattern.lastIndex;
+      continue;
+    }
+    if (closing && name2 === "text" && textStart != null) {
+      current.label += decodeXMLText(container2.slice(textStart, match.index)).trim();
+      textStart = null;
+    }
+  }
+  return rootItems.length ? rootItems : null;
+}
+function getXMLContainerContent(xml, name2) {
+  const open = new RegExp(`<[^>]*:?${escapeRegExp(name2)}\\b[^>]*>`, "i").exec(xml);
+  if (!open) return null;
+  const closePattern = new RegExp(`</[^>]*:?${escapeRegExp(name2)}\\s*>`, "i");
+  const close = closePattern.exec(xml.slice(open.index + open[0].length));
+  if (!close) return null;
+  return xml.slice(open.index + open[0].length, open.index + open[0].length + close.index);
+}
+function getXMLTagName(tag) {
+  var _a2;
+  const match = tag.match(/^<\s*\/?\s*([A-Za-z_][\w:.-]*)/);
+  if (!match) return null;
+  return (_a2 = match[1].split(":").pop()) != null ? _a2 : null;
+}
+function getXMLAttribute(tag, name2) {
+  var _a2, _b2;
+  const match = new RegExp(`\\b${escapeRegExp(name2)}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, "i").exec(tag);
+  return (_b2 = (_a2 = match == null ? void 0 : match[1]) != null ? _a2 : match == null ? void 0 : match[2]) != null ? _b2 : null;
+}
+function decodeXMLText(value2) {
+  return value2.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16))).replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number.parseInt(dec, 10))).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+}
+function escapeRegExp(value2) {
+  return value2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 class ResourceLoader {
   constructor(loadText, loadBlob, manifest, entries, domAdapter, urlFactory) {
     __publicField(this, "cache", /* @__PURE__ */ new Map());
     __publicField(this, "refCount", /* @__PURE__ */ new Map());
     __publicField(this, "manifest");
+    __publicField(this, "manifestByNormalizedHref");
+    __publicField(this, "normalizedManifest");
     __publicField(this, "entries");
     this.loadText = loadText;
     this.loadBlob = loadBlob;
     this.domAdapter = domAdapter;
     this.urlFactory = urlFactory;
     this.manifest = manifest;
-    this.entries = new Map(entries.map((e) => [e.filename, e]));
+    this.manifestByNormalizedHref = /* @__PURE__ */ new Map();
+    this.normalizedManifest = manifest.map((item) => ({
+      normalized: normalizeArchivePath(item.href),
+      item
+    }));
+    for (const item of this.normalizedManifest) {
+      if (item.normalized && !this.manifestByNormalizedHref.has(item.normalized)) {
+        this.manifestByNormalizedHref.set(item.normalized, item.item);
+      }
+    }
+    this.entries = createArchiveEntryLookup(entries);
   }
   async createURL(href, data, type) {
     if (!data) return "";
@@ -17538,33 +17775,31 @@ class ResourceLoader {
         resolved: href,
         normalized: normalizeArchivePath(href),
         manifestSample: this.manifest.slice(0, 8).map((item2) => item2.href),
-        entrySample: Array.from(this.entries.keys()).slice(0, 8)
+        entrySample: this.entries.entries.slice(0, 8).map((entry) => entry.filename)
       });
       return url;
     }
     return await this.loadItem(item) || href;
   }
   findResourceItem(href) {
-    var _a2;
+    var _a2, _b2;
     const normalizedHref = normalizeArchivePath(href);
-    const manifestItem = (_a2 = this.manifest.find((m) => normalizeArchivePath(m.href) === normalizedHref)) != null ? _a2 : this.manifest.find((m) => normalizeArchivePath(m.href).endsWith(`/${normalizedHref}`));
+    const manifestItem = (_b2 = this.manifestByNormalizedHref.get(normalizedHref)) != null ? _b2 : (_a2 = this.normalizedManifest.find((entry) => entry.normalized.endsWith(`/${normalizedHref}`))) == null ? void 0 : _a2.item;
     if (manifestItem) return manifestItem;
-    const exactEntry = this.entries.get(normalizedHref);
-    const suffixEntry = exactEntry ? void 0 : Array.from(this.entries.values()).find((entry2) => normalizeArchivePath(entry2.filename).endsWith(`/${normalizedHref}`));
-    const entry = exactEntry != null ? exactEntry : suffixEntry;
-    if (!entry) return void 0;
-    const entryHref = normalizeArchivePath(entry.filename);
-    if (entryHref !== normalizedHref) {
+    const entryHref = findArchiveEntryHref(this.entries, normalizedHref);
+    if (!entryHref) return void 0;
+    const normalizedEntryHref = normalizeArchivePath(entryHref);
+    if (normalizedEntryHref !== normalizedHref) {
       debugEPUB("resource entry matched by suffix", {
         requested: href,
         normalized: normalizedHref,
-        matched: entryHref
+        matched: normalizedEntryHref
       });
     }
     return {
-      id: entryHref,
+      id: normalizedEntryHref,
       href: entryHref,
-      mediaType: getMimeTypeFromPath(entryHref)
+      mediaType: getMimeTypeFromPath(normalizedEntryHref)
     };
   }
   async applyLinkedStyles(doc, href) {
@@ -17655,7 +17890,9 @@ class EPUBParser {
     __publicField(this, "priority", 10);
   }
   async canParse(input) {
-    if (typeof input === "string") return input.endsWith(".epub");
+    if (typeof input === "string") return input.toLowerCase().endsWith(".epub");
+    const inputName = getInputName(input);
+    if (inputName == null ? void 0 : inputName.toLowerCase().endsWith(".epub")) return true;
     if (isBlobLike$1(input) || input instanceof ArrayBuffer) {
       if (!await isZipFile(input)) return false;
       try {
@@ -17668,15 +17905,32 @@ class EPUBParser {
     return false;
   }
   async parse(input, options) {
+    const parseStarted = nowMs();
+    let lastTiming = parseStarted;
+    const markTiming = (stage, details) => {
+      if (!isRebookDebugEnabled()) return;
+      const current = nowMs();
+      debugEPUB("parse timing", {
+        stage,
+        ms: Math.round((current - lastTiming) * 10) / 10,
+        totalMs: Math.round((current - parseStarted) * 10) / 10,
+        ...details
+      });
+      lastTiming = current;
+    };
     let loader;
     if (isBlobLike$1(input)) {
       loader = await createZipLoader(input);
+      markTiming("zip-loader", { input: "blob", entries: loader.entries.length });
     } else if (input instanceof ArrayBuffer) {
       loader = await createZipLoader(input);
+      markTiming("zip-loader", { input: "arraybuffer", entries: loader.entries.length });
     } else if (typeof input === "string") {
       const res = await fetch(input);
       const buffer = await res.arrayBuffer();
+      markTiming("fetch", { input: "url", bytes: buffer.byteLength });
       loader = await createZipLoader(buffer);
+      markTiming("zip-loader", { input: "url", entries: loader.entries.length });
     } else {
       throw new UnsupportedInputError("Unsupported input type for EPUB parser");
     }
@@ -17684,7 +17938,12 @@ class EPUBParser {
       throw new AdapterRequiredError("domAdapter and urlFactory");
     }
     const epub2 = new EPUBBook(loader, options.domAdapter, options.urlFactory);
-    return epub2.init();
+    const book = await epub2.init();
+    markTiming("complete", {
+      sections: book.sections.length,
+      toc: flattenTOCForTiming(book.toc).length
+    });
+    return book;
   }
 }
 class EPUBBook {
@@ -17695,7 +17954,11 @@ class EPUBBook {
     __publicField(this, "resourceLoader");
     __publicField(this, "manifest", []);
     __publicField(this, "manifestById", /* @__PURE__ */ new Map());
+    __publicField(this, "manifestByNormalizedHref", /* @__PURE__ */ new Map());
     __publicField(this, "spine", []);
+    __publicField(this, "sectionIndexById", /* @__PURE__ */ new Map());
+    __publicField(this, "sectionIndexByNormalizedId", /* @__PURE__ */ new Map());
+    __publicField(this, "archiveEntries");
     __publicField(this, "opfPath", "");
     __publicField(this, "sections", []);
     __publicField(this, "dir");
@@ -17707,6 +17970,7 @@ class EPUBBook {
     this.loader = loader;
     this.domAdapter = domAdapter;
     this.urlFactory = urlFactory;
+    this.archiveEntries = createArchiveEntryLookup(loader.entries);
   }
   async loadXML(uri) {
     var _a2;
@@ -17719,9 +17983,23 @@ class EPUBBook {
     return doc;
   }
   async init() {
-    var _a2, _b2, _c, _d, _e, _f;
+    var _a2, _b2, _c, _d, _e, _f, _g, _h;
+    const initStarted = nowMs();
+    let lastTiming = initStarted;
+    const markTiming = (stage, details) => {
+      if (!isRebookDebugEnabled()) return;
+      const current = nowMs();
+      debugEPUB("init timing", {
+        stage,
+        ms: Math.round((current - lastTiming) * 10) / 10,
+        totalMs: Math.round((current - initStarted) * 10) / 10,
+        ...details
+      });
+      lastTiming = current;
+    };
     const $container = await this.loadXML("META-INF/container.xml");
     if (!$container) throw new CorruptedFileError("Failed to load container.xml", "epub");
+    markTiming("container");
     const rootfiles = Array.from(
       $container.getElementsByTagNameNS(NS.CONTAINER, "rootfile")
     ).map((el) => ({
@@ -17733,6 +18011,7 @@ class EPUBBook {
     this.opfPath = opfFile.fullPath;
     const opf = await this.loadXML(this.opfPath);
     if (!opf) throw new CorruptedFileError("Failed to load OPF", "epub");
+    markTiming("opf", { opfPath: this.opfPath });
     const { $ } = childGetter(opf, NS.OPF);
     const $manifest = $(opf.documentElement, "manifest");
     const $spine = $(opf.documentElement, "spine");
@@ -17749,6 +18028,7 @@ class EPUBBook {
         };
       });
       this.manifestById = new Map(this.manifest.map((m) => [m.id, m]));
+      this.manifestByNormalizedHref = new Map(this.manifest.map((m) => [normalizeArchivePath(m.href), m]));
     }
     if ($spine) {
       this.spine = Array.from($spine.children).filter((el) => el.localName === "itemref").map((el) => {
@@ -17761,6 +18041,10 @@ class EPUBBook {
       });
       this.dir = (_a2 = $spine.getAttribute("page-progression-direction")) != null ? _a2 : void 0;
     }
+    markTiming("manifest-spine", {
+      manifest: this.manifest.length,
+      spine: this.spine.length
+    });
     this.resourceLoader = new ResourceLoader(
       this.loader.loadText.bind(this.loader),
       this.loader.loadBlob.bind(this.loader),
@@ -17769,6 +18053,7 @@ class EPUBBook {
       this.domAdapter,
       this.urlFactory
     );
+    markTiming("resource-loader");
     this.sections = this.spine.map((spineItem, index) => {
       const item = this.manifestById.get(spineItem.idref);
       if (!item) return null;
@@ -17802,6 +18087,9 @@ class EPUBBook {
         resolveHref: (href) => resolveURL(href, item.href)
       };
     }).filter((s) => s !== null);
+    this.sectionIndexById = new Map(this.sections.map((section, index) => [section.id, index]));
+    this.sectionIndexByNormalizedId = new Map(this.sections.map((section, index) => [normalizeArchivePath(String(section.id)), index]));
+    markTiming("sections", { sections: this.sections.length });
     const navItem = this.manifest.find((m) => {
       var _a3;
       return (_a3 = m.properties) == null ? void 0 : _a3.includes("nav");
@@ -17821,22 +18109,42 @@ class EPUBBook {
         console.warn("Failed to parse navigation:", e);
       }
     }
+    markTiming("nav", {
+      toc: flattenTOCForTiming(this.toc).length,
+      pageList: flattenTOCForTiming(this.pageList).length
+    });
     if (!this.toc && ncxItem) {
       try {
-        const ncxDoc = await this.loadXML(ncxItem.href);
-        if (ncxDoc) {
-          const resolve = (url) => resolveURL(url, ncxItem.href);
-          const ncx = parseNCX(ncxDoc, resolve);
+        const resolve = (url) => resolveURL(url, ncxItem.href);
+        const ncxText = await this.loader.loadText(ncxItem.href);
+        const ncx = ncxText ? parseNCXText(ncxText, resolve) : { toc: null, pageList: null };
+        if (ncx.toc || ncx.pageList) {
           this.toc = this.normalizeTOCItems((_e = ncx.toc) != null ? _e : void 0);
           this.pageList = this.normalizeTOCItems((_f = ncx.pageList) != null ? _f : void 0);
+        } else {
+          const ncxDoc = await this.loadXML(ncxItem.href);
+          if (ncxDoc) {
+            const parsed = parseNCX(ncxDoc, resolve);
+            this.toc = this.normalizeTOCItems((_g = parsed.toc) != null ? _g : void 0);
+            this.pageList = this.normalizeTOCItems((_h = parsed.pageList) != null ? _h : void 0);
+          }
         }
       } catch (e) {
         console.warn("Failed to parse NCX:", e);
       }
     }
+    markTiming("ncx", {
+      toc: flattenTOCForTiming(this.toc).length,
+      pageList: flattenTOCForTiming(this.pageList).length
+    });
     const { metadata, rendition } = parseMetadata(opf);
     this.metadata = metadata;
     this.rendition = rendition;
+    markTiming("metadata");
+    markTiming("complete", {
+      sections: this.sections.length,
+      toc: flattenTOCForTiming(this.toc).length
+    });
     return this;
   }
   async loadDocument(item) {
@@ -17850,15 +18158,8 @@ class EPUBBook {
     return (_b2 = (_a2 = this.findExistingEntryHref(resolved)) != null ? _a2 : this.findExistingEntryHref(href)) != null ? _b2 : resolved;
   }
   findExistingEntryHref(href) {
-    var _a2;
     const normalized = normalizeArchivePath(href);
-    if (!normalized) return null;
-    if (this.loader.getSize(normalized) > 0) return normalized;
-    const exact = this.loader.entries.find((entry) => normalizeArchivePath(entry.filename) === normalized);
-    if (exact) return exact.filename;
-    const suffix = `/${normalized}`;
-    const match = this.loader.entries.find((entry) => normalizeArchivePath(entry.filename).endsWith(suffix));
-    return (_a2 = match == null ? void 0 : match.filename) != null ? _a2 : null;
+    return findArchiveEntryHref(this.archiveEntries, normalized);
   }
   normalizeNavigationHref(href) {
     var _a2;
@@ -17881,10 +18182,9 @@ class EPUBBook {
     var _a2, _b2, _c;
     const [path, hash] = href.split("#");
     const normalizedPath = normalizeArchivePath(path);
-    const item = (_a2 = this.manifest.find((m) => normalizeArchivePath(m.href) === normalizedPath)) != null ? _a2 : this.manifest.find((m) => normalizeArchivePath(m.href).endsWith(`/${normalizedPath}`));
-    const sectionHref = (_c = item == null ? void 0 : item.href) != null ? _c : (_b2 = this.sections.find((section) => normalizeArchivePath(String(section.id)).endsWith(`/${normalizedPath}`))) == null ? void 0 : _b2.id;
-    if (!sectionHref) return null;
-    const index = this.sections.findIndex((s) => s.id === sectionHref);
+    const item = (_a2 = this.manifestByNormalizedHref.get(normalizedPath)) != null ? _a2 : this.manifest.find((m) => normalizeArchivePath(m.href).endsWith(`/${normalizedPath}`));
+    const sectionHref = item == null ? void 0 : item.href;
+    const index = sectionHref !== void 0 ? (_b2 = this.sectionIndexById.get(sectionHref)) != null ? _b2 : -1 : (_c = this.sectionIndexByNormalizedId.get(normalizedPath)) != null ? _c : findSectionIndexByNormalizedSuffix(this.sections, normalizedPath);
     if (index < 0) return null;
     const anchor = hash ? (doc) => doc.getElementById(hash) : () => 0;
     return { index, anchor };
@@ -18074,6 +18374,7 @@ class CBZParser {
       label: filename,
       href: filename
     }));
+    const sectionIndexByHref = new Map(sections.map((section, index) => [String(section.id), index]));
     const book = {
       sections,
       toc,
@@ -18084,7 +18385,8 @@ class CBZParser {
         return loader.loadBlob(imageFiles[0]);
       },
       resolveHref: (href) => {
-        const index = sections.findIndex((s) => s.id === href);
+        var _a2;
+        const index = (_a2 = sectionIndexByHref.get(href)) != null ? _a2 : -1;
         return index >= 0 ? { index } : null;
       },
       destroy: () => {
@@ -20040,27 +20342,31 @@ class SectionProgress {
     __publicField(this, "sizePerLoc");
     __publicField(this, "sizeTotal");
     __publicField(this, "sectionFractions");
+    __publicField(this, "cumulativeSizes");
     this.sizes = sections.map((s) => s.linear !== "no" && s.size > 0 ? s.size : 0);
     this.sizePerLoc = sizePerLoc;
     this.sizeTotal = this.sizes.reduce((a, b) => a + b, 0);
+    this.cumulativeSizes = this.calcCumulativeSizes();
     this.sectionFractions = this.calcSectionFractions();
   }
-  calcSectionFractions() {
+  calcCumulativeSizes() {
     const results = [0];
     let sum = 0;
-    for (const size of this.sizes) {
-      results.push((sum += size) / this.sizeTotal);
-    }
+    for (const size of this.sizes) results.push(sum += size);
     return results;
+  }
+  calcSectionFractions() {
+    if (this.sizeTotal <= 0) return this.cumulativeSizes.map(() => 0);
+    return this.cumulativeSizes.map((size) => size / this.sizeTotal);
   }
   /**
    * Get progress info given section index and fraction within section.
    */
   getProgress(index, fractionInSection) {
-    var _a2;
+    var _a2, _b2;
     const { sizes, sizePerLoc, sizeTotal } = this;
     const sizeInSection = (_a2 = sizes[index]) != null ? _a2 : 0;
-    const sizeBefore = sizes.slice(0, index).reduce((a, b) => a + b, 0);
+    const sizeBefore = (_b2 = this.cumulativeSizes[index]) != null ? _b2 : 0;
     const size = sizeBefore + fractionInSection * sizeInSection;
     const remaining = sizeTotal - size;
     return {
@@ -20086,7 +20392,7 @@ class SectionProgress {
     if (fraction <= 0) return [0, 0];
     if (fraction >= 1) return [this.sizes.length - 1, 1];
     fraction = fraction + Number.EPSILON;
-    let index = this.sectionFractions.findIndex((x) => x > fraction) - 1;
+    let index = upperBound(this.sectionFractions, fraction) - 1;
     if (index < 0) return [0, 0];
     while (!this.sizes[index]) index++;
     const fractionInSection = (fraction - this.sectionFractions[index]) / (this.sizes[index] / this.sizeTotal);
@@ -20098,6 +20404,16 @@ class SectionProgress {
   getFractions() {
     return this.sectionFractions.map((x) => x + Number.EPSILON);
   }
+}
+function upperBound(values, target) {
+  let low = 0;
+  let high = values.length;
+  while (low < high) {
+    const mid = low + high >> 1;
+    if (values[mid] <= target) low = mid + 1;
+    else high = mid;
+  }
+  return low;
 }
 function getPluginPrefetchPageCount(book) {
   const value2 = book.translationPrefetchPageCount;
@@ -21197,7 +21513,9 @@ class ReaderSession {
     if (!this.book) return [];
     const items = (_b2 = (_a2 = options.items) != null ? _a2 : this.book.toc) != null ? _b2 : [];
     if (!items.length) return [];
-    const location = options.location === void 0 ? this.getLocation() : options.location;
+    const location = normalizeTOCViewLocation(
+      options.location === void 0 ? this.getLocation() : options.location
+    );
     const sectionFractions = this.getSectionFractions();
     const trialLimit = this.getTrialLimit();
     if (trialLimit) {
@@ -21294,21 +21612,19 @@ class ReaderSession {
     if (loc.tocItem !== void 0) return loc.tocItem;
     let activeItem = null;
     let maxIndex = -1;
+    const sectionLookup = createSectionIndexLookup(this.book);
     const checkItem = (item) => {
-      if (this.book.splitTOCHref) {
-        try {
-          const parts = this.book.splitTOCHref(item.href);
-          if (parts && Array.isArray(parts)) {
-            const [id] = parts;
-            const index = this.book.sections.findIndex((s) => s.id === id);
-            if (index >= 0 && index <= loc.index && index >= maxIndex) {
-              maxIndex = index;
-              activeItem = item;
-            }
-          }
-        } catch (e) {
-          console.error("Error in splitTOCHref:", e);
+      try {
+        const index = resolveTOCSectionIndex(this.book, item.href, sectionLookup);
+        if (index >= 0 && index < loc.index && index >= maxIndex) {
+          maxIndex = index;
+          activeItem = item;
+        } else if (index === loc.index && maxIndex < loc.index) {
+          maxIndex = index;
+          activeItem = item;
         }
+      } catch (e) {
+        console.error("Error resolving TOC item:", e);
       }
       if (item.subitems) {
         for (const sub of item.subitems) checkItem(sub);
@@ -21434,12 +21750,13 @@ function flattenTOC(items) {
 }
 function flattenTOCViewItems(book, items, sectionFractions, activeItem) {
   const result = [];
+  const sectionLookup = createSectionIndexLookup(book);
   let index = 0;
   const walk2 = (tocItems, depth, parentHrefs) => {
     var _a2, _b2;
     for (const item of tocItems) {
       const itemIndex = index++;
-      const sectionIndex = resolveTOCSectionIndex(book, item.href);
+      const sectionIndex = resolveTOCSectionIndex(book, item.href, sectionLookup);
       const sectionFraction = sectionIndex >= 0 ? (_a2 = sectionFractions[sectionIndex]) != null ? _a2 : 0 : 0;
       const hasChildren = !!((_b2 = item.subitems) == null ? void 0 : _b2.length);
       result.push({
@@ -21480,6 +21797,10 @@ function normalizeNavigationHref$1(href) {
 function normalizeTOCHref$1(href) {
   return (href || "").trim();
 }
+function normalizeTOCViewLocation(location) {
+  if ((location == null ? void 0 : location.tocItem) !== null) return location;
+  return { ...location, tocItem: void 0 };
+}
 function normalizeBookPath$1(href) {
   const path = normalizeNavigationHref$1(href).replace(/\\/g, "/").replace(/^\/+/, "");
   const parts = [];
@@ -21490,23 +21811,48 @@ function normalizeBookPath$1(href) {
   }
   return parts.join("/");
 }
-function resolveTOCSectionIndex(book, href) {
+function createSectionIndexLookup(book) {
+  var _a2;
+  const byId = /* @__PURE__ */ new Map();
+  const byPath = /* @__PURE__ */ new Map();
+  for (const [index, section] of book.sections.entries()) {
+    byId.set(section.id, index);
+    byPath.set(normalizeBookPath$1(String((_a2 = section.id) != null ? _a2 : "")), index);
+  }
+  return { byId, byPath };
+}
+function findSectionIndex(lookup, id) {
+  const exact = lookup.byId.get(id);
+  if (exact !== void 0) return exact;
+  const normalized = normalizeBookPath$1(String(id));
+  if (!normalized) return -1;
+  const byPath = lookup.byPath.get(normalized);
+  if (byPath !== void 0) return byPath;
+  const suffix = `/${normalized}`;
+  for (const [sectionPath, index] of lookup.byPath) {
+    if (sectionPath.endsWith(suffix)) return index;
+  }
+  return -1;
+}
+function resolveTOCSectionIndex(book, href, sectionLookup = createSectionIndexLookup(book)) {
   var _a2, _b2;
   const resolved = (_a2 = book.resolveHref) == null ? void 0 : _a2.call(book, href);
   if (typeof (resolved == null ? void 0 : resolved.index) === "number" && resolved.index >= 0) return resolved.index;
   const parts = (_b2 = book.splitTOCHref) == null ? void 0 : _b2.call(book, href);
   if (parts && Array.isArray(parts)) {
     const [id] = parts;
-    const sectionIndex = book.sections.findIndex((section) => section.id === id);
-    if (sectionIndex >= 0) return sectionIndex;
+    const sectionIndex2 = findSectionIndex(sectionLookup, id);
+    if (sectionIndex2 >= 0) return sectionIndex2;
   }
   const normalizedHref = normalizeBookPath$1(href);
   if (!normalizedHref) return -1;
-  return book.sections.findIndex((section) => {
-    var _a3;
-    const sectionId = normalizeBookPath$1(String((_a3 = section.id) != null ? _a3 : ""));
-    return sectionId === normalizedHref || sectionId.endsWith(`/${normalizedHref}`);
-  });
+  const sectionIndex = sectionLookup.byPath.get(normalizedHref);
+  if (sectionIndex !== void 0) return sectionIndex;
+  const suffix = `/${normalizedHref}`;
+  for (const [sectionPath, index] of sectionLookup.byPath) {
+    if (sectionPath.endsWith(suffix)) return index;
+  }
+  return -1;
 }
 var lib = {};
 var conventions = {};

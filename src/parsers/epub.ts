@@ -22,7 +22,7 @@ import { normalizeLanguage, normalizeTitle, normalizePublisher } from '../core/m
 import { parseHTML, createSectionDocument } from '../core/document'
 import { extractDocumentBlocks, extractDocumentSegments } from '../core/pretext'
 import { parseSimpleClassRules, mergeStyleDeclarations, extractImportURLs, type SimpleClassRule } from '../core/css'
-import { isBlobLike } from '../core/binary'
+import { getInputName, isBlobLike } from '../core/binary'
 import { debugRebook, isRebookDebugEnabled } from '../core/debug'
 
 // ============================================================================
@@ -121,8 +121,55 @@ const normalizeArchivePath = (path: string): string => {
     return parts.join('/')
 }
 
+function findSectionIndexByNormalizedSuffix(sections: readonly Section[], normalizedPath: string): number {
+    if (!normalizedPath) return -1
+    const suffix = `/${normalizedPath}`
+    return sections.findIndex(section => normalizeArchivePath(String(section.id)).endsWith(suffix))
+}
+
+interface ArchiveEntryLookup {
+    byPath: Map<string, { filename: string; size: number }>
+    entries: Array<{ filename: string; normalized: string; size: number }>
+}
+
+function createArchiveEntryLookup(entries: readonly { filename: string; size: number }[]): ArchiveEntryLookup {
+    const byPath = new Map<string, { filename: string; size: number }>()
+    const normalizedEntries = entries.map(entry => ({
+        filename: entry.filename,
+        normalized: normalizeArchivePath(entry.filename),
+        size: entry.size,
+    }))
+    for (const entry of normalizedEntries) {
+        if (entry.normalized && !byPath.has(entry.normalized)) {
+            byPath.set(entry.normalized, { filename: entry.filename, size: entry.size })
+        }
+    }
+    return { byPath, entries: normalizedEntries }
+}
+
+function findArchiveEntryHref(lookup: ArchiveEntryLookup, normalizedPath: string): string | null {
+    if (!normalizedPath) return null
+
+    const exact = lookup.byPath.get(normalizedPath)
+    if (exact) return exact.filename
+
+    const suffix = `/${normalizedPath}`
+    const match = lookup.entries.find(entry => entry.normalized.endsWith(suffix))
+    return match?.filename ?? null
+}
+
 function debugEPUB(message: string, details?: Record<string, unknown>): void {
     debugRebook('epub', message, details)
+}
+
+function nowMs(): number {
+    return typeof performance !== 'undefined' && performance.now
+        ? performance.now()
+        : Date.now()
+}
+
+function flattenTOCForTiming(items?: readonly TOCItem[] | null): TOCItem[] {
+    return items?.flatMap(item => item.subitems?.length ? [item, ...flattenTOCForTiming(item.subitems)] : [item]) ?? []
 }
 
 /** Check if a URI is external */
@@ -468,38 +515,164 @@ const parseNCX = (doc: XMLDocument, resolve: (url: string) => string): {
     toc: TOCItem[] | null
     pageList: TOCItem[] | null
 } => {
-    const { $, $$ } = childGetter(doc, NS.NCX)
     const resolveHref = (href: string | null): string | null =>
         href ? decodeURI(resolve(href)) : null
 
     const parseItem = (el: XMLElement): TOCItem => {
-        const $label = $(el, 'navLabel')
-        const $content = $(el, 'content')
+        let $label: XMLElement | null = null
+        let $content: XMLElement | null = null
+        const childItems: XMLElement[] = []
+        for (const child of Array.from(el.children)) {
+            if (child.localName === 'navLabel') $label = child
+            else if (child.localName === 'content') $content = child
+            else if (child.localName === 'navPoint') childItems.push(child)
+        }
         const label = getElementText($label)
         const href = resolveHref($content?.getAttribute('src') ?? null)
         if (el.localName === 'navPoint') {
-            const els = $$(el, 'navPoint')
             return {
                 label,
                 href: href ?? '',
-                subitems: els.length ? els.map(parseItem) : undefined,
+                subitems: childItems.length ? childItems.map(parseItem) : undefined,
             }
         }
         return { label, href: href ?? '' }
     }
 
-    const parseList = (el: XMLElement, itemName: string): TOCItem[] =>
-        $$(el, itemName).map(parseItem)
-
     const getSingle = (container: string, itemName: string): TOCItem[] | null => {
-        const $container = $(doc.documentElement, container)
-        return $container ? parseList($container, itemName) : null
+        let $container: XMLElement | null = null
+        for (const child of Array.from(doc.documentElement.children)) {
+            if (child.localName === container) {
+                $container = child
+                break
+            }
+        }
+        if (!$container) return null
+        const items: TOCItem[] = []
+        for (const child of Array.from($container.children)) {
+            if (child.localName === itemName) items.push(parseItem(child))
+        }
+        return items
     }
 
     return {
         toc: getSingle('navMap', 'navPoint'),
         pageList: getSingle('pageList', 'pageTarget'),
     }
+}
+
+const parseNCXText = (xml: string, resolve: (url: string) => string): {
+    toc: TOCItem[] | null
+    pageList: TOCItem[] | null
+} => ({
+    toc: parseNCXTextList(xml, 'navMap', 'navPoint', resolve),
+    pageList: parseNCXTextList(xml, 'pageList', 'pageTarget', resolve),
+})
+
+function parseNCXTextList(
+    xml: string,
+    containerName: string,
+    itemName: string,
+    resolve: (url: string) => string,
+): TOCItem[] | null {
+    const container = getXMLContainerContent(xml, containerName)
+    if (!container) return null
+
+    type MutableTOCItem = {
+        label: string
+        href: string
+        subitems?: MutableTOCItem[]
+    }
+    const rootItems: MutableTOCItem[] = []
+    const stack: MutableTOCItem[] = []
+    const tagPattern = /<[^>]+>/g
+    let textStart: number | null = null
+    let match: RegExpExecArray | null
+
+    while ((match = tagPattern.exec(container))) {
+        const tag = match[0]
+        if (tag.startsWith('<!--') || tag.startsWith('<?') || tag.startsWith('<!')) continue
+
+        const closing = /^<\s*\//.test(tag)
+        const name = getXMLTagName(tag)
+        if (!name) continue
+
+        if (!closing && name === itemName) {
+            const item: MutableTOCItem = { label: '', href: '' }
+            const parent = stack[stack.length - 1]
+            if (parent) {
+                parent.subitems ??= []
+                parent.subitems.push(item)
+            } else {
+                rootItems.push(item)
+            }
+            if (!/\/\s*>$/.test(tag)) stack.push(item)
+            continue
+        }
+
+        if (closing && name === itemName) {
+            const item = stack.pop()
+            if (item?.subitems && item.subitems.length === 0) delete item.subitems
+            continue
+        }
+
+        const current = stack[stack.length - 1]
+        if (!current) continue
+
+        if (!closing && name === 'content') {
+            const src = getXMLAttribute(tag, 'src')
+            current.href = src ? decodeURI(resolve(decodeXMLText(src))) : ''
+            continue
+        }
+
+        if (!closing && name === 'text') {
+            textStart = tagPattern.lastIndex
+            continue
+        }
+
+        if (closing && name === 'text' && textStart != null) {
+            current.label += decodeXMLText(container.slice(textStart, match.index)).trim()
+            textStart = null
+        }
+    }
+
+    return rootItems.length ? rootItems : null
+}
+
+function getXMLContainerContent(xml: string, name: string): string | null {
+    const open = new RegExp(`<[^>]*:?${escapeRegExp(name)}\\b[^>]*>`, 'i').exec(xml)
+    if (!open) return null
+    const closePattern = new RegExp(`</[^>]*:?${escapeRegExp(name)}\\s*>`, 'i')
+    const close = closePattern.exec(xml.slice(open.index + open[0].length))
+    if (!close) return null
+    return xml.slice(open.index + open[0].length, open.index + open[0].length + close.index)
+}
+
+function getXMLTagName(tag: string): string | null {
+    const match = tag.match(/^<\s*\/?\s*([A-Za-z_][\w:.-]*)/)
+    if (!match) return null
+    return match[1].split(':').pop() ?? null
+}
+
+function getXMLAttribute(tag: string, name: string): string | null {
+    const match = new RegExp(`\\b${escapeRegExp(name)}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(tag)
+    return match?.[1] ?? match?.[2] ?? null
+}
+
+function decodeXMLText(value: string): string {
+    return value
+        .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+        .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+        .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number.parseInt(dec, 10)))
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&amp;/g, '&')
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 // ============================================================================
@@ -522,7 +695,9 @@ class ResourceLoader {
     private cache = new Map<string, string>()
     private refCount = new Map<string, number>()
     private manifest: ManifestItem[]
-    private entries: Map<string, { filename: string; size: number }>
+    private manifestByNormalizedHref: Map<string, ManifestItem>
+    private normalizedManifest: Array<{ normalized: string; item: ManifestItem }>
+    private entries: ArchiveEntryLookup
 
     constructor(
         private loadText: (name: string) => Promise<string | null>,
@@ -533,7 +708,17 @@ class ResourceLoader {
         private urlFactory: URLFactory,
     ) {
         this.manifest = manifest
-        this.entries = new Map(entries.map(e => [e.filename, e]))
+        this.manifestByNormalizedHref = new Map()
+        this.normalizedManifest = manifest.map(item => ({
+            normalized: normalizeArchivePath(item.href),
+            item,
+        }))
+        for (const item of this.normalizedManifest) {
+            if (item.normalized && !this.manifestByNormalizedHref.has(item.normalized)) {
+                this.manifestByNormalizedHref.set(item.normalized, item.item)
+            }
+        }
+        this.entries = createArchiveEntryLookup(entries)
     }
 
     private async createURL(href: string, data: string | ArrayBuffer, type: string): Promise<string> {
@@ -710,7 +895,7 @@ class ResourceLoader {
                 resolved: href,
                 normalized: normalizeArchivePath(href),
                 manifestSample: this.manifest.slice(0, 8).map(item => item.href),
-                entrySample: Array.from(this.entries.keys()).slice(0, 8),
+                entrySample: this.entries.entries.slice(0, 8).map(entry => entry.filename),
             })
             return url
         }
@@ -719,30 +904,25 @@ class ResourceLoader {
 
     private findResourceItem(href: string): ManifestItem | undefined {
         const normalizedHref = normalizeArchivePath(href)
-        const manifestItem = this.manifest.find(m => normalizeArchivePath(m.href) === normalizedHref)
-            ?? this.manifest.find(m => normalizeArchivePath(m.href).endsWith(`/${normalizedHref}`))
+        const manifestItem = this.manifestByNormalizedHref.get(normalizedHref)
+            ?? this.normalizedManifest.find(entry => entry.normalized.endsWith(`/${normalizedHref}`))?.item
         if (manifestItem) return manifestItem
 
-        const exactEntry = this.entries.get(normalizedHref)
-        const suffixEntry = exactEntry
-            ? undefined
-            : Array.from(this.entries.values()).find(entry =>
-                normalizeArchivePath(entry.filename).endsWith(`/${normalizedHref}`))
-        const entry = exactEntry ?? suffixEntry
-        if (!entry) return undefined
+        const entryHref = findArchiveEntryHref(this.entries, normalizedHref)
+        if (!entryHref) return undefined
 
-        const entryHref = normalizeArchivePath(entry.filename)
-        if (entryHref !== normalizedHref) {
+        const normalizedEntryHref = normalizeArchivePath(entryHref)
+        if (normalizedEntryHref !== normalizedHref) {
             debugEPUB('resource entry matched by suffix', {
                 requested: href,
                 normalized: normalizedHref,
-                matched: entryHref,
+                matched: normalizedEntryHref,
             })
         }
         return {
-            id: entryHref,
+            id: normalizedEntryHref,
             href: entryHref,
-            mediaType: getMimeTypeFromPath(entryHref),
+            mediaType: getMimeTypeFromPath(normalizedEntryHref),
         }
     }
 
@@ -849,7 +1029,9 @@ export class EPUBParser implements Parser {
     readonly priority = 10
 
     async canParse(input: ParserInput): Promise<boolean> {
-        if (typeof input === 'string') return input.endsWith('.epub')
+        if (typeof input === 'string') return input.toLowerCase().endsWith('.epub')
+        const inputName = getInputName(input)
+        if (inputName?.toLowerCase().endsWith('.epub')) return true
         if (isBlobLike(input) || input instanceof ArrayBuffer) {
             if (!(await isZipFile(input))) return false
             // Check if it contains META-INF/container.xml
@@ -864,17 +1046,34 @@ export class EPUBParser implements Parser {
     }
 
     async parse(input: ParserInput, options?: ParserOptions): Promise<Book> {
+        const parseStarted = nowMs()
+        let lastTiming = parseStarted
+        const markTiming = (stage: string, details?: Record<string, unknown>) => {
+            if (!isRebookDebugEnabled()) return
+            const current = nowMs()
+            debugEPUB('parse timing', {
+                stage,
+                ms: Math.round((current - lastTiming) * 10) / 10,
+                totalMs: Math.round((current - parseStarted) * 10) / 10,
+                ...details,
+            })
+            lastTiming = current
+        }
         let loader: Loader
 
         if (isBlobLike(input)) {
             loader = await createZipLoader(input)
+            markTiming('zip-loader', { input: 'blob', entries: loader.entries.length })
         } else if (input instanceof ArrayBuffer) {
             loader = await createZipLoader(input)
+            markTiming('zip-loader', { input: 'arraybuffer', entries: loader.entries.length })
         } else if (typeof input === 'string') {
             // Fetch from URL (browser environment)
             const res = await fetch(input)
             const buffer = await res.arrayBuffer()
+            markTiming('fetch', { input: 'url', bytes: buffer.byteLength })
             loader = await createZipLoader(buffer)
+            markTiming('zip-loader', { input: 'url', entries: loader.entries.length })
         } else {
             throw new UnsupportedInputError('Unsupported input type for EPUB parser')
         }
@@ -884,7 +1083,12 @@ export class EPUBParser implements Parser {
         }
 
         const epub = new EPUBBook(loader, options.domAdapter, options.urlFactory)
-        return epub.init()
+        const book = await epub.init()
+        markTiming('complete', {
+            sections: book.sections.length,
+            toc: flattenTOCForTiming(book.toc).length,
+        })
+        return book
     }
 }
 
@@ -899,7 +1103,11 @@ class EPUBBook implements Book {
     private resourceLoader!: ResourceLoader
     private manifest: ManifestItem[] = []
     private manifestById = new Map<string, ManifestItem>()
+    private manifestByNormalizedHref = new Map<string, ManifestItem>()
     private spine: Array<{ idref: string; linear?: string; properties?: string[] }> = []
+    private sectionIndexById = new Map<string | number, number>()
+    private sectionIndexByNormalizedId = new Map<string, number>()
+    private archiveEntries: ArchiveEntryLookup
     private opfPath = ''
 
     sections: Section[] = []
@@ -914,6 +1122,7 @@ class EPUBBook implements Book {
         this.loader = loader
         this.domAdapter = domAdapter
         this.urlFactory = urlFactory
+        this.archiveEntries = createArchiveEntryLookup(loader.entries)
     }
 
     private async loadXML(uri: string): Promise<XMLDocument | null> {
@@ -927,9 +1136,24 @@ class EPUBBook implements Book {
     }
 
     async init(): Promise<this> {
+        const initStarted = nowMs()
+        let lastTiming = initStarted
+        const markTiming = (stage: string, details?: Record<string, unknown>) => {
+            if (!isRebookDebugEnabled()) return
+            const current = nowMs()
+            debugEPUB('init timing', {
+                stage,
+                ms: Math.round((current - lastTiming) * 10) / 10,
+                totalMs: Math.round((current - initStarted) * 10) / 10,
+                ...details,
+            })
+            lastTiming = current
+        }
+
         // 1. Load container.xml to find OPF
         const $container = await this.loadXML('META-INF/container.xml')
         if (!$container) throw new CorruptedFileError('Failed to load container.xml', 'epub')
+        markTiming('container')
 
         const rootfiles = Array.from(
             $container.getElementsByTagNameNS(NS.CONTAINER, 'rootfile')
@@ -945,6 +1169,7 @@ class EPUBBook implements Book {
         // 2. Load OPF
         const opf = await this.loadXML(this.opfPath)
         if (!opf) throw new CorruptedFileError('Failed to load OPF', 'epub')
+        markTiming('opf', { opfPath: this.opfPath })
 
         // 3. Parse manifest and spine
         const { $, $$ } = childGetter(opf, NS.OPF)
@@ -965,6 +1190,7 @@ class EPUBBook implements Book {
                     }
                 })
             this.manifestById = new Map(this.manifest.map(m => [m.id, m]))
+            this.manifestByNormalizedHref = new Map(this.manifest.map(m => [normalizeArchivePath(m.href), m]))
         }
 
         if ($spine) {
@@ -977,6 +1203,10 @@ class EPUBBook implements Book {
                 }))
             this.dir = ($spine.getAttribute('page-progression-direction') as 'ltr' | 'rtl') ?? undefined
         }
+        markTiming('manifest-spine', {
+            manifest: this.manifest.length,
+            spine: this.spine.length,
+        })
 
         // 4. Create resource loader
         this.resourceLoader = new ResourceLoader(
@@ -987,6 +1217,7 @@ class EPUBBook implements Book {
             this.domAdapter,
             this.urlFactory,
         )
+        markTiming('resource-loader')
 
         // 5. Create sections
         this.sections = this.spine.map((spineItem, index): Section | null => {
@@ -1022,6 +1253,9 @@ class EPUBBook implements Book {
                 resolveHref: (href: string) => resolveURL(href, item.href),
             }
         }).filter((s): s is Section => s !== null)
+        this.sectionIndexById = new Map(this.sections.map((section, index) => [section.id, index]))
+        this.sectionIndexByNormalizedId = new Map(this.sections.map((section, index) => [normalizeArchivePath(String(section.id)), index]))
+        markTiming('sections', { sections: this.sections.length })
 
         // 6. Parse navigation
         const navItem = this.manifest.find(m => m.properties?.includes('nav'))
@@ -1041,26 +1275,46 @@ class EPUBBook implements Book {
                 console.warn('Failed to parse navigation:', e)
             }
         }
+        markTiming('nav', {
+            toc: flattenTOCForTiming(this.toc).length,
+            pageList: flattenTOCForTiming(this.pageList).length,
+        })
 
         // Fallback to NCX if no TOC
         if (!this.toc && ncxItem) {
             try {
-                const ncxDoc = await this.loadXML(ncxItem.href)
-                if (ncxDoc) {
-                    const resolve = (url: string) => resolveURL(url, ncxItem.href)
-                    const ncx = parseNCX(ncxDoc, resolve)
+                const resolve = (url: string) => resolveURL(url, ncxItem.href)
+                const ncxText = await this.loader.loadText(ncxItem.href)
+                const ncx = ncxText ? parseNCXText(ncxText, resolve) : { toc: null, pageList: null }
+                if (ncx.toc || ncx.pageList) {
                     this.toc = this.normalizeTOCItems(ncx.toc ?? undefined)
                     this.pageList = this.normalizeTOCItems(ncx.pageList ?? undefined)
+                } else {
+                    const ncxDoc = await this.loadXML(ncxItem.href)
+                    if (ncxDoc) {
+                        const parsed = parseNCX(ncxDoc, resolve)
+                        this.toc = this.normalizeTOCItems(parsed.toc ?? undefined)
+                        this.pageList = this.normalizeTOCItems(parsed.pageList ?? undefined)
+                    }
                 }
             } catch (e) {
                 console.warn('Failed to parse NCX:', e)
             }
         }
+        markTiming('ncx', {
+            toc: flattenTOCForTiming(this.toc).length,
+            pageList: flattenTOCForTiming(this.pageList).length,
+        })
 
         // 7. Parse metadata
         const { metadata, rendition } = parseMetadata(opf)
         this.metadata = metadata
         this.rendition = rendition
+        markTiming('metadata')
+        markTiming('complete', {
+            sections: this.sections.length,
+            toc: flattenTOCForTiming(this.toc).length,
+        })
 
         return this
     }
@@ -1080,15 +1334,7 @@ class EPUBBook implements Book {
 
     private findExistingEntryHref(href: string): string | null {
         const normalized = normalizeArchivePath(href)
-        if (!normalized) return null
-        if (this.loader.getSize(normalized) > 0) return normalized
-
-        const exact = this.loader.entries.find(entry => normalizeArchivePath(entry.filename) === normalized)
-        if (exact) return exact.filename
-
-        const suffix = `/${normalized}`
-        const match = this.loader.entries.find(entry => normalizeArchivePath(entry.filename).endsWith(suffix))
-        return match?.filename ?? null
+        return findArchiveEntryHref(this.archiveEntries, normalized)
     }
 
     private normalizeNavigationHref(href: string): string {
@@ -1109,12 +1355,13 @@ class EPUBBook implements Book {
     resolveHref(href: string): ResolvedNavigation | null {
         const [path, hash] = href.split('#')
         const normalizedPath = normalizeArchivePath(path)
-        const item = this.manifest.find(m => normalizeArchivePath(m.href) === normalizedPath)
+        const item = this.manifestByNormalizedHref.get(normalizedPath)
             ?? this.manifest.find(m => normalizeArchivePath(m.href).endsWith(`/${normalizedPath}`))
         const sectionHref = item?.href
-            ?? this.sections.find(section => normalizeArchivePath(String(section.id)).endsWith(`/${normalizedPath}`))?.id
-        if (!sectionHref) return null
-        const index = this.sections.findIndex(s => s.id === sectionHref)
+        const index = sectionHref !== undefined
+            ? this.sectionIndexById.get(sectionHref) ?? -1
+            : this.sectionIndexByNormalizedId.get(normalizedPath)
+                ?? findSectionIndexByNormalizedSuffix(this.sections, normalizedPath)
         if (index < 0) return null
         const anchor = hash
             ? (doc: unknown) => (doc as XMLDocument).getElementById(hash)

@@ -251,6 +251,7 @@ export class CBZParser implements Parser {
             label: filename,
             href: filename,
         }))
+        const sectionIndexByHref = new Map(sections.map((section, index) => [String(section.id), index]))
 
         // Build Book
         const book: Book = {
@@ -263,7 +264,7 @@ export class CBZParser implements Parser {
                 return loader.loadBlob(imageFiles[0])
             },
             resolveHref: (href: string) => {
-                const index = sections.findIndex(s => s.id === href)
+                const index = sectionIndexByHref.get(href) ?? -1
                 return index >= 0 ? { index } : null
             },
             destroy: () => {

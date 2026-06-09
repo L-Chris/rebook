@@ -6,6 +6,7 @@
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
+import { debugRebook } from '../../core/debug'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
@@ -171,6 +172,15 @@ export class BrowserRenderer implements Renderer {
         this.sections = book.sections
         this.progress = new SectionProgress(this.sections)
         this.tocPositions = []
+        this.pendingTOCItem = null
+        this.currentIndex = -1
+        this.pageIndex = 0
+        this.lastLocation = null
+        this.prepared = null
+        this.lines = []
+        this.content.innerHTML = ''
+        this.spacer.style.height = '100%'
+        this.scroller.scrollTop = 0
         this.prefetchPageCount = getPluginPrefetchPageCount(book)
     }
 
@@ -767,14 +777,29 @@ export class BrowserRenderer implements Renderer {
             this.getSourceViewportHeight(),
             0,
         )
+        const tocItem = this.pendingTOCItem ?? this.getCurrentTOCItem()
+        const totalFraction = this.progress?.getProgress(this.currentIndex, fraction).fraction
         const event: RelocateEvent = {
             range,
             index: this.currentIndex,
             fraction,
-            totalFraction: this.progress?.getProgress(this.currentIndex, fraction).fraction,
-            tocItem: this.pendingTOCItem ?? this.getCurrentTOCItem(),
+            totalFraction,
+            tocItem,
             reason,
         }
+        debugRebook('browser', 'relocate', {
+            reason,
+            index: this.currentIndex,
+            pageIndex: this.layoutMode === 'paginated' ? this.pageIndex : undefined,
+            pageCount: this.layoutMode === 'paginated' ? this.columnLayout.pageCount : undefined,
+            fraction,
+            totalFraction,
+            tocLabel: tocItem?.label,
+            tocHref: tocItem?.href,
+            tocPositions: this.tocPositions.length,
+            sourceTop: this.getSourceScrollTop(),
+            sourceHeight: this.getSourceViewportHeight(),
+        })
         this.lastLocation = event
         this.emit('relocate', event)
         this.pendingTOCItem = null

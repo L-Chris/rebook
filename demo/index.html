@@ -378,6 +378,71 @@
             color: #888;
             margin: -4px 0 12px 104px;
         }
+
+        .debug-panel {
+            flex: 0 0 380px;
+            width: 380px;
+            min-width: 0;
+            background: #fff;
+            border-left: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            transition: flex-basis 0.3s ease, width 0.3s ease, border-color 0.3s ease;
+        }
+
+        .debug-panel.hidden {
+            flex-basis: 0;
+            width: 0;
+            border-left-color: transparent;
+        }
+
+        .debug-panel-inner {
+            width: 380px;
+            min-width: 380px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .debug-panel-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            border-bottom: 1px solid #e5e5e5;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .debug-panel-header button {
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+
+        .debug-panel-title {
+            margin-right: auto;
+        }
+
+        .debug-log {
+            overflow: auto;
+            padding: 8px 10px;
+            font-size: 11px;
+            line-height: 1.45;
+            color: #333;
+            white-space: pre-wrap;
+        }
+
+        .debug-entry {
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .debug-entry:last-child {
+            border-bottom: 0;
+        }
     </style>
 </head>
 <body>
@@ -391,6 +456,7 @@
             <button id="btn-translate" title="Translation">Translate</button>
             <button id="btn-tts" title="Text to speech">TTS</button>
             <button id="btn-settings" title="Settings">⚙</button>
+            <button id="btn-debug-sidebar" title="Debug">Debug</button>
         </div>
     </header>
 
@@ -438,6 +504,10 @@
         <div class="setting-row">
             <label>Hyphenate</label>
             <input type="checkbox" id="hyphenate-check" checked>
+        </div>
+        <div class="setting-row">
+            <label>Debug</label>
+            <input type="checkbox" id="debug-check" checked>
         </div>
         <div class="setting-row">
             <label>Trial</label>
@@ -538,6 +608,18 @@
                 </div>
             </div>
         </div>
+
+        <aside class="debug-panel" id="debug-panel">
+            <div class="debug-panel-inner">
+                <div class="debug-panel-header">
+                    <span class="debug-panel-title">Debug</span>
+                    <button id="btn-debug-copy" type="button">Copy</button>
+                    <button id="btn-debug-clear" type="button">Clear</button>
+                    <button id="btn-debug-close" type="button">Close</button>
+                </div>
+                <div class="debug-log" id="debug-log"></div>
+            </div>
+        </aside>
     </main>
 
     <!-- Footer -->
@@ -560,6 +642,7 @@
             UnsupportedFormatError,
             AdapterRequiredError,
             exportFirstSections,
+            setRebookDebug,
         } from '../src/index.ts'
         import { epub } from '../src/parsers/epub.ts'
         import { cbz } from '../src/parsers/cbz.ts'
@@ -590,6 +673,7 @@
         const exportSectionCount = document.getElementById('export-section-count')
         const btnSidebar = document.getElementById('btn-sidebar')
         const btnSettings = document.getElementById('btn-settings')
+        const btnDebugSidebar = document.getElementById('btn-debug-sidebar')
         const btnTranslate = document.getElementById('btn-translate')
         const btnTTS = document.getElementById('btn-tts')
         const sidebar = document.getElementById('sidebar')
@@ -603,6 +687,7 @@
         const ttsPanel = document.getElementById('tts-panel')
         const themeSelect = document.getElementById('theme-select')
         const hyphenateCheck = document.getElementById('hyphenate-check')
+        const debugCheck = document.getElementById('debug-check')
         const trialCheck = document.getElementById('trial-check')
         const trialPagesRow = document.getElementById('trial-pages-row')
         const trialPagesInput = document.getElementById('trial-pages-input')
@@ -630,14 +715,23 @@
         const progressBar = document.getElementById('progress-bar')
         const progressFill = document.getElementById('progress-fill')
         const progressText = document.getElementById('progress-text')
+        const debugPanel = document.getElementById('debug-panel')
+        const btnDebugCopy = document.getElementById('btn-debug-copy')
+        const btnDebugClear = document.getElementById('btn-debug-clear')
+        const btnDebugClose = document.getElementById('btn-debug-close')
+        const debugLog = document.getElementById('debug-log')
+
+        setRebookDebug(true)
 
         const CONFIG_KEY = 'rebook-demo-config'
+        const MAX_DEBUG_ENTRIES = 160
         const defaultConfig = {
             layout: 'paginated',
             spread: '2',
             fontSize: '16px',
             theme: 'light',
             hyphenate: true,
+            debug: true,
             trial: false,
             trialPages: '20',
             exportSectionCount: '3',
@@ -660,8 +754,11 @@
         let currentFile = null
         let currentBook = null
         let activeTOCHref = null
+        let activeTOCEl = null
+        let tocElementsByHref = new Map()
         let reader = null
         let refreshTimer = null
+        let debugEntries = []
         const ttsPlayer = createBrowserTTSAudioPlayer()
         let ttsStopRequested = false
         let ttsAbortController = null
@@ -707,6 +804,8 @@
             fontSizeSelect.value = config.fontSize
             themeSelect.value = config.theme
             hyphenateCheck.checked = config.hyphenate
+            debugCheck.checked = true
+            setDebugEnabled(debugCheck.checked)
             trialCheck.checked = !!config.trial
             trialPagesInput.value = config.trialPages ?? defaultConfig.trialPages
             exportSectionCount.value = config.exportSectionCount
@@ -728,6 +827,89 @@
             updateTTSFields()
             updateTrialFields()
         }
+
+        const setDebugEnabled = (enabled) => {
+            debugPanel.classList.toggle('hidden', !enabled)
+            btnDebugSidebar.classList.toggle('primary', enabled)
+            setRebookDebug(enabled)
+        }
+
+        const debugDemo = (label, payload = {}) => {
+            if (!debugCheck.checked) return
+            appendDebugEntry(label, payload)
+            console.log(`[demo] ${label}`, payload)
+        }
+
+        const safeStringify = (value) => {
+            try {
+                return JSON.stringify(value, null, 2)
+            } catch {
+                return String(value)
+            }
+        }
+
+        const appendDebugEntry = (label, payload = {}) => {
+            if (!debugCheck.checked) return
+            const entry = document.createElement('div')
+            entry.className = 'debug-entry'
+            const time = new Date().toLocaleTimeString()
+            const text = `[${time}] ${label}\n${safeStringify(payload)}`
+            entry.textContent = text
+            debugEntries.unshift(text)
+            debugLog.prepend(entry)
+            while (debugEntries.length > MAX_DEBUG_ENTRIES) debugEntries.pop()
+            while (debugLog.children.length > debugEntries.length) {
+                debugLog.lastElementChild?.remove()
+            }
+        }
+
+        const copyDebugEntries = async () => {
+            const text = debugEntries.slice().reverse().join('\n\n')
+            try {
+                await navigator.clipboard.writeText(text)
+                btnDebugCopy.textContent = 'Copied'
+                setTimeout(() => { btnDebugCopy.textContent = 'Copy' }, 1200)
+            } catch {
+                const textarea = document.createElement('textarea')
+                textarea.value = text
+                textarea.style.position = 'fixed'
+                textarea.style.left = '-9999px'
+                document.body.appendChild(textarea)
+                textarea.select()
+                document.execCommand('copy')
+                textarea.remove()
+                btnDebugCopy.textContent = 'Copied'
+                setTimeout(() => { btnDebugCopy.textContent = 'Copy' }, 1200)
+            }
+        }
+
+        const originalConsoleLog = console.log.bind(console)
+        console.log = (...args) => {
+            originalConsoleLog(...args)
+            const [label, payload] = args
+            if (typeof label === 'string' && label.startsWith('[rebook:')) {
+                appendDebugEntry(label, payload ?? {})
+            }
+        }
+
+        debugCheck.addEventListener('change', () => {
+            setDebugEnabled(debugCheck.checked)
+        })
+        btnDebugSidebar.addEventListener('click', () => {
+            debugCheck.checked = !debugCheck.checked
+            setDebugEnabled(debugCheck.checked)
+        })
+        btnDebugClose.addEventListener('click', () => {
+            debugCheck.checked = false
+            setDebugEnabled(false)
+        })
+        btnDebugCopy.addEventListener('click', () => {
+            void copyDebugEntries()
+        })
+        btnDebugClear.addEventListener('click', () => {
+            debugEntries = []
+            debugLog.innerHTML = ''
+        })
 
         const updateTranslationFields = () => {
             translationFields.style.display = translateCheck.checked ? 'block' : 'none'
@@ -788,6 +970,11 @@
         }
 
         applyConfig(loadConfig())
+        debugDemo('debug ready', {
+            debugEnabled: debugCheck.checked,
+            panelHidden: debugPanel.classList.contains('hidden'),
+            url: location.href,
+        })
 
         const getThemeStyles = () => ({
             light: { color: '#000', background: '#fff' },
@@ -934,10 +1121,15 @@
                 const li = document.createElement('li')
                 
                 const a = document.createElement('a')
-                a.className = `toc-item${item.disabled ? ' disabled' : ''}`
+                a.className = `toc-item${item.disabled ? ' disabled' : ''}${item.active ? ' active' : ''}`
                 a.textContent = item.label
                 a.href = '#'
                 a.dataset.href = item.href
+                addTOCElement(item.href, a)
+                if (item.active) {
+                    activeTOCHref = item.href
+                    activeTOCEl = a
+                }
                 a.style.paddingLeft = `${12 + (item.depth || 0) * 16}px`
                 a.addEventListener('click', (e) => {
                     e.preventDefault()
@@ -961,20 +1153,43 @@
 
         const refreshCurrentTOC = () => {
             tocList.innerHTML = ''
-            renderTOC(reader.getTOCViewItems(), tocList)
+            activeTOCEl = null
+            tocElementsByHref = new Map()
+            const tocViewItems = reader.getTOCViewItems()
+            renderTOC(tocViewItems, tocList)
             applyActiveTOC(activeTOCHref)
+            debugDemo('toc refresh', {
+                count: tocViewItems.length,
+                active: summarizeTOCViewItem(tocViewItems.find(item => item.active)),
+                currentLocation: summarizeLocation(reader.getLocation()),
+                currentActiveHref: activeTOCHref,
+                indexedHrefCount: tocElementsByHref.size,
+            })
             updateTrialStatus()
         }
 
         const applyActiveTOC = (href) => {
-            document.querySelectorAll('.toc-item.active').forEach(el => el.classList.remove('active'))
+            if (activeTOCEl) {
+                activeTOCEl.classList.remove('active')
+                activeTOCEl = null
+            }
             if (!href) return false
 
-            const activeEls = Array.from(document.querySelectorAll('.toc-item')).filter(el => el.dataset.href === href)
-            const activeEl = activeEls[0]
-            if (!activeEl) return false
+            const activeEl = getTOCElementKeys(href)
+                .map(key => tocElementsByHref.get(key)?.[0])
+                .find(Boolean)
+            if (!activeEl) {
+                debugDemo('toc apply miss', {
+                    href,
+                    keys: getTOCElementKeys(href),
+                    indexedHrefCount: tocElementsByHref.size,
+                    sampleIndexedHrefs: Array.from(tocElementsByHref.keys()).slice(0, 12),
+                })
+                return false
+            }
 
             activeEl.classList.add('active')
+            activeTOCEl = activeEl
             let parent = activeEl.parentElement
             while (parent && parent.id !== 'toc-list') {
                 if (parent.tagName === 'DETAILS') {
@@ -983,7 +1198,43 @@
                 parent = parent.parentElement
             }
             activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+            debugDemo('toc apply hit', {
+                href,
+                appliedHref: activeEl.dataset.href,
+                appliedLabel: activeEl.textContent,
+                keys: getTOCElementKeys(href),
+            })
             return true
+        }
+
+        const addTOCElement = (href, element) => {
+            for (const key of getTOCElementKeys(href)) {
+                if (!key) continue
+                const hrefElements = tocElementsByHref.get(key) ?? []
+                hrefElements.push(element)
+                tocElementsByHref.set(key, hrefElements)
+            }
+        }
+
+        const getTOCElementKeys = (href) => {
+            const value = String(href || '').trim().replace(/\\/g, '/')
+            const normalized = normalizeDemoTOCHref(value)
+            const withoutHash = value.split('#')[0]
+            const normalizedWithoutHash = normalized.split('#')[0]
+            return [...new Set([value, normalized, withoutHash, normalizedWithoutHash].filter(Boolean))]
+        }
+
+        const normalizeDemoTOCHref = (href) => {
+            const value = String(href || '').trim().replace(/\\/g, '/')
+            const [path, hash] = value.split('#')
+            const parts = []
+            for (const part of path.replace(/^\/+/, '').split('/')) {
+                if (!part || part === '.') continue
+                if (part === '..') parts.pop()
+                else parts.push(part)
+            }
+            const normalizedPath = parts.join('/')
+            return hash ? `${normalizedPath}#${hash}` : normalizedPath
         }
 
         // Open a file
@@ -998,11 +1249,35 @@
                 // Detect MOBI files
                 const isMOBI = file.name.toLowerCase().match(/\.(mobi|azw|azw3)$/)
 
+                const openStarted = performance.now()
+                debugDemo('open start', {
+                    name: file.name,
+                    size: file.size,
+                    type: file.type,
+                })
                 const book = await reader.open(file)
+                const openMs = Math.round((performance.now() - openStarted) * 10) / 10
                 currentBook = book
                 activeTOCHref = null
                 updateTranslationStatus()
                 updateTTSStatus()
+                debugDemo('book opened', {
+                    name: file.name,
+                    openMs,
+                    title: formatLanguageMap(book.metadata?.title),
+                    sections: book.sections.length,
+                    toc: flattenDemoTOC(book.toc ?? []).length,
+                    firstSections: book.sections.slice(0, 8).map((section, index) => ({
+                        index,
+                        id: section.id,
+                        size: section.size,
+                        linear: section.linear,
+                    })),
+                    firstTOC: flattenDemoTOC(book.toc ?? []).slice(0, 12).map(item => ({
+                        label: item.label,
+                        href: item.href,
+                    })),
+                })
 
                 // Update UI
                 const title = formatLanguageMap(book.metadata?.title) || 'Untitled'
@@ -1370,19 +1645,42 @@
 
         function wireReaderEvents() {
             reader.on('relocate', (e) => {
-                const percent = Math.round((e.totalFraction ?? 0) * 100)
+                const percent = Math.max(0, Math.min(100, (e.totalFraction ?? 0) * 100))
                 progressFill.style.width = `${percent}%`
-                progressText.textContent = `${percent}%`
+                progressText.textContent = formatProgressPercent(percent)
                 updateTrialStatus()
 
                 // Highlight current TOC item
-                const href = reader.getTOCViewItems({ location: e }).find(item => item.active)?.href
+                const tocViewItems = reader.getTOCViewItems({ location: e })
+                const viewActive = tocViewItems.find(item => item.active)
+                const fallbackLocation = {
+                    index: e.index,
+                    fraction: e.fraction,
+                    totalFraction: e.totalFraction,
+                    tocItem: undefined,
+                }
+                const fallbackActive = reader.getCurrentTOCItem(fallbackLocation)
+                const fallbackViewActive = reader.getTOCViewItems({ location: fallbackLocation }).find(item => item.active)
+                const eventActive = e.tocItem ?? fallbackActive
+                const href = viewActive?.href ?? fallbackViewActive?.href ?? eventActive?.href
+                debugDemo('relocate', {
+                    event: summarizeLocation(e),
+                    eventKeys: Object.keys(e),
+                    eventTOC: summarizeTOCItem(e.tocItem),
+                    viewActive: summarizeTOCViewItem(viewActive),
+                    fallbackActive: summarizeTOCItem(fallbackActive),
+                    fallbackViewActive: summarizeTOCViewItem(fallbackViewActive),
+                    chosenHref: href,
+                    previousHref: activeTOCHref,
+                    activeDOMHref: activeTOCEl?.dataset.href,
+                    activeCount: tocViewItems.filter(item => item.active).length,
+                })
                 if (!href) {
                     activeTOCHref = null
                     applyActiveTOC(null)
                     return
                 }
-                if (href === activeTOCHref && document.querySelector('.toc-item.active')) return
+                if (href === activeTOCHref && activeTOCEl) return
                 activeTOCHref = href
                 applyActiveTOC(href)
             })
@@ -1397,6 +1695,57 @@
                 currentBook?.requestBlockTranslations?.(e.index, e.blockIds)
             })
         }
+
+        const formatProgressPercent = (percent) => {
+            if (!Number.isFinite(percent) || percent <= 0) return '0%'
+            if (percent < 0.01) return '<0.01%'
+            if (percent < 1) return `${percent.toFixed(2)}%`
+            if (percent < 10) return `${percent.toFixed(1)}%`
+            return `${Math.round(percent)}%`
+        }
+
+        const summarizeLocation = (location) => location ? ({
+            reason: location.reason,
+            index: location.index,
+            fraction: roundDebugNumber(location.fraction),
+            totalFraction: roundDebugNumber(location.totalFraction),
+            tocLabel: location.tocItem?.label,
+            tocHref: location.tocItem?.href,
+            visibleLines: location.range?.lines?.length,
+            firstLine: summarizeLine(location.range?.lines?.[0]),
+            lastLine: summarizeLine(location.range?.lines?.at?.(-1)),
+        }) : null
+
+        const summarizeLine = (line) => line ? ({
+            top: roundDebugNumber(line.top),
+            height: roundDebugNumber(line.height),
+            text: String(line.text || line.fragments?.map(fragment => fragment.text).join('') || '').slice(0, 80),
+            blockId: line.block?.id,
+            blockType: line.block?.type,
+        }) : null
+
+        const summarizeTOCItem = (item) => item ? ({
+            label: item.label,
+            href: item.href,
+        }) : null
+
+        const summarizeTOCViewItem = (item) => item ? ({
+            label: item.label,
+            href: item.href,
+            active: item.active,
+            disabled: item.disabled,
+            depth: item.depth,
+            sectionIndex: item.sectionIndex,
+            sectionFraction: roundDebugNumber(item.sectionFraction),
+        }) : null
+
+        const roundDebugNumber = (value) =>
+            typeof value === 'number' && Number.isFinite(value)
+                ? Math.round(value * 1_000_000) / 1_000_000
+                : value
+
+        const flattenDemoTOC = (items) =>
+            items.flatMap(item => item.subitems?.length ? [item, ...flattenDemoTOC(item.subitems)] : [item])
 
         wireReaderEvents()
 
