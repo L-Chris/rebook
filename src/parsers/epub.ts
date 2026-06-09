@@ -24,6 +24,7 @@ import { extractDocumentBlocks, extractDocumentSegments } from '../core/pretext'
 import { parseSimpleClassRules, mergeStyleDeclarations, extractImportURLs, type SimpleClassRule } from '../core/css'
 import { getInputName, isBlobLike } from '../core/binary'
 import { debugRebook, isRebookDebugEnabled } from '../core/debug'
+import { readRasterImageDimensions } from '../core/image-size'
 
 // ============================================================================
 // Constants
@@ -174,56 +175,6 @@ function flattenTOCForTiming(items?: readonly TOCItem[] | null): TOCItem[] {
 
 /** Check if a URI is external */
 const isExternal = (uri: string): boolean => uri.startsWith('//') || /^(?!blob)\w+:/i.test(uri)
-
-function readImageSize(buf: ArrayBuffer): { width: number; height: number } | null {
-    const bytes = new Uint8Array(buf)
-    const view = new DataView(buf)
-    // PNG: signature 8 bytes, then IHDR: 4 len + 4 type + 4 width + 4 height
-    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
-        if (buf.byteLength < 24) return null
-        return { width: view.getUint32(16, false), height: view.getUint32(20, false) }
-    }
-    // JPEG: FF D8
-    if (bytes[0] === 0xff && bytes[1] === 0xd8) {
-        let offset = 2
-        while (offset + 8 < buf.byteLength) {
-            if (bytes[offset] !== 0xff) break
-            const marker = bytes[offset + 1]
-            const len = view.getUint16(offset + 2, false)
-            // SOF markers: C0, C1, C2, C3, C5, C6, C7, C9, CA, CB, CD, CE, CF
-            if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-                if (offset + 8 >= buf.byteLength) return null
-                return { width: view.getUint16(offset + 7, false), height: view.getUint16(offset + 5, false) }
-            }
-            offset += 2 + len
-        }
-        return null
-    }
-    // GIF: GIF87a / GIF89a
-    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
-        if (buf.byteLength < 10) return null
-        return { width: view.getUint16(6, true), height: view.getUint16(8, true) }
-    }
-    // WebP: RIFF????WEBPVP8
-    if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
-        && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
-        if (buf.byteLength < 30) return null
-        // VP8 lossy: chunk at offset 12, data from 20, width at 26-27 (14-bit), height at 28-29 (14-bit)
-        if (bytes[12] === 0x56 && bytes[13] === 0x50 && bytes[14] === 0x38 && bytes[15] === 0x20) {
-            return {
-                width: (view.getUint16(26, true) & 0x3fff) + 1,
-                height: (view.getUint16(28, true) & 0x3fff) + 1,
-            }
-        }
-        // VP8L lossless: chunk at offset 12, signature 0x2f at offset 20, then 14-bit width-1, 14-bit height-1
-        if (bytes[12] === 0x56 && bytes[13] === 0x50 && bytes[14] === 0x38 && bytes[15] === 0x4c) {
-            const bits = view.getUint32(21, true)
-            return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 }
-        }
-    }
-    return null
-}
-
 
 /** Get dirname of a path */
 const pathDirname = (str: string): string =>
@@ -813,7 +764,7 @@ class ResourceLoader {
                             const blob = await this.loadBlob(imgItem.href)
                             if (blob) {
                                 const buf = await blob.arrayBuffer()
-                                const size = readImageSize(buf)
+                                const size = readRasterImageDimensions(buf)
                                 if (size?.width && size?.height) {
                                     el.setAttribute('width', String(size.width))
                                     el.setAttribute('height', String(size.height))

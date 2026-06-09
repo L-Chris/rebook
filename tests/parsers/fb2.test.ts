@@ -250,6 +250,36 @@ describe('FB2Parser', () => {
             expect(typeof doc).toBe('string')
         })
 
+        it('should annotate embedded image dimensions in generated XHTML', async () => {
+            const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"
+             xmlns:xlink="http://www.w3.org/1999/xlink">
+    <description>
+        <title-info>
+            <genre>fiction</genre>
+            <author><first-name>John</first-name><last-name>Doe</last-name></author>
+            <book-title>Image Book</book-title>
+            <lang>en</lang>
+        </title-info>
+        <document-info><id>image-book</id></document-info>
+    </description>
+    <body>
+        <section>
+            <title><p>Image Section</p></title>
+            <p><image xlink:href="#img-1"/></p>
+        </section>
+    </body>
+    <binary id="img-1" content-type="image/png">iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==</binary>
+</FictionBook>`
+            const buffer = new TextEncoder().encode(xml).buffer as ArrayBuffer
+            const book = await parser.parse(buffer, options)
+            const content = await book.sections[0].load()
+
+            expect(content).toContain('<img ')
+            expect(content).toContain('width="1"')
+            expect(content).toContain('height="1"')
+        })
+
         it('should have section sizes > 0', async () => {
             const buffer = createTestFB2Buffer({
                 sections: [{ title: 'Ch1', paragraphs: ['Some text content'] }],

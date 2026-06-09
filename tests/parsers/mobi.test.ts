@@ -134,6 +134,30 @@ describe('MOBIParser', () => {
             expect(book.splitTOCHref?.(subSection!.href)).toEqual([4, '17:0'])
         })
 
+        it('annotates KF8 image dimensions from raster resources', async () => {
+            const data = await readFile('data/1.azw3')
+            const book = await parser.parse(data.buffer.slice(
+                data.byteOffset,
+                data.byteOffset + data.byteLength,
+            ), options)
+
+            const blocks = await book.sections[1].getBlocks?.() ?? []
+            const images = blocks
+                .filter(block => block.type === 'image')
+                .map(block => block.image)
+                .filter(Boolean)
+
+            expect(images.length).toBeGreaterThan(0)
+            expect(images.every(image => image?.width && image.height && image.aspectRatio)).toBe(true)
+            expect(images).toContainEqual(expect.objectContaining({
+                width: 1284,
+                height: 525,
+                aspectRatio: 1284 / 525,
+            }))
+
+            book.destroy?.()
+        })
+
         it('should extract metadata: title', async () => {
             const buffer = createTestMOBI({
                 title: 'The Great Novel',

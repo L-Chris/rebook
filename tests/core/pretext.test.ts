@@ -64,6 +64,22 @@ describe('Pretext pipeline', () => {
         expect(prepared.blocks[0].block.type).toBe('chapter')
     })
 
+    it('keeps anchors inside inline-only containers as link segments', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('div', { class: 'calibre3' }, [
+                textNode('本书由“'),
+                elementNode('a', { class: 'calibre1', href: 'http://epubw.com' }, [textNode('ePUBw.COM')]),
+                textNode('”整理'),
+            ]),
+        ])
+
+        expect(blocks.map(block => block.type)).toEqual(['paragraph'])
+        expect(blocks[0].segments.map(segment => segment.text).join('')).toBe('本书由“ePUBw.COM”整理')
+        const link = blocks[0].segments.find(segment => segment.text === 'ePUBw.COM')
+        expect(link?.source?.attrs?.href).toBe('http://epubw.com')
+        expect(link?.source?.attrs?.class).toBe('calibre1')
+    })
+
     it('extracts definition lists as nested list item blocks', () => {
         const blocks = extractDocumentBlocks([
             elementNode('dl', { class: 'toc' }, [
@@ -256,6 +272,25 @@ describe('Pretext pipeline', () => {
         expect(wide[0].start?.segmentIndex).toBe(0)
         expect(wide[0].end?.segmentIndex).toBe(0)
         expect(wide[0].segments[0].text).toBe('one two three four')
+    })
+
+    it('prepares many simple CJK paragraphs without per-block rich-inline overhead', () => {
+        const text = '这是一个用于模拟中文电子书正文的段落，内容足够长，可以覆盖常见的换行场景。'
+        const blocks = Array.from({ length: 3_000 }, (_, index) => ({
+            id: `paragraph-${index}`,
+            type: 'paragraph' as const,
+            segments: [{ text }],
+        }))
+
+        const start = performance.now()
+        const prepared = prepareBlocks(blocks, { baseStyle: { fontSize: 16, lineHeight: 1.7 } })
+        const elapsed = performance.now() - start
+        const lines = layout(prepared, { inlineSize: 320, lineHeight: 27.2 })
+
+        expect(elapsed).toBeLessThan(800)
+        expect(prepared.blocks).toHaveLength(3_000)
+        expect(lines.length).toBeGreaterThan(3_000)
+        expect(lines[0].segments[0].text).toContain('这是一个')
     })
 
     it('preserves preformatted newlines and indentation during layout', () => {

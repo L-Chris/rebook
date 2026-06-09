@@ -17,7 +17,7 @@ var __privateWrapper = (obj, member, setter, getter) => ({
     return __privateGet(obj, member, getter);
   }
 });
-var _start, _resourceStart, _decoder, _encoder, _decompress, _removeTrailingEntries, _pdb, _MOBI_instances, getHeaders_fn, setup_fn, _mobi, _domAdapter, _urlFactory, _resourceCache, _textCache, _cache, _sections, _fileposList, _urls, _MOBI6_instances, createURL_fn, revokeURL_fn, _mobi2, _domAdapter2, _urlFactory2, _cache2, _fragmentOffsets, _fragmentSelectors, _tables, _sections2, _sectionIndexMap, _fullRawLength, _rawHead, _rawTail, _lastLoadedHead, _lastLoadedTail, _type, _urls2, _KF8_instances, setFragmentSelector_fn, createURL_fn2, revokeURL_fn2;
+var _start, _resourceStart, _decoder, _encoder, _decompress, _removeTrailingEntries, _pdb, _MOBI_instances, getHeaders_fn, setup_fn, _mobi, _domAdapter, _urlFactory, _resourceCache, _textCache, _cache, _sections, _fileposList, _urls, _MOBI6_instances, createURL_fn, revokeURL_fn, _mobi2, _domAdapter2, _urlFactory2, _cache2, _fragmentOffsets, _fragmentSelectors, _tables, _sections2, _sectionIndexMap, _fullRawLength, _rawHead, _rawTail, _lastLoadedHead, _lastLoadedTail, _type, _urls2, _imageDimensionsByURL, _KF8_instances, setFragmentSelector_fn, annotateImageDimensions_fn, createURL_fn2, revokeURL_fn2;
 const globalScope = globalThis;
 if (typeof globalScope.TextEncoder === "undefined") {
   globalScope.TextEncoder = class TextEncoder {
@@ -16048,6 +16048,12 @@ function extractDocumentBlocks(nodes, baseStyle = {}, options = {}) {
       pushBlock("pre", node2, collectInlineSegments(node2, inherited), void 0);
       return;
     }
+    if (isInlineOnlyContainer(node2)) {
+      const segments = collectInlineSegments(node2, inherited);
+      pushBlock("paragraph", node2, segments);
+      for (const image of collectImageNodes(node2)) pushImageBlock(image);
+      return;
+    }
     for (const child of (_e = node2.children) != null ? _e : []) walkBlock(child, inherited, listDepth);
   };
   for (const node2 of nodes) walkBlock(node2, { ...baseStyle });
@@ -16324,9 +16330,14 @@ function getVisibleLines(lines, scrollTop, viewportHeight, overscan = 2) {
   };
 }
 function prepareRichInline(items) {
+  const simple = maybePrepareSimpleRichInline(items);
+  if (simple) return simple;
   return prepareRichInline$1(items);
 }
 function walkRichInlineLineRanges(prepared, maxWidth, onLine) {
+  if (isSimplePreparedRichInline(prepared)) {
+    return walkSimpleRichInlineLineRanges(prepared, maxWidth, onLine);
+  }
   return walkRichInlineLineRanges$1(
     prepared,
     maxWidth,
@@ -16334,10 +16345,164 @@ function walkRichInlineLineRanges(prepared, maxWidth, onLine) {
   );
 }
 function materializeRichInlineLineRange(prepared, line) {
+  if (isSimplePreparedRichInline(prepared)) {
+    return materializeSimpleRichInlineLineRange(prepared, line);
+  }
   return materializeRichInlineLineRange$1(
     prepared,
     line
   );
+}
+function maybePrepareSimpleRichInline(items) {
+  if (items.length !== 1) return null;
+  const item = items[0];
+  if (!item || !item.text || item.text.includes("\n")) return null;
+  if (item.break === "never" || item.letterSpacing || item.extraWidth) return null;
+  if (!isCJKHeavyText(item.text)) return null;
+  const graphemes = Array.from(item.text);
+  const prefixWidths = new Array(graphemes.length + 1);
+  prefixWidths[0] = 0;
+  for (let index = 0; index < graphemes.length; index++) {
+    prefixWidths[index + 1] = prefixWidths[index] + measureSimpleTextGrapheme(item.font, graphemes[index]);
+  }
+  return {
+    kind: "simple",
+    item,
+    text: item.text,
+    graphemes,
+    prefixWidths
+  };
+}
+function isSimplePreparedRichInline(value2) {
+  return value2.kind === "simple";
+}
+function walkSimpleRichInlineLineRanges(prepared, maxWidth, onLine) {
+  const limit = Math.max(1, maxWidth);
+  const graphemes = prepared.graphemes;
+  let start = skipBreakWhitespace(graphemes, 0);
+  let lines = 0;
+  while (start < graphemes.length) {
+    let end = start + 1;
+    let lastBreak = -1;
+    while (end <= graphemes.length && getSimpleRangeWidth(prepared, start, end) <= limit) {
+      if (end < graphemes.length && canBreakSimpleTextAfter(graphemes[end - 1], graphemes[end])) {
+        lastBreak = end;
+      }
+      end++;
+    }
+    let lineEnd = end - 1;
+    if (lineEnd <= start) lineEnd = start + 1;
+    else if (lineEnd < graphemes.length && lastBreak > start) lineEnd = trimBreakWhitespaceEnd(graphemes, lastBreak);
+    const width = getSimpleRangeWidth(prepared, start, lineEnd);
+    onLine({
+      fragments: [{
+        itemIndex: 0,
+        gapBefore: 0,
+        occupiedWidth: width,
+        start: { segmentIndex: 0, graphemeIndex: start },
+        end: { segmentIndex: 0, graphemeIndex: lineEnd }
+      }],
+      width,
+      end: {
+        itemIndex: 0,
+        segmentIndex: 0,
+        graphemeIndex: lineEnd
+      }
+    });
+    lines++;
+    start = skipBreakWhitespace(graphemes, Math.max(lineEnd, start + 1));
+  }
+  return lines;
+}
+function materializeSimpleRichInlineLineRange(prepared, line) {
+  var _a2, _b2;
+  const fragment = line.fragments[0];
+  const start = (_a2 = fragment == null ? void 0 : fragment.start.graphemeIndex) != null ? _a2 : 0;
+  const end = (_b2 = fragment == null ? void 0 : fragment.end.graphemeIndex) != null ? _b2 : start;
+  const text = prepared.graphemes.slice(start, end).join("");
+  const occupiedWidth = getSimpleRangeWidth(prepared, start, end);
+  return {
+    fragments: [{
+      itemIndex: 0,
+      text,
+      gapBefore: 0,
+      occupiedWidth
+    }],
+    width: occupiedWidth
+  };
+}
+function getSimpleRangeWidth(prepared, start, end) {
+  return prepared.prefixWidths[Math.max(0, end)] - prepared.prefixWidths[Math.max(0, start)];
+}
+function canBreakSimpleTextAfter(current, next) {
+  if (isBreakWhitespace(current) || isBreakWhitespace(next)) return true;
+  return isCJKGrapheme(current) || isCJKGrapheme(next);
+}
+function skipBreakWhitespace(graphemes, start) {
+  let index = start;
+  while (index < graphemes.length && isBreakWhitespace(graphemes[index])) index++;
+  return index;
+}
+function trimBreakWhitespaceEnd(graphemes, end) {
+  let index = end;
+  while (index > 0 && isBreakWhitespace(graphemes[index - 1])) index--;
+  return index;
+}
+function isBreakWhitespace(value2) {
+  return value2 === " " || value2 === "	";
+}
+function isCJKHeavyText(text) {
+  let cjk = 0;
+  let nonSpace = 0;
+  for (const char of text) {
+    if (/\s/.test(char)) continue;
+    nonSpace++;
+    if (isCJKGrapheme(char)) cjk++;
+  }
+  return nonSpace >= 12 && cjk / nonSpace >= 0.35;
+}
+function isCJKGrapheme(value2) {
+  return /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(value2);
+}
+const simpleTextMeasureCache = /* @__PURE__ */ new Map();
+let simpleTextMeasureContext;
+function measureSimpleTextGrapheme(font, grapheme) {
+  let fontCache = simpleTextMeasureCache.get(font);
+  if (!fontCache) {
+    fontCache = /* @__PURE__ */ new Map();
+    simpleTextMeasureCache.set(font, fontCache);
+  }
+  const cached = fontCache.get(grapheme);
+  if (cached !== void 0) return cached;
+  const context = getSimpleTextMeasureContext();
+  context.font = font;
+  const width = context.measureText(grapheme).width;
+  fontCache.set(grapheme, width);
+  return width;
+}
+function getSimpleTextMeasureContext() {
+  if (simpleTextMeasureContext) return simpleTextMeasureContext;
+  if (typeof globalThis.OffscreenCanvas !== "undefined") {
+    const canvas2 = new globalThis.OffscreenCanvas(1, 1);
+    const context2 = canvas2.getContext("2d");
+    if (context2) {
+      simpleTextMeasureContext = context2;
+      return context2;
+    }
+  }
+  const canvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
+  const context = canvas == null ? void 0 : canvas.getContext("2d");
+  if (context) {
+    simpleTextMeasureContext = context;
+    return context;
+  }
+  simpleTextMeasureContext = {
+    font: "",
+    measureText(text) {
+      return { width: Array.from(text).length * DEFAULT_STYLE.fontSize };
+    }
+  };
+  return simpleTextMeasureContext;
 }
 function collectInlineSegments(node2, inherited, options = {}) {
   var _a2;
@@ -16409,6 +16574,28 @@ function collectImageNodes(node2) {
   };
   for (const child of (_a2 = node2.children) != null ? _a2 : []) walk2(child);
   return images;
+}
+function isInlineOnlyContainer(node2) {
+  var _a2;
+  if (isTextNode(node2)) return false;
+  const children = (_a2 = node2.children) != null ? _a2 : [];
+  if (children.length === 0) return false;
+  let hasInlineContent = false;
+  for (const child of children) {
+    if (isTextNode(child)) {
+      if (child.text.trim()) hasInlineContent = true;
+      continue;
+    }
+    const childType = child.type.toLowerCase();
+    if (childType === "script" || childType === "style" || childType === "head") continue;
+    if (childType === "br" || isImageNode(childType, child)) {
+      hasInlineContent = true;
+      continue;
+    }
+    if (BLOCK_TAGS.has(childType) || LIST_CONTAINER_TAGS.has(childType)) return false;
+    hasInlineContent = true;
+  }
+  return hasInlineContent;
 }
 function getTableData(node2) {
   const rows = collectTableRows(node2);
@@ -17116,6 +17303,74 @@ function sameSource(a, b) {
 function normalizeResourceRef(ref) {
   return decodeURI(ref).replace(/[?#].*$/, "").replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
 }
+function readRasterImageDimensions(data) {
+  var _a2, _b2, _c;
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return (_c = (_b2 = (_a2 = readPNGDimensions(bytes, view)) != null ? _a2 : readJPEGDimensions(bytes, view)) != null ? _b2 : readGIFDimensions(bytes, view)) != null ? _c : readWebPDimensions(bytes, view);
+}
+function readPNGDimensions(bytes, view) {
+  if (bytes.length < 24 || bytes[0] !== 137 || bytes[1] !== 80 || bytes[2] !== 78 || bytes[3] !== 71) return null;
+  return { width: view.getUint32(16, false), height: view.getUint32(20, false) };
+}
+function readJPEGDimensions(bytes, view) {
+  if (bytes.length < 4 || bytes[0] !== 255 || bytes[1] !== 216) return null;
+  let offset = 2;
+  while (offset + 9 < bytes.length) {
+    if (bytes[offset] !== 255) {
+      offset++;
+      continue;
+    }
+    const marker = bytes[offset + 1];
+    if (marker === 217 || marker === 218) return null;
+    const length2 = view.getUint16(offset + 2, false);
+    if (length2 < 2) return null;
+    if (isJPEGStartOfFrame(marker)) {
+      return {
+        width: view.getUint16(offset + 7, false),
+        height: view.getUint16(offset + 5, false)
+      };
+    }
+    offset += 2 + length2;
+  }
+  return null;
+}
+function readGIFDimensions(bytes, view) {
+  if (bytes.length < 10 || bytes[0] !== 71 || bytes[1] !== 73 || bytes[2] !== 70) return null;
+  return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
+}
+function readWebPDimensions(bytes, view) {
+  if (bytes.length < 20 || bytes[0] !== 82 || bytes[1] !== 73 || bytes[2] !== 70 || bytes[3] !== 70 || bytes[8] !== 87 || bytes[9] !== 69 || bytes[10] !== 66 || bytes[11] !== 80) return null;
+  if (hasFourCC(bytes, 12, "VP8X")) {
+    if (bytes.length < 30) return null;
+    return {
+      width: readUint24LE(bytes, 24) + 1,
+      height: readUint24LE(bytes, 27) + 1
+    };
+  }
+  if (hasFourCC(bytes, 12, "VP8L")) {
+    if (bytes.length < 25 || bytes[20] !== 47) return null;
+    const bits2 = view.getUint32(21, true);
+    return { width: (bits2 & 16383) + 1, height: (bits2 >> 14 & 16383) + 1 };
+  }
+  if (hasFourCC(bytes, 12, "VP8 ")) {
+    if (bytes.length < 30 || bytes[23] !== 157 || bytes[24] !== 1 || bytes[25] !== 42) return null;
+    return {
+      width: view.getUint16(26, true) & 16383,
+      height: view.getUint16(28, true) & 16383
+    };
+  }
+  return null;
+}
+function hasFourCC(bytes, offset, fourCC) {
+  return bytes.length >= offset + fourCC.length && bytes[offset] === fourCC.charCodeAt(0) && bytes[offset + 1] === fourCC.charCodeAt(1) && bytes[offset + 2] === fourCC.charCodeAt(2) && bytes[offset + 3] === fourCC.charCodeAt(3);
+}
+function readUint24LE(bytes, offset) {
+  return bytes[offset] | bytes[offset + 1] << 8 | bytes[offset + 2] << 16;
+}
+function isJPEGStartOfFrame(marker) {
+  return marker >= 192 && marker <= 207 && marker !== 196 && marker !== 200 && marker !== 204;
+}
 const NS = {
   CONTAINER: "urn:oasis:names:tc:opendocument:xmlns:container",
   XHTML: "http://www.w3.org/1999/xhtml",
@@ -17221,46 +17476,6 @@ function flattenTOCForTiming(items) {
   })) != null ? _a2 : [];
 }
 const isExternal = (uri) => uri.startsWith("//") || /^(?!blob)\w+:/i.test(uri);
-function readImageSize(buf) {
-  const bytes = new Uint8Array(buf);
-  const view = new DataView(buf);
-  if (bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71) {
-    if (buf.byteLength < 24) return null;
-    return { width: view.getUint32(16, false), height: view.getUint32(20, false) };
-  }
-  if (bytes[0] === 255 && bytes[1] === 216) {
-    let offset = 2;
-    while (offset + 8 < buf.byteLength) {
-      if (bytes[offset] !== 255) break;
-      const marker = bytes[offset + 1];
-      const len = view.getUint16(offset + 2, false);
-      if (marker >= 192 && marker <= 207 && marker !== 196 && marker !== 200 && marker !== 204) {
-        if (offset + 8 >= buf.byteLength) return null;
-        return { width: view.getUint16(offset + 7, false), height: view.getUint16(offset + 5, false) };
-      }
-      offset += 2 + len;
-    }
-    return null;
-  }
-  if (bytes[0] === 71 && bytes[1] === 73 && bytes[2] === 70) {
-    if (buf.byteLength < 10) return null;
-    return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
-  }
-  if (bytes[0] === 82 && bytes[1] === 73 && bytes[2] === 70 && bytes[3] === 70 && bytes[8] === 87 && bytes[9] === 69 && bytes[10] === 66 && bytes[11] === 80) {
-    if (buf.byteLength < 30) return null;
-    if (bytes[12] === 86 && bytes[13] === 80 && bytes[14] === 56 && bytes[15] === 32) {
-      return {
-        width: (view.getUint16(26, true) & 16383) + 1,
-        height: (view.getUint16(28, true) & 16383) + 1
-      };
-    }
-    if (bytes[12] === 86 && bytes[13] === 80 && bytes[14] === 56 && bytes[15] === 76) {
-      const bits2 = view.getUint32(21, true);
-      return { width: (bits2 & 16383) + 1, height: (bits2 >> 14 & 16383) + 1 };
-    }
-  }
-  return null;
-}
 const getPrefixes = (doc) => {
   const PREFIX = {
     a11y: "http://www.idpf.org/epub/vocab/package/a11y/#",
@@ -17705,7 +17920,7 @@ class ResourceLoader {
               const blob2 = await this.loadBlob(imgItem.href);
               if (blob2) {
                 const buf = await blob2.arrayBuffer();
-                const size = readImageSize(buf);
+                const size = readRasterImageDimensions(buf);
                 if ((size == null ? void 0 : size.width) && (size == null ? void 0 : size.height)) {
                   el.setAttribute("width", String(size.width));
                   el.setAttribute("height", String(size.height));
@@ -18398,6 +18613,7 @@ class CBZParser {
 }
 const cbz = () => new CBZParser();
 const XLINK_NS$1 = "http://www.w3.org/1999/xlink";
+const MIME_SVG$1 = "image/svg+xml";
 const textEncoder = new TextEncoder();
 const findByTag = (el, tagName) => {
   var _a2;
@@ -18407,6 +18623,32 @@ const findByTag = (el, tagName) => {
 const findAllByTag = (el, tagName) => {
   return el.getElementsByTagName(tagName);
 };
+function decodeBase64Bytes(value2) {
+  const normalized = value2.replace(/\s+/g, "");
+  if (typeof atob === "function") {
+    const binary = atob(normalized);
+    return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  }
+  return decodeBase64BytesFallback(normalized);
+}
+function decodeBase64BytesFallback(value2) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const bytes = [];
+  let buffer = 0;
+  let bits2 = 0;
+  for (const char of value2) {
+    if (char === "=") break;
+    const index = alphabet.indexOf(char);
+    if (index < 0) continue;
+    buffer = buffer << 6 | index;
+    bits2 += 6;
+    if (bits2 >= 8) {
+      bits2 -= 8;
+      bytes.push(buffer >> bits2 & 255);
+    }
+  }
+  return Uint8Array.from(bytes);
+}
 const STYLE = {
   "strong": ["strong", "self"],
   "emphasis": ["em", "self"],
@@ -18476,17 +18718,25 @@ class FB2Converter {
    * Get image src from FB2 <image> element.
    */
   getImageSrc(el) {
+    return this.getImageData(el).src;
+  }
+  getImageData(el) {
     const href = el.getAttributeNS(XLINK_NS$1, "href");
-    if (!href) return "data:,";
+    if (!href) return { src: "data:,", dimensions: null };
     const [, id] = href.split("#");
-    if (!id) return href;
+    if (!id) return { src: href, dimensions: null };
     const bin = this.bins.get(id);
     if (bin) {
       const contentType = bin.getAttribute("content-type") || "image/png";
       const content = bin.textContent || "";
-      return `data:${contentType};base64,${content}`;
+      const bytes = decodeBase64Bytes(content);
+      const dimensions = contentType === MIME_SVG$1 || !contentType.startsWith("image/") ? null : readRasterImageDimensions(bytes);
+      return {
+        src: `data:${contentType};base64,${content}`,
+        dimensions
+      };
     }
-    return href;
+    return { src: href, dimensions: null };
   }
   /**
    * Convert an image element.
@@ -18494,8 +18744,9 @@ class FB2Converter {
   convertImage(node2) {
     const alt = node2.getAttribute("alt") || "";
     const title = node2.getAttribute("title") || "";
-    const src = this.getImageSrc(node2);
-    return `<img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}" title="${escapeAttr(title)}">`;
+    const { src, dimensions } = this.getImageData(node2);
+    const sizeAttrs = dimensions ? ` width="${dimensions.width}" height="${dimensions.height}"` : "";
+    return `<img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}" title="${escapeAttr(title)}"${sizeAttrs}>`;
   }
   /**
    * Convert an anchor element.
@@ -19911,6 +20162,7 @@ class KF8 {
     __privateAdd(this, _lastLoadedTail, -1);
     __privateAdd(this, _type, MIME_XHTML);
     __privateAdd(this, _urls2, []);
+    __privateAdd(this, _imageDimensionsByURL, /* @__PURE__ */ new Map());
     __publicField(this, "sections", []);
     __publicField(this, "toc");
     __publicField(this, "landmarks");
@@ -20092,6 +20344,8 @@ class KF8 {
       data = raw instanceof Uint8Array ? new Uint8Array(raw).buffer : raw;
     }
     const url = __privateMethod(this, _KF8_instances, createURL_fn2).call(this, data, type);
+    const dimensions = typeof data === "string" || type === MIME_SVG || !type.startsWith("image/") ? null : readRasterImageDimensions(data);
+    if (dimensions) __privateGet(this, _imageDimensionsByURL).set(url, dimensions);
     __privateGet(this, _cache2).set(str, url);
     return url;
   }
@@ -20164,6 +20418,7 @@ class KF8 {
         __privateSet(this, _type, MIME_HTML);
         doc = __privateGet(this, _domAdapter2).parseHTML(replaced, __privateGet(this, _type));
       }
+      __privateMethod(this, _KF8_instances, annotateImageDimensions_fn).call(this, doc);
       docStr = __privateGet(this, _domAdapter2).serialize(doc);
     }
     __privateGet(this, _cache2).set(section, docStr);
@@ -20244,6 +20499,7 @@ _lastLoadedHead = new WeakMap();
 _lastLoadedTail = new WeakMap();
 _type = new WeakMap();
 _urls2 = new WeakMap();
+_imageDimensionsByURL = new WeakMap();
 _KF8_instances = new WeakSet();
 setFragmentSelector_fn = function(id, offset, selector2) {
   const map = __privateGet(this, _fragmentSelectors).get(id);
@@ -20252,6 +20508,21 @@ setFragmentSelector_fn = function(id, offset, selector2) {
     const newMap = /* @__PURE__ */ new Map();
     __privateGet(this, _fragmentSelectors).set(id, newMap);
     newMap.set(offset, selector2);
+  }
+};
+annotateImageDimensions_fn = function(doc) {
+  var _a2, _b2;
+  const images = [
+    ...doc.getElementsByTagName("img"),
+    ...doc.getElementsByTagName("image")
+  ];
+  for (const image of images) {
+    const src = (_b2 = (_a2 = image.getAttribute("src")) != null ? _a2 : image.getAttribute("href")) != null ? _b2 : image.getAttributeNS("http://www.w3.org/1999/xlink", "href");
+    if (!src) continue;
+    const dimensions = __privateGet(this, _imageDimensionsByURL).get(src);
+    if (!dimensions) continue;
+    if (!image.hasAttribute("width")) image.setAttribute("width", String(dimensions.width));
+    if (!image.hasAttribute("height")) image.setAttribute("height", String(dimensions.height));
   }
 };
 createURL_fn2 = function(data, mimeType) {

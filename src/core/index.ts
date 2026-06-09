@@ -75,3 +75,7 @@ export {
     parseSimpleClassRules,
     type SimpleClassRule,
 } from './css'
+export {
+    readRasterImageDimensions,
+    type ImageDimensions,
+} from './image-size'

@@ -23,6 +23,7 @@ import { normalizeContributors } from '../core/metadata'
 import { parseHTML, createSectionDocument } from '../core/document'
 import { extractDocumentBlocks, extractDocumentSegments } from '../core/pretext'
 import { ArrayBufferBlob, type BlobLike, getInputName, isBlobLike, toBlobLike } from '../core/binary'
+import { readRasterImageDimensions, type ImageDimensions } from '../core/image-size'
 
 // ============================================================================
 // Constants
@@ -33,8 +34,6 @@ const MIME_HTML = 'text/html'
 const MIME_XML = 'application/xml'
 const MIME_CSS = 'text/css'
 const MIME_SVG = 'image/svg+xml'
-
-
 
 const MOBI_ENCODING: Record<number, string> = {
     1252: 'windows-1252',
@@ -1260,6 +1259,7 @@ class KF8 {
     #lastLoadedTail = -1
     #type = MIME_XHTML
     #urls: string[] = []
+    #imageDimensionsByURL = new Map<string, ImageDimensions>()
 
     sections: Section[] = []
     toc?: TOCItem[]
@@ -1461,6 +1461,10 @@ class KF8 {
         }
 
         const url = this.#createURL(data, type)
+        const dimensions = typeof data === 'string' || type === MIME_SVG || !type.startsWith('image/')
+            ? null
+            : readRasterImageDimensions(data)
+        if (dimensions) this.#imageDimensionsByURL.set(url, dimensions)
         this.#cache.set(str, url)
         return url
     }
@@ -1540,6 +1544,7 @@ class KF8 {
                 this.#type = MIME_HTML
                 doc = this.#domAdapter.parseHTML(replaced, this.#type)
             }
+            this.#annotateImageDimensions(doc)
             docStr = this.#domAdapter.serialize(doc)
         }
 
@@ -1597,6 +1602,23 @@ class KF8 {
             if (typeof url === 'string' && (url.startsWith('blob:') || url.startsWith('test:'))) {
                 this.#revokeURL(url)
             }
+        }
+    }
+
+    #annotateImageDimensions(doc: ReturnType<DOMAdapter['parseHTML']>): void {
+        const images = [
+            ...doc.getElementsByTagName('img'),
+            ...doc.getElementsByTagName('image'),
+        ]
+        for (const image of images) {
+            const src = image.getAttribute('src')
+                ?? image.getAttribute('href')
+                ?? image.getAttributeNS('http://www.w3.org/1999/xlink', 'href')
+            if (!src) continue
+            const dimensions = this.#imageDimensionsByURL.get(src)
+            if (!dimensions) continue
+            if (!image.hasAttribute('width')) image.setAttribute('width', String(dimensions.width))
+            if (!image.hasAttribute('height')) image.setAttribute('height', String(dimensions.height))
         }
     }
 

@@ -17,6 +17,7 @@ import { normalizeWhitespace, getElementText, escapeAttr } from '../core/utils'
 import { AdapterRequiredError, UnsupportedInputError, ParseError } from '../core/errors'
 import { parseHTML, createSectionDocument } from '../core/document'
 import { getInputName, isBlobLike } from '../core/binary'
+import { readRasterImageDimensions, type ImageDimensions } from '../core/image-size'
 
 // ============================================================================
 // Constants
@@ -25,6 +26,7 @@ import { getInputName, isBlobLike } from '../core/binary'
 const XLINK_NS = 'http://www.w3.org/1999/xlink'
 const XHTML_NS = 'http://www.w3.org/1999/xhtml'
 const MIME_XHTML = 'application/xhtml+xml'
+const MIME_SVG = 'image/svg+xml'
 const textEncoder = new TextEncoder()
 
 // ============================================================================
@@ -44,6 +46,34 @@ const findByTag = (el: XMLElement, tagName: string): XMLElement | null => {
  */
 const findAllByTag = (el: XMLElement, tagName: string): XMLElement[] => {
     return el.getElementsByTagName(tagName)
+}
+
+function decodeBase64Bytes(value: string): Uint8Array {
+    const normalized = value.replace(/\s+/g, '')
+    if (typeof atob === 'function') {
+        const binary = atob(normalized)
+        return Uint8Array.from(binary, char => char.charCodeAt(0))
+    }
+    return decodeBase64BytesFallback(normalized)
+}
+
+function decodeBase64BytesFallback(value: string): Uint8Array {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    const bytes: number[] = []
+    let buffer = 0
+    let bits = 0
+    for (const char of value) {
+        if (char === '=') break
+        const index = alphabet.indexOf(char)
+        if (index < 0) continue
+        buffer = (buffer << 6) | index
+        bits += 6
+        if (bits >= 8) {
+            bits -= 8
+            bytes.push((buffer >> bits) & 0xff)
+        }
+    }
+    return Uint8Array.from(bytes)
 }
 
 // ============================================================================
@@ -139,17 +169,28 @@ class FB2Converter {
      * Get image src from FB2 <image> element.
      */
     private getImageSrc(el: XMLElement): string {
+        return this.getImageData(el).src
+    }
+
+    private getImageData(el: XMLElement): { src: string; dimensions: ImageDimensions | null } {
         const href = el.getAttributeNS(XLINK_NS, 'href')
-        if (!href) return 'data:,'
+        if (!href) return { src: 'data:,', dimensions: null }
         const [, id] = href.split('#')
-        if (!id) return href
+        if (!id) return { src: href, dimensions: null }
         const bin = this.bins.get(id)
         if (bin) {
             const contentType = bin.getAttribute('content-type') || 'image/png'
             const content = bin.textContent || ''
-            return `data:${contentType};base64,${content}`
+            const bytes = decodeBase64Bytes(content)
+            const dimensions = contentType === MIME_SVG || !contentType.startsWith('image/')
+                ? null
+                : readRasterImageDimensions(bytes)
+            return {
+                src: `data:${contentType};base64,${content}`,
+                dimensions,
+            }
         }
-        return href
+        return { src: href, dimensions: null }
     }
 
     /**
@@ -158,8 +199,11 @@ class FB2Converter {
     private convertImage(node: XMLElement): string {
         const alt = node.getAttribute('alt') || ''
         const title = node.getAttribute('title') || ''
-        const src = this.getImageSrc(node)
-        return `<img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}" title="${escapeAttr(title)}">`
+        const { src, dimensions } = this.getImageData(node)
+        const sizeAttrs = dimensions
+            ? ` width="${dimensions.width}" height="${dimensions.height}"`
+            : ''
+        return `<img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}" title="${escapeAttr(title)}"${sizeAttrs}>`
     }
 
     /**

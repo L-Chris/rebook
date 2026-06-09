@@ -164,6 +164,11 @@ export {
     installPretextMeasurementPolyfill,
 } from './core/pretext'
 
+export {
+    readRasterImageDimensions,
+    type ImageDimensions,
+} from './core/image-size'
+
 // Search
 export {
     searchBook,

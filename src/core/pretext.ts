@@ -44,6 +44,14 @@ export interface PreparedRichInline {
     readonly __preparedRichInlineBrand?: true
 }
 
+interface SimplePreparedRichInline extends PreparedRichInline {
+    readonly kind: 'simple'
+    readonly item: RichInlineItem
+    readonly text: string
+    readonly graphemes: readonly string[]
+    readonly prefixWidths: readonly number[]
+}
+
 export interface RichInlineFragmentRange {
     itemIndex: number
     gapBefore: number
@@ -435,6 +443,13 @@ export function extractDocumentBlocks(
             return
         }
 
+        if (isInlineOnlyContainer(node)) {
+            const segments = collectInlineSegments(node, inherited)
+            pushBlock('paragraph', node, segments)
+            for (const image of collectImageNodes(node)) pushImageBlock(image)
+            return
+        }
+
         for (const child of node.children ?? []) walkBlock(child, inherited, listDepth)
     }
 
@@ -740,6 +755,8 @@ export function getVisibleLines(
 export type PretextRichInlineLineRange = RichInlineLineRange
 
 function prepareRichInline(items: RichInlineItem[]): PreparedRichInline {
+    const simple = maybePrepareSimpleRichInline(items)
+    if (simple) return simple
     return pretextPrepareRichInline(items as Parameters<typeof pretextPrepareRichInline>[0]) as PreparedRichInline
 }
 
@@ -748,6 +765,9 @@ function walkRichInlineLineRanges(
     maxWidth: number,
     onLine: (line: RichInlineLineRange) => void,
 ): number {
+    if (isSimplePreparedRichInline(prepared)) {
+        return walkSimpleRichInlineLineRanges(prepared, maxWidth, onLine)
+    }
     return pretextWalkRichInlineLineRanges(
         prepared as Parameters<typeof pretextWalkRichInlineLineRanges>[0],
         maxWidth,
@@ -759,10 +779,194 @@ function materializeRichInlineLineRange(
     prepared: PreparedRichInline,
     line: RichInlineLineRange,
 ) {
+    if (isSimplePreparedRichInline(prepared)) {
+        return materializeSimpleRichInlineLineRange(prepared, line)
+    }
     return pretextMaterializeRichInlineLineRange(
         prepared as Parameters<typeof pretextMaterializeRichInlineLineRange>[0],
         line as Parameters<typeof pretextMaterializeRichInlineLineRange>[1],
     )
+}
+
+function maybePrepareSimpleRichInline(items: RichInlineItem[]): SimplePreparedRichInline | null {
+    if (items.length !== 1) return null
+    const item = items[0]
+    if (!item || !item.text || item.text.includes('\n')) return null
+    if (item.break === 'never' || item.letterSpacing || item.extraWidth) return null
+    if (!isCJKHeavyText(item.text)) return null
+
+    const graphemes = Array.from(item.text)
+    const prefixWidths = new Array<number>(graphemes.length + 1)
+    prefixWidths[0] = 0
+    for (let index = 0; index < graphemes.length; index++) {
+        prefixWidths[index + 1] = prefixWidths[index] + measureSimpleTextGrapheme(item.font, graphemes[index])
+    }
+
+    return {
+        kind: 'simple',
+        item,
+        text: item.text,
+        graphemes,
+        prefixWidths,
+    }
+}
+
+function isSimplePreparedRichInline(value: PreparedRichInline): value is SimplePreparedRichInline {
+    return (value as { kind?: unknown }).kind === 'simple'
+}
+
+function walkSimpleRichInlineLineRanges(
+    prepared: SimplePreparedRichInline,
+    maxWidth: number,
+    onLine: (line: RichInlineLineRange) => void,
+): number {
+    const limit = Math.max(1, maxWidth)
+    const graphemes = prepared.graphemes
+    let start = skipBreakWhitespace(graphemes, 0)
+    let lines = 0
+
+    while (start < graphemes.length) {
+        let end = start + 1
+        let lastBreak = -1
+        while (end <= graphemes.length && getSimpleRangeWidth(prepared, start, end) <= limit) {
+            if (end < graphemes.length && canBreakSimpleTextAfter(graphemes[end - 1], graphemes[end])) {
+                lastBreak = end
+            }
+            end++
+        }
+
+        let lineEnd = end - 1
+        if (lineEnd <= start) lineEnd = start + 1
+        else if (lineEnd < graphemes.length && lastBreak > start) lineEnd = trimBreakWhitespaceEnd(graphemes, lastBreak)
+
+        const width = getSimpleRangeWidth(prepared, start, lineEnd)
+        onLine({
+            fragments: [{
+                itemIndex: 0,
+                gapBefore: 0,
+                occupiedWidth: width,
+                start: { segmentIndex: 0, graphemeIndex: start },
+                end: { segmentIndex: 0, graphemeIndex: lineEnd },
+            }],
+            width,
+            end: {
+                itemIndex: 0,
+                segmentIndex: 0,
+                graphemeIndex: lineEnd,
+            },
+        })
+        lines++
+        start = skipBreakWhitespace(graphemes, Math.max(lineEnd, start + 1))
+    }
+
+    return lines
+}
+
+function materializeSimpleRichInlineLineRange(
+    prepared: SimplePreparedRichInline,
+    line: RichInlineLineRange,
+) {
+    const fragment = line.fragments[0]
+    const start = fragment?.start.graphemeIndex ?? 0
+    const end = fragment?.end.graphemeIndex ?? start
+    const text = prepared.graphemes.slice(start, end).join('')
+    const occupiedWidth = getSimpleRangeWidth(prepared, start, end)
+    return {
+        fragments: [{
+            itemIndex: 0,
+            text,
+            gapBefore: 0,
+            occupiedWidth,
+        }],
+        width: occupiedWidth,
+    }
+}
+
+function getSimpleRangeWidth(prepared: SimplePreparedRichInline, start: number, end: number): number {
+    return prepared.prefixWidths[Math.max(0, end)] - prepared.prefixWidths[Math.max(0, start)]
+}
+
+function canBreakSimpleTextAfter(current: string, next: string): boolean {
+    if (isBreakWhitespace(current) || isBreakWhitespace(next)) return true
+    return isCJKGrapheme(current) || isCJKGrapheme(next)
+}
+
+function skipBreakWhitespace(graphemes: readonly string[], start: number): number {
+    let index = start
+    while (index < graphemes.length && isBreakWhitespace(graphemes[index])) index++
+    return index
+}
+
+function trimBreakWhitespaceEnd(graphemes: readonly string[], end: number): number {
+    let index = end
+    while (index > 0 && isBreakWhitespace(graphemes[index - 1])) index--
+    return index
+}
+
+function isBreakWhitespace(value: string): boolean {
+    return value === ' ' || value === '\t'
+}
+
+function isCJKHeavyText(text: string): boolean {
+    let cjk = 0
+    let nonSpace = 0
+    for (const char of text) {
+        if (/\s/.test(char)) continue
+        nonSpace++
+        if (isCJKGrapheme(char)) cjk++
+    }
+    return nonSpace >= 12 && cjk / nonSpace >= 0.35
+}
+
+function isCJKGrapheme(value: string): boolean {
+    return /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(value)
+}
+
+const simpleTextMeasureCache = new Map<string, Map<string, number>>()
+let simpleTextMeasureContext: PretextMeasureContext | null | undefined
+
+function measureSimpleTextGrapheme(font: string, grapheme: string): number {
+    let fontCache = simpleTextMeasureCache.get(font)
+    if (!fontCache) {
+        fontCache = new Map()
+        simpleTextMeasureCache.set(font, fontCache)
+    }
+    const cached = fontCache.get(grapheme)
+    if (cached !== undefined) return cached
+
+    const context = getSimpleTextMeasureContext()
+    context.font = font
+    const width = context.measureText(grapheme).width
+    fontCache.set(grapheme, width)
+    return width
+}
+
+function getSimpleTextMeasureContext(): PretextMeasureContext {
+    if (simpleTextMeasureContext) return simpleTextMeasureContext
+
+    if (typeof globalThis.OffscreenCanvas !== 'undefined') {
+        const canvas = new globalThis.OffscreenCanvas(1, 1)
+        const context = canvas.getContext('2d') as PretextMeasureContext | null
+        if (context) {
+            simpleTextMeasureContext = context
+            return context
+        }
+    }
+
+    const canvas = typeof document !== 'undefined' ? document.createElement('canvas') : null
+    const context = canvas?.getContext('2d') as PretextMeasureContext | null | undefined
+    if (context) {
+        simpleTextMeasureContext = context
+        return context
+    }
+
+    simpleTextMeasureContext = {
+        font: '',
+        measureText(text: string) {
+            return { width: Array.from(text).length * DEFAULT_STYLE.fontSize }
+        },
+    }
+    return simpleTextMeasureContext
 }
 
 function collectInlineSegments(
@@ -842,6 +1046,31 @@ function collectImageNodes(node: DocumentNode): DocumentNode[] {
     }
     for (const child of node.children ?? []) walk(child)
     return images
+}
+
+function isInlineOnlyContainer(node: DocumentNode): boolean {
+    if (isTextNode(node)) return false
+    const children = node.children ?? []
+    if (children.length === 0) return false
+
+    let hasInlineContent = false
+    for (const child of children) {
+        if (isTextNode(child)) {
+            if (child.text.trim()) hasInlineContent = true
+            continue
+        }
+
+        const childType = child.type.toLowerCase()
+        if (childType === 'script' || childType === 'style' || childType === 'head') continue
+        if (childType === 'br' || isImageNode(childType, child)) {
+            hasInlineContent = true
+            continue
+        }
+        if (BLOCK_TAGS.has(childType) || LIST_CONTAINER_TAGS.has(childType)) return false
+        hasInlineContent = true
+    }
+
+    return hasInlineContent
 }
 
 function getTableData(node: DocumentNode): TextTable | null {
