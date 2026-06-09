@@ -265,6 +265,34 @@ reader.setSpread(2) // Auto-spread: 2 pages on wide screens, 1 on narrow
 reader.setSpread(1) // Force single page
 ```
 
+### Marks
+
+Marks are transient render annotations for reader UI state such as the current
+TTS segment, search hits, translation state, or annotation previews. They are
+not persisted by rebook.
+
+```typescript
+reader.setMark({
+  id: 'tts-current',
+  kind: 'tts',
+  range: {
+    sectionIndex,
+    blockId: segment.blockId,
+    startOffset: segment.startOffset,
+    endOffset: segment.endOffset,
+  },
+  className: 'rebook-tts-current',
+  data: { segmentId: segment.id },
+})
+
+reader.removeMark('tts-current')
+reader.clearMarks('tts')
+```
+
+Browser marks are rendered as classes on matching visible line nodes. Mini
+Program marks are exposed on snapshot line nodes as `className`, `markIds`,
+`markKinds`, and `markData`.
+
 #### Auto-Spread Layout
 
 In the default browser renderer, wide containers display two text columns side-by-side using the Pretext line list.
@@ -429,10 +457,13 @@ withTranslation({
 `withTTS()` adds a `book.tts` controller. It converts section blocks into stable
 speech segments with `sectionIndex`, `blockId`, `startOffset`, and `endOffset`,
 then calls a provider-based TTS backend such as the companion `rebook-tts`
-service.
+service. Segment offsets are relative to `blockId`, so they can be used directly
+with reader marks.
 
 ```typescript
-import { createReader, withTTS } from 'rebook'
+import { createBrowserTTSAudioPlayer, createReader, withTTS } from 'rebook'
+
+const ttsPlayer = createBrowserTTSAudioPlayer()
 
 const reader = createReader({
   container,
@@ -442,20 +473,40 @@ const reader = createReader({
       provider: 'edge',
       voice: 'zh-CN-XiaoyiNeural',
       maxSegmentChars: 500,
+      player: ttsPlayer,
     }),
   ],
 })
 
 const book = await reader.open(file)
 const sectionIndex = reader.getLocation()?.index ?? 0
-const segments = await book.tts.prepareSection(sectionIndex)
-const first = await book.tts.synthesizeSegment(segments[0])
+const prefetch = await book.tts.prefetchSection(sectionIndex, { concurrency: 2 })
 
-new Audio(first.audioUrl).play()
+await book.tts.playPrefetchedSection(prefetch, {
+  preloadAhead: 3,
+  onSegmentStart: ({ segment }) => {
+    reader.setMark({
+      id: 'tts-current',
+      kind: 'tts',
+      range: {
+        sectionIndex: segment.sectionIndex,
+        blockId: segment.blockId,
+        startOffset: segment.startOffset,
+        endOffset: segment.endOffset,
+      },
+      className: 'tts-current',
+    })
+  },
+})
 ```
 
-For long chapters, create an async backend job instead of synchronously
-synthesizing every segment:
+`prefetchSection()` starts an async backend job for the whole section, so the
+next segments can be generated while the current audio is playing.
+`createBrowserTTSAudioPlayer()` uses `AudioContext` scheduling when available
+and falls back to `HTMLAudioElement` playback. You can pass any object matching
+`TTSAudioPlayer` to `withTTS({ player })` for other runtimes.
+
+For advanced job management, use the lower-level job APIs directly:
 
 ```typescript
 const job = await book.tts.createSectionJob(sectionIndex, { concurrency: 2 })

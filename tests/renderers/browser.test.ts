@@ -90,6 +90,53 @@ describe('BrowserRenderer', () => {
         renderer.destroy()
     })
 
+    it('renders reader marks as classes on matching browser lines', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '96')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 48,
+                format: 'xhtml',
+                load: () => '',
+                getBlocks: () => [{
+                    id: 'p1',
+                    type: 'paragraph',
+                    segments: [{ text: 'Marked text should receive a renderer class.' }],
+                }],
+            }],
+        }
+
+        const renderer = new BrowserRenderer({
+            container,
+            styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '260px' },
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+        renderer.setMark({
+            id: 'current',
+            kind: 'tts',
+            range: { sectionIndex: 0, blockId: 'p1', startOffset: 0, endOffset: 12 },
+            className: 'is-current',
+            data: { segmentId: 's1' },
+        })
+
+        const markedLine = container.querySelector('.is-current') as HTMLElement | null
+        expect(markedLine?.dataset.blockId).toBe('p1')
+        expect(markedLine?.classList.contains('is-current')).toBe(true)
+        expect(markedLine?.classList.contains('rebook-mark-tts')).toBe(true)
+        expect(markedLine?.dataset.markSegmentId).toBe('s1')
+
+        renderer.removeMark('current')
+        expect(container.querySelector('.is-current')).toBeNull()
+
+        renderer.destroy()
+    })
+
     it('is the default createReader browser renderer', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')

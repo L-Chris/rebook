@@ -8,6 +8,8 @@ import { createTestEPUB } from '../fixtures/epub-fixture'
 
 const structuredWritingFixture = 'data/Structured Writing Rhetoric and Process.epub'
 const itWithStructuredWriting = existsSync(structuredWritingFixture) ? it : it.skip
+const lolitaFixture = 'data/洛丽塔.epub'
+const itWithLolita = existsSync(lolitaFixture) ? it : it.skip
 
 beforeAll(() => {
     vi.stubGlobal('OffscreenCanvas', class {
@@ -458,5 +460,33 @@ describe('EPUB Pretext segments', () => {
         expect(inlineFootnoteMarkers[0].source?.attrs?.['data-rebook-footnote-content']).toContain('Locked In, Logged Out')
         expect(visibleText).not.toContain('Locked In, Logged Out')
         expect(inlineFigure?.image?.width).toBe(150)
+    })
+
+    itWithLolita('marks real EPUB note references and note paragraphs semantically', async () => {
+        const parser = new EPUBParser()
+        const data = await readFile(lolitaFixture)
+        const book = await parser.parse(data.buffer.slice(
+            data.byteOffset,
+            data.byteOffset + data.byteLength,
+        ), {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+
+        const chapter = book.sections.find(section => String(section.id).endsWith('part0370.xhtml'))
+        expect(chapter).toBeDefined()
+
+        const blocks = await chapter!.getBlocks?.()
+        const noterefSegments = blocks?.flatMap(block => block.segments).filter(segment =>
+            segment.source?.attrs?.['data-rebook-role'] === 'noteref'
+        ) ?? []
+        const footnoteBlocks = blocks?.filter(block =>
+            block.attrs?.['data-rebook-role'] === 'footnote'
+        ) ?? []
+
+        expect(noterefSegments.map(segment => segment.text)).toContain('[1]')
+        expect(footnoteBlocks.some(block =>
+            block.segments.map(segment => segment.text).join('').includes('“洛丽塔”这个名字')
+        )).toBe(true)
     })
 })

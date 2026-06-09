@@ -65,6 +65,47 @@ describe('WechatMiniProgramRenderer', () => {
         expect(snapshots.length).toBeGreaterThan(0)
     })
 
+    it('renders reader marks into Mini Program line snapshots', async () => {
+        vi.stubGlobal('OffscreenCanvas', undefined)
+        const book: Book = {
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 48,
+                format: 'xhtml',
+                load: () => '',
+                getBlocks: () => [{
+                    id: 'p1',
+                    type: 'paragraph',
+                    segments: [{ text: 'Marked text should receive snapshot metadata.' }],
+                }],
+            }],
+        }
+        const renderer = new WechatMiniProgramRenderer({
+            width: 360,
+            height: 96,
+            layout: 'paginated',
+            styles: { fontSize: '16px', lineHeight: 1.5, margin: '16px', maxInlineSize: '260px' },
+            wx: createMockWx(),
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+        renderer.setMark({
+            id: 'current',
+            kind: 'tts',
+            range: { sectionIndex: 0, blockId: 'p1', startOffset: 0, endOffset: 12 },
+            className: 'is-current',
+            data: { segmentId: 's1' },
+        })
+
+        const markedLine = renderer.getSnapshot().lines.find(line => line.className?.includes('is-current'))
+        expect(markedLine?.blockId).toBe('p1')
+        expect(markedLine?.className).toContain('is-current')
+        expect(markedLine?.className).toContain('rebook-mark-tts')
+        expect(markedLine?.markIds).toEqual(['current'])
+        expect(markedLine?.markData).toEqual({ segmentId: 's1' })
+    })
+
     it('navigates pages and preserves renderer interface events', async () => {
         vi.stubGlobal('OffscreenCanvas', undefined)
         const blocks = Array.from({ length: 12 }, (_, index) => ({

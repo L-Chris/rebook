@@ -15722,6 +15722,7 @@ const BLOCK_TAGS = /* @__PURE__ */ new Set([
 ]);
 const LIST_CONTAINER_TAGS = /* @__PURE__ */ new Set(["dl", "ol", "ul"]);
 const ANCHOR_TAGS = /* @__PURE__ */ new Set(["a", "anchor"]);
+const REBOOK_ROLE_ATTR = "data-rebook-role";
 const DEFAULT_STYLE = {
   fontFamily: "Georgia, serif",
   fontSize: 16,
@@ -15775,7 +15776,7 @@ function extractDocumentBlocks(nodes, baseStyle = {}, options = {}) {
     const normalized = type === "pre" ? normalizePreSegments(segments) : normalizeSegments(segments);
     if (!normalized.some((segment) => segment.text.trim())) return;
     const preset = getBlockPreset(type, baseStyle, depth);
-    const attrs = getBlockAnchorAttrs(node2);
+    const attrs = getBlockAttrs(node2);
     const id = (_a3 = attrs == null ? void 0 : attrs.id) != null ? _a3 : `${type}-${nextId++}`;
     blocks.push({
       id,
@@ -16246,11 +16247,11 @@ function materializeRichInlineLineRange(prepared, line) {
 function collectInlineSegments(node2, inherited, options = {}) {
   var _a2;
   const segments = [];
-  const walk2 = (current, style) => {
+  const walk2 = (current, style, inheritedAttrs) => {
     var _a3, _b2, _c;
     if (isTextNode(current)) {
       if (current.text) {
-        segments.push({ text: current.text, style, source: { nodeType: "text" } });
+        segments.push({ text: current.text, style, source: { nodeType: "text", attrs: inheritedAttrs } });
       }
       return;
     }
@@ -16258,8 +16259,9 @@ function collectInlineSegments(node2, inherited, options = {}) {
     if (type === "script" || type === "style" || type === "head") return;
     if (isFootnoteContentNode(current)) return;
     if (options.skipNestedLists && current !== node2 && LIST_CONTAINER_TAGS.has(type)) return;
+    const sourceAttrs = mergeSourceAttrs(inheritedAttrs, current.attrs, getSemanticDataAttrs(current));
     if (type === "br") {
-      segments.push({ text: "\n", style, source: { nodeType: "br", attrs: current.attrs } });
+      segments.push({ text: "\n", style, source: { nodeType: "br", attrs: sourceAttrs } });
       return;
     }
     if (isImageNode(type, current)) {
@@ -16274,8 +16276,9 @@ function collectInlineSegments(node2, inherited, options = {}) {
           source: {
             nodeType: "img",
             attrs: {
-              ...(_a3 = current.attrs) != null ? _a3 : {},
+              ...(_a3 = sourceAttrs != null ? sourceAttrs : current.attrs) != null ? _a3 : {},
               ...getFootnoteMarkerDataAttrs(image, current.attrs),
+              [REBOOK_ROLE_ATTR]: "noteref",
               "data-rebook-inline-image-width": String(dimensions.width),
               "data-rebook-inline-image-height": String(dimensions.height)
             }
@@ -16285,12 +16288,12 @@ function collectInlineSegments(node2, inherited, options = {}) {
       return;
     }
     if (BLOCK_TAGS.has(type) && current !== node2) {
-      for (const child of (_b2 = current.children) != null ? _b2 : []) walk2(child, applyNodeStyle(type, style, current.attrs));
-      segments.push({ text: "\n", style, source: { nodeType: type, attrs: current.attrs } });
+      for (const child of (_b2 = current.children) != null ? _b2 : []) walk2(child, applyNodeStyle(type, style, current.attrs), sourceAttrs);
+      segments.push({ text: "\n", style, source: { nodeType: type, attrs: sourceAttrs } });
       return;
     }
     const nextStyle = applyNodeStyle(type, style, current.attrs);
-    for (const child of (_c = current.children) != null ? _c : []) walk2(child, nextStyle);
+    for (const child of (_c = current.children) != null ? _c : []) walk2(child, nextStyle, sourceAttrs);
   };
   for (const child of (_a2 = node2.children) != null ? _a2 : []) walk2(child, inherited);
   return segments;
@@ -16656,6 +16659,79 @@ function getBlockAnchorAttrs(node2) {
     ...((_b2 = anchor.attrs) == null ? void 0 : _b2.id) ? { id: anchor.attrs.id } : {},
     ...((_c = anchor.attrs) == null ? void 0 : _c.name) ? { name: anchor.attrs.name } : {}
   };
+}
+function getBlockAttrs(node2) {
+  return mergeSourceAttrs(getBlockAnchorAttrs(node2), getSemanticDataAttrs(node2));
+}
+function mergeSourceAttrs(...sources) {
+  const merged = {};
+  for (const source of sources) {
+    if (!source) continue;
+    for (const [key, value2] of Object.entries(source)) merged[key] = value2;
+  }
+  return Object.keys(merged).length > 0 ? merged : void 0;
+}
+function getSemanticDataAttrs(node2) {
+  const role = getNodeSemanticRole(node2);
+  return role ? { [REBOOK_ROLE_ATTR]: role } : void 0;
+}
+function getNodeSemanticRole(node2) {
+  if (isTextNode(node2)) return void 0;
+  if (isNoterefNode(node2)) return "noteref";
+  if (isFootnoteNode(node2)) return "footnote";
+  return void 0;
+}
+function isNoterefNode(node2) {
+  var _a2, _b2, _c, _d;
+  if (isTextNode(node2)) return false;
+  const tokens = getNodeSemanticTokens(node2);
+  if (tokens.some(
+    (token) => token === "noteref" || token === "doc-noteref" || token === "footnote-ref" || token === "epub-footnote" || token === "epub-footnote1"
+  )) return true;
+  const type = node2.type.toLowerCase();
+  if (!ANCHOR_TAGS.has(type)) return false;
+  const href = (_c = (_a2 = node2.attrs) == null ? void 0 : _a2.href) != null ? _c : (_b2 = node2.attrs) == null ? void 0 : _b2["xlink:href"];
+  if (!href || !/#/.test(href)) return false;
+  const fragment = (_d = href.split("#").pop()) == null ? void 0 : _d.trim();
+  if (!fragment || !isFootnoteAnchorId(fragment)) return false;
+  return isFootnoteMarkerText(getNodeText(node2));
+}
+function isFootnoteNode(node2) {
+  var _a2, _b2, _c, _d, _e, _f, _g, _h;
+  if (isTextNode(node2)) return false;
+  const tokens = getNodeSemanticTokens(node2);
+  if (tokens.some(
+    (token) => token === "footnote" || token === "doc-footnote" || token === "endnote" || token === "doc-endnote" || token === "rearnote" || token === "duokan-footnote-content"
+  )) return true;
+  if (!tokens.includes("note")) return false;
+  const attrs = (_a2 = node2.attrs) != null ? _a2 : {};
+  const anchor = (_h = (_e = (_b2 = attrs.id) != null ? _b2 : attrs.name) != null ? _e : (_d = (_c = findDescendantAnchor(node2)) == null ? void 0 : _c.attrs) == null ? void 0 : _d.id) != null ? _h : (_g = (_f = findDescendantAnchor(node2)) == null ? void 0 : _f.attrs) == null ? void 0 : _g.name;
+  return (anchor ? isFootnoteAnchorId(anchor) : false) || isFootnoteContentText(getNodeText(node2));
+}
+function getNodeSemanticTokens(node2) {
+  var _a2, _b2, _c, _d, _e;
+  if (isTextNode(node2)) return [];
+  return [
+    (_a2 = node2.attrs) == null ? void 0 : _a2["epub:type"],
+    (_b2 = node2.attrs) == null ? void 0 : _b2.type,
+    (_c = node2.attrs) == null ? void 0 : _c.role,
+    (_d = node2.attrs) == null ? void 0 : _d.rel,
+    (_e = node2.attrs) == null ? void 0 : _e.class
+  ].filter(Boolean).flatMap((value2) => value2.toLowerCase().split(/\s+/)).filter(Boolean);
+}
+function getNodeText(node2) {
+  var _a2;
+  if (isTextNode(node2)) return node2.text;
+  return ((_a2 = node2.children) != null ? _a2 : []).map((child) => getNodeText(child)).join("");
+}
+function isFootnoteAnchorId(value2) {
+  return /^(?:m|fn|footnote|note|endnote|en)[-_]?\d{1,4}$/i.test(value2);
+}
+function isFootnoteMarkerText(value2) {
+  return /^[\s\u00a0]*[\[［(（]?\d{1,4}[)\]］）]?[\s\u00a0]*$/.test(value2);
+}
+function isFootnoteContentText(value2) {
+  return /^[\s\u00a0]*[\[［]\s*\d{1,4}\s*[\]］]/.test(value2);
 }
 function findDescendantAnchor(node2) {
   var _a2, _b2, _c;
@@ -20116,6 +20192,7 @@ class WechatMiniProgramRenderer {
     __publicField(this, "tocPositions", []);
     __publicField(this, "pendingTOCItem", null);
     __publicField(this, "beforeNavigate");
+    __publicField(this, "marks", /* @__PURE__ */ new Map());
     __publicField(this, "columnLayout", {
       margin: DEFAULT_MARGIN,
       gap: DEFAULT_GAP,
@@ -20251,6 +20328,27 @@ class WechatMiniProgramRenderer {
     this.restoreSectionFraction(fraction);
     this.publishPosition("spread");
   }
+  setMark(mark) {
+    this.marks.set(mark.id, mark);
+    this.publishSnapshot();
+  }
+  removeMark(id) {
+    this.marks.delete(id);
+    this.publishSnapshot();
+  }
+  clearMarks(kind) {
+    if (kind === void 0) {
+      this.marks.clear();
+    } else {
+      for (const [id, mark] of this.marks) {
+        if (mark.kind === kind) this.marks.delete(id);
+      }
+    }
+    this.publishSnapshot();
+  }
+  getMarks() {
+    return Array.from(this.marks.values());
+  }
   setViewport(width, height) {
     const fraction = this.getSectionFraction();
     this.width = Math.max(1, width);
@@ -20314,6 +20412,7 @@ class WechatMiniProgramRenderer {
     this.prepared = null;
     this.lines = [];
     this.currentIndex = -1;
+    this.marks.clear();
     this.publishSnapshot();
   }
   async loadSection(index, anchor) {
@@ -20416,10 +20515,12 @@ class WechatMiniProgramRenderer {
     var _a2, _b2;
     const position = this.getRenderedLinePosition(line);
     const style = this.getLineStyle(line, position);
+    const marks = this.getLineMarks(line);
     const base = {
       key: `line-${this.currentIndex}-${line.index}`,
       blockId: (_a2 = line.block) == null ? void 0 : _a2.id,
       blockType: (_b2 = line.block) == null ? void 0 : _b2.type,
+      ...getLineMarkSnapshot(marks),
       style
     };
     if (line.kind === "image" && line.image) {
@@ -20477,6 +20578,10 @@ class WechatMiniProgramRenderer {
       text: fragment.text,
       style
     };
+  }
+  getLineMarks(line) {
+    if (this.currentIndex < 0) return [];
+    return Array.from(this.marks.values()).filter((mark) => markMatchesLine(mark, line, this.currentIndex));
   }
   publishPosition(reason) {
     this.publishSnapshot();
@@ -20754,6 +20859,43 @@ function flattenTOC$2(items) {
 }
 function compareTOCPosition(a, b) {
   return a.index - b.index || a.sourceTop - b.sourceTop || a.order - b.order;
+}
+function markMatchesLine(mark, line, sectionIndex) {
+  var _a2, _b2, _c, _d, _e, _f, _g, _h, _i;
+  if (!("sectionIndex" in mark.range) || mark.range.sectionIndex !== sectionIndex) return false;
+  if (!("blockId" in mark.range)) return false;
+  if (((_a2 = line.block) == null ? void 0 : _a2.id) !== mark.range.blockId) return false;
+  if (mark.range.startOffset === void 0 && mark.range.endOffset === void 0) return true;
+  if (((_c = (_b2 = line.block) == null ? void 0 : _b2.segments.length) != null ? _c : 0) !== 1) return true;
+  const lineStart = (_e = (_d = line.start) == null ? void 0 : _d.cursor.graphemeIndex) != null ? _e : 0;
+  const lineEnd = (_g = (_f = line.end) == null ? void 0 : _f.cursor.graphemeIndex) != null ? _g : lineStart;
+  if (lineEnd <= lineStart) return true;
+  const markStart = (_h = mark.range.startOffset) != null ? _h : Number.NEGATIVE_INFINITY;
+  const markEnd = (_i = mark.range.endOffset) != null ? _i : Number.POSITIVE_INFINITY;
+  return lineStart < markEnd && lineEnd > markStart;
+}
+function getLineMarkSnapshot(marks) {
+  if (!marks.length) return {};
+  const className = marks.flatMap(getMarkClassNames).join(" ");
+  const markData = Object.assign({}, ...marks.map((mark) => {
+    var _a2;
+    return (_a2 = mark.data) != null ? _a2 : {};
+  }));
+  return {
+    className,
+    markIds: marks.map((mark) => mark.id),
+    markKinds: marks.map((mark) => mark.kind).filter((kind) => Boolean(kind)),
+    ...Object.keys(markData).length ? { markData } : {}
+  };
+}
+function getMarkClassNames(mark) {
+  var _a2, _b2;
+  const names = (_b2 = (_a2 = mark.className) == null ? void 0 : _a2.trim().split(/\s+/).filter(Boolean)) != null ? _b2 : [];
+  if (mark.kind) names.push(`rebook-mark-${toKebabCase(mark.kind)}`);
+  return names.length ? names : ["rebook-mark"];
+}
+function toKebabCase(value2) {
+  return value2.replace(/([a-z0-9])([A-Z])/g, "$1-$2").replace(/[^a-zA-Z0-9_-]+/g, "-").toLowerCase();
 }
 function getTextFragmentStyle(style, gapBefore) {
   return {
@@ -21194,6 +21336,31 @@ class ReaderSession {
    */
   setSpread(maxColumns) {
     this.renderer.setSpread(maxColumns);
+  }
+  /**
+   * Add or replace a transient render mark such as the current TTS segment,
+   * search hit, translation state, or annotation preview.
+   */
+  setMark(mark) {
+    this.renderer.setMark(mark);
+  }
+  /**
+   * Remove a render mark by id.
+   */
+  removeMark(id) {
+    this.renderer.removeMark(id);
+  }
+  /**
+   * Clear render marks. When kind is provided, only marks of that kind are cleared.
+   */
+  clearMarks(kind) {
+    this.renderer.clearMarks(kind);
+  }
+  /**
+   * Get current render marks.
+   */
+  getMarks() {
+    return this.renderer.getMarks();
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   on(event, listener) {

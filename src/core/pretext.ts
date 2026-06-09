@@ -159,6 +159,7 @@ const BLOCK_TAGS = new Set([
 
 const LIST_CONTAINER_TAGS = new Set(['dl', 'ol', 'ul'])
 const ANCHOR_TAGS = new Set(['a', 'anchor'])
+const REBOOK_ROLE_ATTR = 'data-rebook-role'
 
 const DEFAULT_STYLE = {
     fontFamily: 'Georgia, serif',
@@ -240,7 +241,7 @@ export function extractDocumentBlocks(
         const normalized = type === 'pre' ? normalizePreSegments(segments) : normalizeSegments(segments)
         if (!normalized.some(segment => segment.text.trim())) return
         const preset = getBlockPreset(type, baseStyle, depth)
-        const attrs = getBlockAnchorAttrs(node)
+        const attrs = getBlockAttrs(node)
         const id = attrs?.id ?? `${type}-${nextId++}`
         blocks.push({
             id,
@@ -771,10 +772,10 @@ function collectInlineSegments(
 ): TextSegment[] {
     const segments: TextSegment[] = []
 
-    const walk = (current: DocumentNode, style: TextStyle) => {
+    const walk = (current: DocumentNode, style: TextStyle, inheritedAttrs?: Readonly<Record<string, string>>) => {
         if (isTextNode(current)) {
             if (current.text) {
-                segments.push({ text: current.text, style, source: { nodeType: 'text' } })
+                segments.push({ text: current.text, style, source: { nodeType: 'text', attrs: inheritedAttrs } })
             }
             return
         }
@@ -783,8 +784,9 @@ function collectInlineSegments(
         if (type === 'script' || type === 'style' || type === 'head') return
         if (isFootnoteContentNode(current)) return
         if (options.skipNestedLists && current !== node && LIST_CONTAINER_TAGS.has(type)) return
+        const sourceAttrs = mergeSourceAttrs(inheritedAttrs, current.attrs, getSemanticDataAttrs(current))
         if (type === 'br') {
-            segments.push({ text: '\n', style, source: { nodeType: 'br', attrs: current.attrs } })
+            segments.push({ text: '\n', style, source: { nodeType: 'br', attrs: sourceAttrs } })
             return
         }
 
@@ -800,8 +802,9 @@ function collectInlineSegments(
                     source: {
                         nodeType: 'img',
                         attrs: {
-                            ...(current.attrs ?? {}),
+                            ...(sourceAttrs ?? current.attrs ?? {}),
                             ...getFootnoteMarkerDataAttrs(image, current.attrs),
+                            [REBOOK_ROLE_ATTR]: 'noteref',
                             'data-rebook-inline-image-width': String(dimensions.width),
                             'data-rebook-inline-image-height': String(dimensions.height),
                         },
@@ -812,13 +815,13 @@ function collectInlineSegments(
         }
 
         if (BLOCK_TAGS.has(type) && current !== node) {
-            for (const child of current.children ?? []) walk(child, applyNodeStyle(type, style, current.attrs))
-            segments.push({ text: '\n', style, source: { nodeType: type, attrs: current.attrs } })
+            for (const child of current.children ?? []) walk(child, applyNodeStyle(type, style, current.attrs), sourceAttrs)
+            segments.push({ text: '\n', style, source: { nodeType: type, attrs: sourceAttrs } })
             return
         }
 
         const nextStyle = applyNodeStyle(type, style, current.attrs)
-        for (const child of current.children ?? []) walk(child, nextStyle)
+        for (const child of current.children ?? []) walk(child, nextStyle, sourceAttrs)
     }
 
     for (const child of node.children ?? []) walk(child, inherited)
@@ -1276,6 +1279,102 @@ function getBlockAnchorAttrs(node: DocumentNode): Readonly<Record<string, string
         ...(anchor.attrs?.id ? { id: anchor.attrs.id } : {}),
         ...(anchor.attrs?.name ? { name: anchor.attrs.name } : {}),
     }
+}
+
+function getBlockAttrs(node: DocumentNode): Readonly<Record<string, string>> | undefined {
+    return mergeSourceAttrs(getBlockAnchorAttrs(node), getSemanticDataAttrs(node))
+}
+
+function mergeSourceAttrs(
+    ...sources: Array<Readonly<Record<string, string>> | undefined>
+): Readonly<Record<string, string>> | undefined {
+    const merged: Record<string, string> = {}
+    for (const source of sources) {
+        if (!source) continue
+        for (const [key, value] of Object.entries(source)) merged[key] = value
+    }
+    return Object.keys(merged).length > 0 ? merged : undefined
+}
+
+function getSemanticDataAttrs(node: DocumentNode): Readonly<Record<string, string>> | undefined {
+    const role = getNodeSemanticRole(node)
+    return role ? { [REBOOK_ROLE_ATTR]: role } : undefined
+}
+
+function getNodeSemanticRole(node: DocumentNode): 'footnote' | 'noteref' | undefined {
+    if (isTextNode(node)) return undefined
+    if (isNoterefNode(node)) return 'noteref'
+    if (isFootnoteNode(node)) return 'footnote'
+    return undefined
+}
+
+function isNoterefNode(node: DocumentNode): boolean {
+    if (isTextNode(node)) return false
+    const tokens = getNodeSemanticTokens(node)
+    if (tokens.some(token =>
+        token === 'noteref'
+        || token === 'doc-noteref'
+        || token === 'footnote-ref'
+        || token === 'epub-footnote'
+        || token === 'epub-footnote1'
+    )) return true
+
+    const type = node.type.toLowerCase()
+    if (!ANCHOR_TAGS.has(type)) return false
+    const href = node.attrs?.href ?? node.attrs?.['xlink:href']
+    if (!href || !/#/.test(href)) return false
+    const fragment = href.split('#').pop()?.trim()
+    if (!fragment || !isFootnoteAnchorId(fragment)) return false
+    return isFootnoteMarkerText(getNodeText(node))
+}
+
+function isFootnoteNode(node: DocumentNode): boolean {
+    if (isTextNode(node)) return false
+    const tokens = getNodeSemanticTokens(node)
+    if (tokens.some(token =>
+        token === 'footnote'
+        || token === 'doc-footnote'
+        || token === 'endnote'
+        || token === 'doc-endnote'
+        || token === 'rearnote'
+        || token === 'duokan-footnote-content'
+    )) return true
+
+    if (!tokens.includes('note')) return false
+    const attrs = node.attrs ?? {}
+    const anchor = attrs.id ?? attrs.name ?? findDescendantAnchor(node)?.attrs?.id ?? findDescendantAnchor(node)?.attrs?.name
+    return (anchor ? isFootnoteAnchorId(anchor) : false) || isFootnoteContentText(getNodeText(node))
+}
+
+function getNodeSemanticTokens(node: DocumentNode): string[] {
+    if (isTextNode(node)) return []
+    return [
+        node.attrs?.['epub:type'],
+        node.attrs?.type,
+        node.attrs?.role,
+        node.attrs?.rel,
+        node.attrs?.class,
+    ]
+        .filter(Boolean)
+        .flatMap(value => value!.toLowerCase().split(/\s+/))
+        .filter(Boolean)
+}
+
+function getNodeText(node: DocumentNode): string {
+    if (isTextNode(node)) return node.text
+    return (node.children ?? []).map(child => getNodeText(child)).join('')
+}
+
+function isFootnoteAnchorId(value: string): boolean {
+    return /^(?:m|fn|footnote|note|endnote|en)[-_]?\d{1,4}$/i.test(value)
+}
+
+function isFootnoteMarkerText(value: string): boolean {
+    return /^[\s\u00a0]*[\[［(（]?\d{1,4}[)\]］）]?[\s\u00a0]*$/.test(value)
+}
+
+function isFootnoteContentText(value: string): boolean {
+    return /^[\s\u00a0]*[\[［]\s*\d{1,4}\s*[\]］]/.test(value)
 }
 
 function findDescendantAnchor(node: DocumentNode): DocumentNode | null {

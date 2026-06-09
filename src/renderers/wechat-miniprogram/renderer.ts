@@ -6,7 +6,7 @@
  */
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
-import type { LayoutMode, NavigationDirection, Renderer, RendererNavigationHooks, RendererStyles } from '../../core/renderer'
+import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from '../../core/renderer'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
@@ -94,6 +94,10 @@ export interface WechatMiniProgramLineBase {
     kind: LineRange['kind']
     blockId?: string
     blockType?: string
+    className?: string
+    markIds?: string[]
+    markKinds?: string[]
+    markData?: Record<string, unknown>
     style: Record<string, string | number>
 }
 
@@ -179,6 +183,7 @@ export class WechatMiniProgramRenderer implements Renderer {
     private tocPositions: TOCPosition[] = []
     private pendingTOCItem: TOCItem | null = null
     private beforeNavigate: RendererNavigationHooks['beforeNavigate']
+    private marks = new Map<string, ReaderMark>()
     private columnLayout: ColumnLayout = {
         margin: DEFAULT_MARGIN,
         gap: DEFAULT_GAP,
@@ -327,6 +332,31 @@ export class WechatMiniProgramRenderer implements Renderer {
         this.publishPosition('spread')
     }
 
+    setMark(mark: ReaderMark): void {
+        this.marks.set(mark.id, mark)
+        this.publishSnapshot()
+    }
+
+    removeMark(id: string): void {
+        this.marks.delete(id)
+        this.publishSnapshot()
+    }
+
+    clearMarks(kind?: string): void {
+        if (kind === undefined) {
+            this.marks.clear()
+        } else {
+            for (const [id, mark] of this.marks) {
+                if (mark.kind === kind) this.marks.delete(id)
+            }
+        }
+        this.publishSnapshot()
+    }
+
+    getMarks(): ReaderMark[] {
+        return Array.from(this.marks.values())
+    }
+
     setViewport(width: number, height: number): void {
         const fraction = this.getSectionFraction()
         this.width = Math.max(1, width)
@@ -400,6 +430,7 @@ export class WechatMiniProgramRenderer implements Renderer {
         this.prepared = null
         this.lines = []
         this.currentIndex = -1
+        this.marks.clear()
         this.publishSnapshot()
     }
 
@@ -518,10 +549,12 @@ export class WechatMiniProgramRenderer implements Renderer {
     private createLineNode(line: LineRange): WechatMiniProgramLineNode {
         const position = this.getRenderedLinePosition(line)
         const style = this.getLineStyle(line, position)
+        const marks = this.getLineMarks(line)
         const base = {
             key: `line-${this.currentIndex}-${line.index}`,
             blockId: line.block?.id,
             blockType: line.block?.type,
+            ...getLineMarkSnapshot(marks),
             style,
         }
 
@@ -580,6 +613,11 @@ export class WechatMiniProgramRenderer implements Renderer {
             text: fragment.text,
             style,
         }
+    }
+
+    private getLineMarks(line: LineRange): ReaderMark[] {
+        if (this.currentIndex < 0) return []
+        return Array.from(this.marks.values()).filter(mark => markMatchesLine(mark, line, this.currentIndex))
     }
 
     private publishPosition(reason: string): void {
@@ -890,6 +928,42 @@ function compareTOCPosition(a: TOCPosition, b: TOCPosition): number {
     return a.index - b.index
         || a.sourceTop - b.sourceTop
         || a.order - b.order
+}
+
+function markMatchesLine(mark: ReaderMark, line: LineRange, sectionIndex: number): boolean {
+    if (!('sectionIndex' in mark.range) || mark.range.sectionIndex !== sectionIndex) return false
+    if (!('blockId' in mark.range)) return false
+    if (line.block?.id !== mark.range.blockId) return false
+    if (mark.range.startOffset === undefined && mark.range.endOffset === undefined) return true
+    if ((line.block?.segments.length ?? 0) !== 1) return true
+    const lineStart = line.start?.cursor.graphemeIndex ?? 0
+    const lineEnd = line.end?.cursor.graphemeIndex ?? lineStart
+    if (lineEnd <= lineStart) return true
+    const markStart = mark.range.startOffset ?? Number.NEGATIVE_INFINITY
+    const markEnd = mark.range.endOffset ?? Number.POSITIVE_INFINITY
+    return lineStart < markEnd && lineEnd > markStart
+}
+
+function getLineMarkSnapshot(marks: ReaderMark[]): Pick<WechatMiniProgramLineBase, 'className' | 'markIds' | 'markKinds' | 'markData'> {
+    if (!marks.length) return {}
+    const className = marks.flatMap(getMarkClassNames).join(' ')
+    const markData = Object.assign({}, ...marks.map(mark => mark.data ?? {}))
+    return {
+        className,
+        markIds: marks.map(mark => mark.id),
+        markKinds: marks.map(mark => mark.kind).filter((kind): kind is string => Boolean(kind)),
+        ...(Object.keys(markData).length ? { markData } : {}),
+    }
+}
+
+function getMarkClassNames(mark: ReaderMark): string[] {
+    const names = mark.className?.trim().split(/\s+/).filter(Boolean) ?? []
+    if (mark.kind) names.push(`rebook-mark-${toKebabCase(mark.kind)}`)
+    return names.length ? names : ['rebook-mark']
+}
+
+function toKebabCase(value: string): string {
+    return value.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()
 }
 
 function getTextFragmentStyle(style: TextStyle, gapBefore: number): Record<string, string | number> {

@@ -8,7 +8,7 @@
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, RebookPlugin, TOCItem } from './types'
 import type { ParserInput, ParserOptions } from './parser'
-import type { LayoutMode, NavigationDirection, Renderer, RendererNavigationHooks, RendererStyles } from './renderer'
+import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from './renderer'
 import type { TrialLimitController, TrialTOCAccessItem } from '../plugins/trial-limit'
 import { registry } from './parser'
 import { applyRebookPlugins } from './plugins'
@@ -355,6 +355,35 @@ export class ReaderSession {
      */
     setSpread(maxColumns: number): void {
         this.renderer.setSpread(maxColumns)
+    }
+
+    /**
+     * Add or replace a transient render mark such as the current TTS segment,
+     * search hit, translation state, or annotation preview.
+     */
+    setMark(mark: ReaderMark): void {
+        this.renderer.setMark(mark)
+    }
+
+    /**
+     * Remove a render mark by id.
+     */
+    removeMark(id: string): void {
+        this.renderer.removeMark(id)
+    }
+
+    /**
+     * Clear render marks. When kind is provided, only marks of that kind are cleared.
+     */
+    clearMarks(kind?: string): void {
+        this.renderer.clearMarks(kind)
+    }
+
+    /**
+     * Get current render marks.
+     */
+    getMarks(): ReaderMark[] {
+        return this.renderer.getMarks()
     }
 
     /**

@@ -54,6 +54,19 @@ export interface RendererNavigationHooks {
     beforeNavigate?: (direction: NavigationDirection) => boolean | Promise<boolean>
 }
 
+export type ReaderMarkRange =
+    | { sectionIndex: number; blockId: string; startOffset?: number; endOffset?: number }
+    | { sectionIndex: number; href: string }
+    | { cfi: string }
+
+export interface ReaderMark {
+    id: string
+    kind?: string
+    range: ReaderMarkRange
+    className?: string
+    data?: Record<string, unknown>
+}
+
 /**
  * Platform-neutral configuration shared by renderer implementations.
  * Browser-specific renderers add their host container in their own modules.
@@ -122,6 +135,26 @@ export interface Renderer {
      * 1 and 2 columns based on the available container width.
      */
     setSpread(maxColumns: number): void
+
+    /**
+     * Replace or add a render mark.
+     */
+    setMark(mark: ReaderMark): void
+
+    /**
+     * Remove one render mark.
+     */
+    removeMark(id: string): void
+
+    /**
+     * Clear render marks. When kind is provided, only marks of that kind are cleared.
+     */
+    clearMarks(kind?: string): void
+
+    /**
+     * Get current render marks.
+     */
+    getMarks(): ReaderMark[]
 
     /**
      * Get the current reading location.

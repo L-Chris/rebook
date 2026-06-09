@@ -84,6 +84,8 @@ export type {
     Renderer,
     RendererConfig,
     RendererStyles,
+    ReaderMark,
+    ReaderMarkRange,
     LayoutMode,
     RendererFactory,
 } from './core/renderer'
@@ -175,14 +177,21 @@ export {
     estimateTrialLimitState,
 } from './plugins/trial-limit'
 export {
+    createBrowserTTSAudioPlayer,
     withTTS,
 } from './plugins/tts'
 export type {
+    BrowserTTSAudioPlayerOptions,
+    TTSAudioPlaybackEvent,
+    TTSAudioPlaybackOptions,
+    TTSAudioPlayer,
     TTSBook,
     TTSController,
     TTSJob,
     TTSJobStatus,
     TTSOptions,
+    TTSPrefetchedSection,
+    TTSPrefetchOptions,
     TTSSectionOptions,
     TTSSegment,
     TTSSynthesizeOptions,

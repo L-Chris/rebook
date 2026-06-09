@@ -5,7 +5,7 @@
  */
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
-import type { LayoutMode, NavigationDirection, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
+import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
@@ -110,6 +110,7 @@ export class BrowserRenderer implements Renderer {
     private suppressNextScrollRelocate = false
     private prefetchPageCount = 0
     private beforeNavigate: RendererConfig['beforeNavigate']
+    private marks = new Map<string, ReaderMark>()
 
     constructor(config: BrowserRendererConfig) {
         this.container = config.container
@@ -294,6 +295,31 @@ export class BrowserRenderer implements Renderer {
         this.emitBlockWindow('spread')
     }
 
+    setMark(mark: ReaderMark): void {
+        this.marks.set(mark.id, mark)
+        this.renderVisibleLines()
+    }
+
+    removeMark(id: string): void {
+        this.marks.delete(id)
+        this.renderVisibleLines()
+    }
+
+    clearMarks(kind?: string): void {
+        if (kind === undefined) {
+            this.marks.clear()
+        } else {
+            for (const [id, mark] of this.marks) {
+                if (mark.kind === kind) this.marks.delete(id)
+            }
+        }
+        this.renderVisibleLines()
+    }
+
+    getMarks(): ReaderMark[] {
+        return Array.from(this.marks.values())
+    }
+
     getLocation(): RelocateEvent | null {
         return this.lastLocation
     }
@@ -327,6 +353,7 @@ export class BrowserRenderer implements Renderer {
         this.scroller.remove()
         this.listeners.clear()
         this.book = null
+        this.marks.clear()
     }
 
     private async loadSection(
@@ -484,6 +511,7 @@ export class BrowserRenderer implements Renderer {
                 lineEl.dataset.blockId = block.id
                 lineEl.dataset.blockType = block.type
             }
+            this.applyLineMarks(lineEl, line)
 
             for (const fragment of line.segments) {
                 const span = document.createElement('span')
@@ -531,6 +559,7 @@ export class BrowserRenderer implements Renderer {
             wrapper.dataset.blockId = line.block.id
             wrapper.dataset.blockType = line.block.type
         }
+        this.applyLineMarks(wrapper, line)
         if (image.isCover) wrapper.dataset.cover = 'true'
 
         const img = document.createElement('img')
@@ -580,6 +609,7 @@ export class BrowserRenderer implements Renderer {
             wrapper.dataset.blockId = block.id
             wrapper.dataset.blockType = block.type
         }
+        this.applyLineMarks(wrapper, line)
 
         // Build content with span-based inline styling if segments have varied styles
         const hasVariedStyles = line.segments.some((seg, i) => {
@@ -642,6 +672,7 @@ export class BrowserRenderer implements Renderer {
             wrapper.dataset.blockId = line.block.id
             wrapper.dataset.blockType = line.block.type
         }
+        this.applyLineMarks(wrapper, line)
 
         const rule = document.createElement('div')
         rule.style.cssText = `
@@ -672,6 +703,7 @@ export class BrowserRenderer implements Renderer {
         wrapper.dataset.blockId = line.block?.id ?? `table-row-${table.rowIndex}`
         wrapper.dataset.blockType = 'table'
         wrapper.setAttribute('role', 'row')
+        this.applyLineMarks(wrapper, line)
 
         const row = document.createElement('div')
         row.style.cssText = `
@@ -703,6 +735,24 @@ export class BrowserRenderer implements Renderer {
 
         wrapper.appendChild(row)
         return wrapper
+    }
+
+    private applyLineMarks(element: HTMLElement, line: LineRange): void {
+        const marks = this.getLineMarks(line)
+        if (!marks.length) return
+        element.dataset.markIds = marks.map(mark => mark.id).join(' ')
+        element.dataset.markKinds = marks.map(mark => mark.kind).filter(Boolean).join(' ')
+        for (const mark of marks) {
+            element.classList.add(...getMarkClassNames(mark))
+            for (const [key, value] of Object.entries(mark.data ?? {})) {
+                element.dataset[`mark${toPascalCase(key)}`] = String(value)
+            }
+        }
+    }
+
+    private getLineMarks(line: LineRange): ReaderMark[] {
+        if (this.currentIndex < 0) return []
+        return Array.from(this.marks.values()).filter(mark => markMatchesLine(mark, line, this.currentIndex))
     }
 
     private emitRelocate(reason: string): void {
@@ -1080,6 +1130,36 @@ function compareTOCPosition(a: TOCPosition, b: TOCPosition): number {
     return a.index - b.index
         || a.sourceTop - b.sourceTop
         || a.order - b.order
+}
+
+function markMatchesLine(mark: ReaderMark, line: LineRange, sectionIndex: number): boolean {
+    if (!('sectionIndex' in mark.range) || mark.range.sectionIndex !== sectionIndex) return false
+    if (!('blockId' in mark.range)) return false
+    if (line.block?.id !== mark.range.blockId) return false
+    if (mark.range.startOffset === undefined && mark.range.endOffset === undefined) return true
+    if ((line.block?.segments.length ?? 0) !== 1) return true
+    const lineStart = line.start?.cursor.graphemeIndex ?? 0
+    const lineEnd = line.end?.cursor.graphemeIndex ?? lineStart
+    if (lineEnd <= lineStart) return true
+    const markStart = mark.range.startOffset ?? Number.NEGATIVE_INFINITY
+    const markEnd = mark.range.endOffset ?? Number.POSITIVE_INFINITY
+    return lineStart < markEnd && lineEnd > markStart
+}
+
+function getMarkClassNames(mark: ReaderMark): string[] {
+    const names = mark.className?.trim().split(/\s+/).filter(Boolean) ?? []
+    if (mark.kind) names.push(`rebook-mark-${toKebabCase(mark.kind)}`)
+    return names.length ? names : ['rebook-mark']
+}
+
+function toKebabCase(value: string): string {
+    return value.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()
+}
+
+function toPascalCase(value: string): string {
+    return value
+        .replace(/[^a-zA-Z0-9]+(.)/g, (_, char: string) => char.toUpperCase())
+        .replace(/^[a-z]/, char => char.toUpperCase())
 }
 
 function applyTextStyle(element: HTMLElement, style: TextStyle): void {

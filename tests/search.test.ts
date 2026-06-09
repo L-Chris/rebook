@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import type { Book, TextBlock } from '../src/core/types'
-import type { Renderer } from '../src/core/renderer'
+import type { ReaderMark, Renderer } from '../src/core/renderer'
 import { ReaderSession } from '../src/core/reader'
 import { searchBook, searchChapters } from '../src/search'
 import { EPUBParser } from '../src/parsers/epub'
@@ -57,12 +57,39 @@ const createNoopRenderer = (): Renderer => ({
     setStyles: () => {},
     setLayout: () => {},
     setSpread: () => {},
+    setMark: () => {},
+    removeMark: () => {},
+    clearMarks: () => {},
+    getMarks: () => [],
     getLocation: () => null,
     getSectionFractions: () => [],
     refresh: async () => {},
     on: () => {},
     off: () => {},
     destroy: () => {},
+})
+
+const createNoopRendererWithMarks = (marks: ReaderMark[]): Renderer => ({
+    ...createNoopRenderer(),
+    setMark: mark => {
+        const index = marks.findIndex(item => item.id === mark.id)
+        if (index >= 0) marks[index] = mark
+        else marks.push(mark)
+    },
+    removeMark: id => {
+        const index = marks.findIndex(item => item.id === id)
+        if (index >= 0) marks.splice(index, 1)
+    },
+    clearMarks: kind => {
+        if (kind === undefined) {
+            marks.splice(0, marks.length)
+            return
+        }
+        for (let index = marks.length - 1; index >= 0; index--) {
+            if (marks[index].kind === kind) marks.splice(index, 1)
+        }
+    },
+    getMarks: () => [...marks],
 })
 
 describe('searchBook', () => {
@@ -120,6 +147,25 @@ describe('ReaderSession search', () => {
         expect(groups).toHaveLength(2)
         expect(groups[0].chapterLabel).toBe('One')
 
+        reader.destroy()
+    })
+
+    it('forwards transient reader marks to the renderer', () => {
+        const marks: ReaderMark[] = []
+        const reader = new ReaderSession({
+            createRenderer: () => createNoopRendererWithMarks(marks),
+        })
+
+        reader.setMark({
+            id: 'tts-current',
+            kind: 'tts',
+            range: { sectionIndex: 0, blockId: 'p1' },
+            className: 'is-current',
+        })
+
+        expect(reader.getMarks()).toHaveLength(1)
+        reader.clearMarks('tts')
+        expect(reader.getMarks()).toHaveLength(0)
         reader.destroy()
     })
 })

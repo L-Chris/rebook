@@ -85,6 +85,12 @@
             font-size: 14px;
         }
 
+        #viewer .rebook-tts-current {
+            background: rgba(255, 214, 102, 0.28);
+            box-shadow: -6px 0 0 rgba(255, 188, 66, 0.8);
+            transition: background 0.18s ease;
+        }
+
         /* Main content */
         main {
             flex: 1;
@@ -498,6 +504,10 @@
                 <input type="number" id="tts-segment-chars-input" min="80" max="2000" value="500" title="Max chars per TTS segment">
             </div>
             <div class="setting-row">
+                <label>Rate</label>
+                <input type="text" id="tts-rate-input" value="+0%" placeholder="+0%" title="Speech rate, for example -10%, +20%">
+            </div>
+            <div class="setting-row">
                 <label>Playback</label>
                 <div class="export-controls">
                     <button id="btn-tts-play" title="Speak current section">Speak</button>
@@ -556,7 +566,7 @@
         import { fb2 } from '../src/parsers/fb2.ts'
         import { mobi } from '../src/parsers/mobi.ts'
         import { withTrialLimit } from '../src/plugins/trial-limit.ts'
-        import { withTTS } from '../src/plugins/tts.ts'
+        import { createBrowserTTSAudioPlayer, withTTS } from '../src/plugins/tts.ts'
         import { withProfessionalTranslation, withTranslation } from '../src/plugins/translation.ts'
         import { createOpenAI } from '@ai-sdk/openai'
 
@@ -613,6 +623,7 @@
         const ttsProviderInput = document.getElementById('tts-provider-input')
         const ttsVoiceInput = document.getElementById('tts-voice-input')
         const ttsSegmentCharsInput = document.getElementById('tts-segment-chars-input')
+        const ttsRateInput = document.getElementById('tts-rate-input')
         const btnTTSPlay = document.getElementById('btn-tts-play')
         const btnTTSStop = document.getElementById('btn-tts-stop')
         const ttsStatus = document.getElementById('tts-status')
@@ -643,6 +654,7 @@
             ttsProvider: 'edge',
             ttsVoice: 'zh-CN-XiaoyiNeural',
             ttsSegmentChars: '500',
+            ttsRate: '+0%',
         }
 
         let currentFile = null
@@ -650,8 +662,9 @@
         let activeTOCHref = null
         let reader = null
         let refreshTimer = null
-        let currentAudio = null
+        const ttsPlayer = createBrowserTTSAudioPlayer()
         let ttsStopRequested = false
+        let ttsAbortController = null
 
         const loadConfig = () => {
             try {
@@ -684,6 +697,7 @@
                 ttsProvider: ttsProviderInput.value,
                 ttsVoice: ttsVoiceInput.value,
                 ttsSegmentChars: ttsSegmentCharsInput.value,
+                ttsRate: ttsRateInput.value,
             }))
         }
 
@@ -709,6 +723,7 @@
             ttsProviderInput.value = config.ttsProvider ?? defaultConfig.ttsProvider
             ttsVoiceInput.value = config.ttsVoice ?? defaultConfig.ttsVoice
             ttsSegmentCharsInput.value = config.ttsSegmentChars ?? defaultConfig.ttsSegmentChars
+            ttsRateInput.value = config.ttsRate ?? defaultConfig.ttsRate
             updateTranslationFields()
             updateTTSFields()
             updateTrialFields()
@@ -828,7 +843,9 @@
                     endpoint: ttsEndpointInput.value.trim() || defaultConfig.ttsEndpoint,
                     provider: ttsProviderInput.value.trim() || undefined,
                     voice: ttsVoiceInput.value.trim() || undefined,
+                    rate: ttsRateInput.value.trim() || undefined,
                     maxSegmentChars: Number(ttsSegmentCharsInput.value) || Number(defaultConfig.ttsSegmentChars),
+                    player: ttsPlayer,
                 }))
             }
 
@@ -1186,7 +1203,7 @@
             recreateReader()
         })
 
-        ;[ttsEndpointInput, ttsProviderInput, ttsVoiceInput, ttsSegmentCharsInput].forEach(input => {
+        ;[ttsEndpointInput, ttsProviderInput, ttsVoiceInput, ttsSegmentCharsInput, ttsRateInput].forEach(input => {
             input.addEventListener('change', () => {
                 saveConfig()
                 if (ttsCheck.checked) {
@@ -1198,6 +1215,10 @@
 
         btnTTSPlay.addEventListener('click', () => {
             speakCurrentSection().catch(error => {
+                if (ttsStopRequested || error.message.includes('aborted')) {
+                    updateTTSStatus()
+                    return
+                }
                 console.error('TTS failed:', error)
                 updateTTSStatus(`TTS failed: ${error.message}`)
             })
@@ -1207,10 +1228,13 @@
 
         function stopTTS() {
             ttsStopRequested = true
-            if (currentAudio) {
-                currentAudio.pause()
-                currentAudio = null
+            if (ttsAbortController) {
+                ttsAbortController.abort()
+                ttsAbortController = null
             }
+            currentBook?.tts?.stopPlayback()
+            ttsPlayer.stop()
+            reader?.clearMarks('tts')
             updateTTSStatus()
         }
 
@@ -1219,45 +1243,111 @@
                 alert('Enable TTS and reload the current book first.')
                 return
             }
-            const sectionIndex = reader.getLocation()?.index ?? 0
-            const segments = await currentBook.tts.prepareSection(sectionIndex, {
+            if (ttsAbortController) ttsAbortController.abort()
+            const abortController = new AbortController()
+            ttsAbortController = abortController
+            const prefetchOptions = {
                 voice: ttsVoiceInput.value.trim() || undefined,
                 maxSegmentChars: Number(ttsSegmentCharsInput.value) || Number(defaultConfig.ttsSegmentChars),
-            })
-            if (!segments.length) {
-                updateTTSStatus('No readable text in current section.')
-                return
+                provider: ttsProviderInput.value.trim() || undefined,
+                rate: ttsRateInput.value.trim() || undefined,
+                concurrency: 2,
+            }
+            const prefetchCache = new Map()
+            const playedSegmentIds = new Set()
+            const getPrefetch = async (sectionIndex) => {
+                if (!prefetchCache.has(sectionIndex)) {
+                    prefetchCache.set(sectionIndex, currentBook.tts.prefetchSection(sectionIndex, prefetchOptions))
+                }
+                return prefetchCache.get(sectionIndex)
             }
 
             ttsStopRequested = false
-            for (let i = 0; i < segments.length; i++) {
-                if (ttsStopRequested) break
-                const segment = segments[i]
-                updateTTSStatus(`Generating ${i + 1}/${segments.length}: ${segment.text.slice(0, 48)}`)
-                const result = await currentBook.tts.synthesizeSegment(segment, {
-                    provider: ttsProviderInput.value.trim() || undefined,
-                    voice: ttsVoiceInput.value.trim() || undefined,
-                })
-                if (ttsStopRequested) break
-                updateTTSStatus(`Playing ${i + 1}/${segments.length}: ${segment.text.slice(0, 48)}`)
-                await playAudio(result.audioUrl)
+            let playedAny = false
+            while (!ttsStopRequested && !abortController.signal.aborted) {
+                const location = reader.getLocation()
+                const sectionIndex = location?.index ?? 0
+                const prefetch = await getPrefetch(sectionIndex)
+                const pagePrefetch = filterPrefetchToVisiblePage(prefetch, location, playedSegmentIds)
+
+                if (pagePrefetch.segments.length) {
+                    playedAny = true
+                    await currentBook.tts.playPrefetchedSection(pagePrefetch, {
+                        signal: abortController.signal,
+                        preloadAhead: 3,
+                        onSegmentQueued: ({ segment, index, total }) => {
+                            updateTTSStatus(`Queued page audio ${index + 1}/${total}: ${segment.text.slice(0, 48)}`)
+                        },
+                        onSegmentStart: ({ segment, index, total }) => {
+                            setTTSSegmentMark(segment)
+                            updateTTSStatus(`Playing page audio ${index + 1}/${total}: ${segment.text.slice(0, 48)}`)
+                        },
+                    })
+                    for (const segment of pagePrefetch.segments) playedSegmentIds.add(segment.id)
+                } else {
+                    updateTTSStatus(`Skipping page without readable text in section ${sectionIndex + 1}.`)
+                }
+
+                if (ttsStopRequested || abortController.signal.aborted) break
+                reader.clearMarks('tts')
+                if (!reader.canGoNext()) break
+
+                const before = getLocationKey(reader.getLocation())
+                await reader.next()
+                const after = getLocationKey(reader.getLocation())
+                if (after === before) break
             }
-            if (!ttsStopRequested) updateTTSStatus('TTS finished.')
+
+            if (!ttsStopRequested && !abortController.signal.aborted) {
+                if (ttsAbortController === abortController) ttsAbortController = null
+                reader.clearMarks('tts')
+                updateTTSStatus(playedAny ? 'TTS finished.' : 'No readable text from current page.')
+            }
         }
 
-        function playAudio(url) {
-            return new Promise((resolve, reject) => {
-                currentAudio = new Audio(url)
-                currentAudio.addEventListener('ended', () => {
-                    currentAudio = null
-                    resolve()
-                }, { once: true })
-                currentAudio.addEventListener('error', () => {
-                    currentAudio = null
-                    reject(new Error('Audio playback failed.'))
-                }, { once: true })
-                currentAudio.play().catch(reject)
+        function setTTSSegmentMark(segment) {
+            reader.setMark({
+                id: 'tts-current',
+                kind: 'tts',
+                range: {
+                    sectionIndex: segment.sectionIndex,
+                    blockId: segment.blockId,
+                    startOffset: segment.startOffset,
+                    endOffset: segment.endOffset,
+                },
+                className: 'rebook-tts-current',
+                data: { segmentId: segment.id },
             })
+        }
+
+        function filterPrefetchToVisiblePage(prefetch, location, playedSegmentIds) {
+            const blockIds = getVisibleBlockIds(location)
+            const segments = prefetch.segments.filter(segment =>
+                !playedSegmentIds.has(segment.id)
+                && (!blockIds.size || blockIds.has(segment.blockId))
+            )
+            return {
+                ...prefetch,
+                segments,
+                total: segments.length,
+            }
+        }
+
+        function getVisibleBlockIds(location) {
+            const blockIds = new Set()
+            for (const line of location?.range?.lines ?? []) {
+                if (line.block?.id) blockIds.add(line.block.id)
+            }
+            return blockIds
+        }
+
+        function getLocationKey(location) {
+            if (!location) return 'none'
+            return [
+                location.index,
+                Math.round((location.fraction ?? 0) * 1_000_000),
+                Math.round((location.totalFraction ?? 0) * 1_000_000),
+            ].join(':')
         }
 
         // Progress bar click
