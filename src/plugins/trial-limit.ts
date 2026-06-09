@@ -83,7 +83,7 @@ export function withTrialLimit(options: TrialLimitOptions = {}): RebookPlugin {
     return async (book: Book): Promise<TrialLimitedBook> => {
         const state = await estimateTrialLimitState(book, options)
         const trialLimit = createTrialLimitController(book, state, options)
-        return { ...book, trialLimit }
+        return Object.assign(book, { trialLimit })
     }
 }
 
@@ -102,7 +102,7 @@ export async function estimateTrialLimitState(
         maxPages,
         estimatedPageCount,
         limitFraction,
-        pageStepFraction: maxPages > 0 ? limitFraction / maxPages : 1,
+        pageStepFraction: maxPages > 0 ? limitFraction / maxPages : 0,
         estimatedBy: estimated.estimatedBy,
     }
 }

@@ -233,7 +233,7 @@ export class WechatMiniProgramRenderer implements Renderer {
         const resolved = this.book?.resolveHref?.(target) ?? this.resolveHrefFallback(target)
         if (!resolved) return
         this.pendingTOCItem = this.findTOCItem(target)
-        await this.loadSection(resolved.index, resolved.anchor)
+        await this.loadSection(resolved.index, resolved.anchor, target)
     }
 
     async next(): Promise<void> {
@@ -434,7 +434,7 @@ export class WechatMiniProgramRenderer implements Renderer {
         this.publishSnapshot()
     }
 
-    private async loadSection(index: number, anchor?: ResolvedNavigation['anchor']): Promise<void> {
+    private async loadSection(index: number, anchor?: ResolvedNavigation['anchor'], href?: string): Promise<void> {
         if (index < 0 || index >= this.sections.length) return
         const loadId = ++this.activeLoadId
         const section = this.sections[index]
@@ -450,7 +450,7 @@ export class WechatMiniProgramRenderer implements Renderer {
         this.scrollTop = 0
         this.relayout()
 
-        const anchorTop = this.getAnchorSourceTop(anchor)
+        const anchorTop = this.getAnchorSourceTop(anchor, href)
         if (anchorTop != null) this.scrollTop = this.getScrollTopForSourceTop(anchorTop)
         if (this.layoutMode === 'paginated') {
             this.pageIndex = Math.min(
@@ -703,7 +703,7 @@ export class WechatMiniProgramRenderer implements Renderer {
                 if (resolved?.anchor == null && !this.getTOCFragment(item.href)) {
                     sourceTop = 0
                 } else {
-                    const anchorTop = this.getAnchorSourceTop(resolved?.anchor)
+                    const anchorTop = this.getAnchorSourceTop(resolved?.anchor, item.href)
                     if (anchorTop == null) continue
                     sourceTop = anchorTop
                 }
@@ -756,19 +756,26 @@ export class WechatMiniProgramRenderer implements Renderer {
         return active?.item ?? null
     }
 
-    private getAnchorSourceTop(anchor?: ResolvedNavigation['anchor']): number | null {
-        if (anchor == null) return null
+    private getAnchorSourceTop(anchor?: ResolvedNavigation['anchor'], href?: string): number | null {
+        if (anchor == null && !href) return null
         if (typeof anchor === 'number') return anchor
         const value = typeof anchor === 'function'
             ? this.resolveAnchorValue(anchor as AnchorResolver)
             : anchor
-        const anchorIds = getAnchorIds(value)
+        const anchorIds = this.getAnchorIds(value, href)
         if (!anchorIds.length) return null
         const line = this.lines.find(item => {
             const block = item.block
             return block && anchorIds.some(id => block.id === id || block.attrs?.id === id || block.attrs?.name === id)
         })
         return line?.top ?? null
+    }
+
+    private getAnchorIds(value: unknown, href?: string): string[] {
+        const ids = getAnchorIds(value)
+        if (ids.length) return ids
+        const fragment = href ? this.getTOCFragment(href) : null
+        return fragment == null ? [] : [String(fragment)]
     }
 
     private resolveAnchorValue(anchor: AnchorResolver): unknown {

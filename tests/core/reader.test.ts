@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
-import { ReaderSession } from '../../src/core/reader'
+import { ReaderSession, type TOCViewItem } from '../../src/core/reader'
 import type { Book, RelocateEvent } from '../../src/core/types'
 import type { LayoutMode, ReaderMark, Renderer, RendererStyles } from '../../src/core/renderer'
 import { EPUBParser } from '../../src/parsers/epub'
@@ -68,8 +68,8 @@ describe('ReaderSession', () => {
 
         expect(active?.href).toBe('Text/chapter_1500.html')
         expect(items).toHaveLength(sectionCount)
-        expect(items.find(item => item.active)?.href).toBe('Text/chapter_1500.html')
-        expect(items[1_500].sectionIndex).toBe(1_500)
+        expect(flattenTOCViewItems(items).find(item => item.active)?.target).toBe('Text/chapter_1500.html')
+        expect(items[1_500].target).toBe('Text/chapter_1500.html')
     })
 
     it('marks active TOC view items for real EPUB books with different TOC shapes', async () => {
@@ -109,7 +109,8 @@ describe('ReaderSession', () => {
                     tocItem: undefined,
                 })
 
-                const active = reader.getTOCViewItems({ location: renderer.getLocation() }).find(viewItem => viewItem.active)
+                const active = flattenTOCViewItems(reader.getTOCViewItems({ location: renderer.getLocation() }))
+                    .find(viewItem => viewItem.active)
                 expect(active, `${filename}: ${item.href}`).toBeTruthy()
             }
 
@@ -137,7 +138,7 @@ describe('ReaderSession', () => {
             renderer.setLocation({ index, fraction: 0, totalFraction: 0, tocItem: undefined })
             const location = renderer.getLocation()
             const active = reader.getCurrentTOCItem(location)
-            const viewActive = reader.getTOCViewItems({ location }).find(item => item.active)
+            const viewActive = flattenTOCViewItems(reader.getTOCViewItems({ location })).find(item => item.active)
 
             expect(active?.label, `index ${index}`).toBe(label)
             expect(viewActive?.label, `index ${index}`).toBe(label)
@@ -149,4 +150,8 @@ describe('ReaderSession', () => {
 
 function flattenTOCItems(items: readonly NonNullable<Book['toc']>[number][]): NonNullable<Book['toc']>[number][] {
     return items.flatMap(item => item.subitems?.length ? [item, ...flattenTOCItems(item.subitems)] : [item])
+}
+
+function flattenTOCViewItems(items: readonly TOCViewItem[]): TOCViewItem[] {
+    return items.flatMap(item => item.children?.length ? [item, ...flattenTOCViewItems(item.children)] : [item])
 }

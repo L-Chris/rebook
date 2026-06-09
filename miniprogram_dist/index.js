@@ -20555,7 +20555,7 @@ class WechatMiniProgramRenderer {
     const resolved = (_c = (_b2 = (_a2 = this.book) == null ? void 0 : _a2.resolveHref) == null ? void 0 : _b2.call(_a2, target)) != null ? _c : this.resolveHrefFallback(target);
     if (!resolved) return;
     this.pendingTOCItem = this.findTOCItem(target);
-    await this.loadSection(resolved.index, resolved.anchor);
+    await this.loadSection(resolved.index, resolved.anchor, target);
   }
   async next() {
     if (!await this.canNavigate("next")) return;
@@ -20731,7 +20731,7 @@ class WechatMiniProgramRenderer {
     this.marks.clear();
     this.publishSnapshot();
   }
-  async loadSection(index, anchor) {
+  async loadSection(index, anchor, href) {
     var _a2;
     if (index < 0 || index >= this.sections.length) return;
     const loadId = ++this.activeLoadId;
@@ -20744,7 +20744,7 @@ class WechatMiniProgramRenderer {
     this.pageIndex = 0;
     this.scrollTop = 0;
     this.relayout();
-    const anchorTop = this.getAnchorSourceTop(anchor);
+    const anchorTop = this.getAnchorSourceTop(anchor, href);
     if (anchorTop != null) this.scrollTop = this.getScrollTopForSourceTop(anchorTop);
     if (this.layoutMode === "paginated") {
       this.pageIndex = Math.min(
@@ -20975,7 +20975,7 @@ class WechatMiniProgramRenderer {
         if ((resolved == null ? void 0 : resolved.anchor) == null && !this.getTOCFragment(item.href)) {
           sourceTop = 0;
         } else {
-          const anchorTop = this.getAnchorSourceTop(resolved == null ? void 0 : resolved.anchor);
+          const anchorTop = this.getAnchorSourceTop(resolved == null ? void 0 : resolved.anchor, item.href);
           if (anchorTop == null) continue;
           sourceTop = anchorTop;
         }
@@ -21021,12 +21021,12 @@ class WechatMiniProgramRenderer {
     }
     return (_a2 = active == null ? void 0 : active.item) != null ? _a2 : null;
   }
-  getAnchorSourceTop(anchor) {
+  getAnchorSourceTop(anchor, href) {
     var _a2;
-    if (anchor == null) return null;
+    if (anchor == null && !href) return null;
     if (typeof anchor === "number") return anchor;
     const value2 = typeof anchor === "function" ? this.resolveAnchorValue(anchor) : anchor;
-    const anchorIds = getAnchorIds(value2);
+    const anchorIds = this.getAnchorIds(value2, href);
     if (!anchorIds.length) return null;
     const line = this.lines.find((item) => {
       const block = item.block;
@@ -21036,6 +21036,12 @@ class WechatMiniProgramRenderer {
       });
     });
     return (_a2 = line == null ? void 0 : line.top) != null ? _a2 : null;
+  }
+  getAnchorIds(value2, href) {
+    const ids = getAnchorIds(value2);
+    if (ids.length) return ids;
+    const fragment = href ? this.getTOCFragment(href) : null;
+    return fragment == null ? [] : [String(fragment)];
   }
   resolveAnchorValue(anchor) {
     try {
@@ -21503,13 +21509,13 @@ class ReaderSession {
     return trialLimit.getCurrentTOCItem(items, this.getLocation());
   }
   /**
-   * Get flattened TOC items ready for reader UI rendering.
+   * Get TOC items ready for reader UI rendering.
    *
-   * The returned items include active and trial-disabled state so hosts do not
-   * need to duplicate href matching or trial policy logic.
+   * The returned tree includes active and trial-disabled state so hosts only
+   * need to render labels and pass item.target back to goTo().
    */
   getTOCViewItems(options = {}) {
-    var _a2, _b2;
+    var _a2, _b2, _c;
     if (!this.book) return [];
     const items = (_b2 = (_a2 = options.items) != null ? _a2 : this.book.toc) != null ? _b2 : [];
     if (!items.length) return [];
@@ -21521,16 +21527,11 @@ class ReaderSession {
     if (trialLimit) {
       const trialItems = trialLimit.getTOCItems(sectionFractions, items);
       const activeItem2 = trialLimit.getCurrentTOCItem(trialItems, location);
-      return trialItems.map((item) => {
-        var _a3;
-        return {
-          ...item,
-          active: isSameTOCItem(item.item, (_a3 = activeItem2 == null ? void 0 : activeItem2.item) != null ? _a3 : null)
-        };
-      });
+      const trialByItem = new Map(trialItems.map((item) => [item.item, item]));
+      return createTOCViewTree(items, (_c = activeItem2 == null ? void 0 : activeItem2.item) != null ? _c : null, trialByItem);
     }
     const activeItem = this.getCurrentTOCItem(location);
-    return flattenTOCViewItems(this.book, items, sectionFractions, activeItem);
+    return createTOCViewTree(items, activeItem);
   }
   /**
    * Navigate to a location.
@@ -21748,38 +21749,23 @@ function flattenTOC(items) {
     return ((_a2 = item.subitems) == null ? void 0 : _a2.length) ? [item, ...flattenTOC(item.subitems)] : [item];
   });
 }
-function flattenTOCViewItems(book, items, sectionFractions, activeItem) {
-  const result = [];
-  const sectionLookup = createSectionIndexLookup(book);
+function createTOCViewTree(items, activeItem, trialByItem) {
   let index = 0;
-  const walk2 = (tocItems, depth, parentHrefs) => {
-    var _a2, _b2;
-    for (const item of tocItems) {
-      const itemIndex = index++;
-      const sectionIndex = resolveTOCSectionIndex(book, item.href, sectionLookup);
-      const sectionFraction = sectionIndex >= 0 ? (_a2 = sectionFractions[sectionIndex]) != null ? _a2 : 0 : 0;
-      const hasChildren = !!((_b2 = item.subitems) == null ? void 0 : _b2.length);
-      result.push({
-        item,
-        key: `${depth}-${itemIndex}-${item.href}`,
-        index: itemIndex,
-        label: item.label || "Untitled",
-        href: item.href,
-        depth,
-        parentHrefs,
-        hasChildren,
-        sectionIndex,
-        sectionFraction,
-        disabled: false,
-        active: isSameTOCItem(item, activeItem)
-      });
-      if (hasChildren) {
-        walk2(item.subitems, depth + 1, [...parentHrefs, item.href]);
-      }
-    }
-  };
-  walk2(items, 0, []);
-  return result;
+  const walk2 = (tocItems) => tocItems.map((item) => {
+    var _a2, _b2, _c;
+    const itemIndex = index++;
+    const trialItem = trialByItem == null ? void 0 : trialByItem.get(item);
+    const children = ((_a2 = item.subitems) == null ? void 0 : _a2.length) ? walk2(item.subitems) : void 0;
+    return {
+      id: `${itemIndex}-${item.href}`,
+      label: item.label || "Untitled",
+      target: (_b2 = trialItem == null ? void 0 : trialItem.href) != null ? _b2 : item.href,
+      disabled: (_c = trialItem == null ? void 0 : trialItem.disabled) != null ? _c : false,
+      active: isSameTOCItem(item, activeItem),
+      children
+    };
+  });
+  return walk2(items);
 }
 function isSameTOCItem(item, activeItem) {
   if (!activeItem) return false;
@@ -21787,9 +21773,7 @@ function isSameTOCItem(item, activeItem) {
   const itemHref = normalizeTOCHref$1(item.href);
   const activeHref = normalizeTOCHref$1(activeItem.href);
   if (!itemHref || !activeHref) return false;
-  if (itemHref === activeHref) return true;
-  if (activeHref.includes("#")) return false;
-  return normalizeNavigationHref$1(itemHref) === normalizeNavigationHref$1(activeHref);
+  return itemHref === activeHref;
 }
 function normalizeNavigationHref$1(href) {
   return normalizeTOCHref$1(href).split("#")[0];
@@ -28627,7 +28611,7 @@ function withTrialLimit(options = {}) {
   return async (book) => {
     const state = await estimateTrialLimitState(book, options);
     const trialLimit = createTrialLimitController(book, state, options);
-    return { ...book, trialLimit };
+    return Object.assign(book, { trialLimit });
   };
 }
 async function estimateTrialLimitState(book, options = {}) {
@@ -28640,7 +28624,7 @@ async function estimateTrialLimitState(book, options = {}) {
     maxPages,
     estimatedPageCount,
     limitFraction,
-    pageStepFraction: maxPages > 0 ? limitFraction / maxPages : 1,
+    pageStepFraction: maxPages > 0 ? limitFraction / maxPages : 0,
     estimatedBy: estimated.estimatedBy
   };
 }

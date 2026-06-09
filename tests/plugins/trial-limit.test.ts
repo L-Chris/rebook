@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Book } from '../../src/core/types'
 import type { Renderer } from '../../src/core/renderer'
-import { ReaderSession } from '../../src/core/reader'
+import { ReaderSession, type TOCViewItem } from '../../src/core/reader'
 import {
     estimateBookPageCount,
     estimateTrialLimitState,
@@ -32,6 +32,10 @@ const createNoopRenderer = (overrides: Partial<Renderer> = {}): Renderer => ({
     destroy: () => {},
     ...overrides,
 })
+
+function flattenTOCViewItems(items: readonly TOCViewItem[]): TOCViewItem[] {
+    return items.flatMap(item => item.children?.length ? [item, ...flattenTOCViewItems(item.children)] : [item])
+}
 
 const makeBook = (): Book => ({
     metadata: {},
@@ -87,6 +91,31 @@ const makeBook = (): Book => ({
         return null
     },
 })
+
+class PrototypeBook implements Book {
+    metadata = {}
+    sections = [{
+        id: 'OEBPS/Text/chapter.xhtml',
+        format: 'xhtml',
+        size: 1000,
+        load: async () => '',
+        getBlocks: async () => [{
+            id: 'chapter',
+            type: 'paragraph',
+            segments: [{ text: '字'.repeat(1000) }],
+        }],
+    }]
+    toc = [{ label: 'Chapter', href: 'Text/chapter.xhtml#note' }]
+
+    resolveHref(href: string) {
+        return href === 'Text/chapter.xhtml#note' ? { index: 0, anchor: () => 'note' } : null
+    }
+
+    splitTOCHref(href: string): [string, string | null] {
+        const [path, fragment] = href.split('#')
+        return [`OEBPS/${path}`, fragment ?? null]
+    }
+}
 
 describe('Trial limit plugin', () => {
     it('uses sampled text density for more precise reflowable page estimates', async () => {
@@ -185,6 +214,20 @@ describe('Trial limit plugin', () => {
         expect(book.trialLimit.canGoNext({ index: 1, fraction: 0.2 }, sectionFractions)).toBe(false)
     })
 
+    it('preserves parser book prototype navigation methods', async () => {
+        const source = new PrototypeBook()
+        const book = await withTrialLimit({
+            maxPages: 1,
+            sampleSections: 1,
+            estimatedTextUnitsPerPage: 500,
+        })(source) as TrialLimitedBook
+
+        expect(book).toBe(source)
+        expect(Object.getPrototypeOf(book)).toBe(PrototypeBook.prototype)
+        expect(book.resolveHref?.('Text/chapter.xhtml#note')?.index).toBe(0)
+        expect(book.splitTOCHref?.('Text/chapter.xhtml#note')).toEqual(['OEBPS/Text/chapter.xhtml', 'note'])
+    })
+
     it('exposes reader-level trial navigation helpers', async () => {
         let nextCalls = 0
         const goToTargets: Array<string | number> = []
@@ -218,22 +261,32 @@ describe('Trial limit plugin', () => {
         expect(reader.getCurrentTrialTOCItem()?.label).toBe('Part One')
         expect(reader.getTOCViewItems().map(item => ({
             label: item.label,
-            depth: item.depth,
             active: item.active,
             disabled: item.disabled,
+            children: item.children?.map(child => ({
+                label: child.label,
+                active: child.active,
+                disabled: child.disabled,
+            })),
         }))).toEqual([
-            { label: 'Cover', depth: 0, active: false, disabled: false },
-            { label: 'Part One', depth: 0, active: true, disabled: false },
-            { label: 'Chapter One Note', depth: 1, active: false, disabled: false },
-            { label: 'Chapter Two', depth: 1, active: false, disabled: true },
+            { label: 'Cover', active: false, disabled: false, children: undefined },
+            {
+                label: 'Part One',
+                active: true,
+                disabled: false,
+                children: [
+                    { label: 'Chapter One Note', active: false, disabled: false },
+                    { label: 'Chapter Two', active: false, disabled: true },
+                ],
+            },
         ])
-        expect(reader.getTOCViewItems({
+        expect(flattenTOCViewItems(reader.getTOCViewItems({
             location: {
                 index: 1,
                 fraction: 0,
                 tocItem: { label: 'Chapter One Note', href: 'Text/chapter-1.xhtml#note' },
             },
-        }).map(item => ({ label: item.label, active: item.active }))).toEqual([
+        })).map(item => ({ label: item.label, active: item.active }))).toEqual([
             { label: 'Cover', active: false },
             { label: 'Part One', active: false },
             { label: 'Chapter One Note', active: true },
@@ -255,6 +308,22 @@ describe('Trial limit plugin', () => {
         const state = await estimateTrialLimitState(makeBook(), { estimatedTextUnitsPerPage: 500 })
 
         expect(state.limitFraction).toBe(1)
-        expect(state.pageStepFraction).toBe(1)
+        expect(state.pageStepFraction).toBe(0)
+
+        let nextCalls = 0
+        const reader = new ReaderSession({
+            createRenderer: () => createNoopRenderer({
+                next: async () => { nextCalls++ },
+            }),
+            plugins: [withTrialLimit({ estimatedTextUnitsPerPage: 500 })],
+        })
+
+        await reader.openBook(makeBook())
+
+        expect(reader.canGoNext()).toBe(true)
+        await reader.next()
+        expect(nextCalls).toBe(1)
+
+        reader.destroy()
     })
 })

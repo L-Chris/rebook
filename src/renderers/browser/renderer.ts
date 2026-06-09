@@ -194,7 +194,7 @@ export class BrowserRenderer implements Renderer {
         const resolved = this.book?.resolveHref?.(target) ?? this.resolveHrefFallback(target)
         if (resolved) {
             this.pendingTOCItem = this.findTOCItem(target)
-            await this.loadSection(resolved.index, resolved.anchor)
+            await this.loadSection(resolved.index, resolved.anchor, 0, target)
         } else {
             this.pendingTOCItem = null
         }
@@ -370,6 +370,7 @@ export class BrowserRenderer implements Renderer {
         index: number,
         anchor?: ResolvedNavigation['anchor'],
         restoreScrollTop = 0,
+        href?: string,
     ): Promise<void> {
         if (index < 0 || index >= this.sections.length) return
         const loadId = ++this.activeLoadId
@@ -387,7 +388,7 @@ export class BrowserRenderer implements Renderer {
             : 0
         this.relayout()
 
-        const anchorScrollTop = this.getAnchorScrollTop(anchor)
+        const anchorScrollTop = this.getAnchorScrollTop(anchor, href)
         const targetScrollTop = anchorScrollTop ?? restoreScrollTop
         if (this.layoutMode === 'paginated') {
             this.pageIndex = Math.max(0, Math.floor(targetScrollTop / Math.max(1, this.columnLayout.pageHeight)))
@@ -863,7 +864,7 @@ export class BrowserRenderer implements Renderer {
                 if (resolved?.anchor == null && !this.getTOCFragment(item.href)) {
                     sourceTop = 0
                 } else {
-                    const anchorTop = this.getAnchorSourceTop(resolved?.anchor)
+                    const anchorTop = this.getAnchorSourceTop(resolved?.anchor, item.href)
                     if (anchorTop == null) continue
                     sourceTop = anchorTop
                 }
@@ -920,22 +921,22 @@ export class BrowserRenderer implements Renderer {
         return active?.item ?? null
     }
 
-    private getAnchorScrollTop(anchor?: ResolvedNavigation['anchor']): number | null {
-        if (anchor == null) return null
+    private getAnchorScrollTop(anchor?: ResolvedNavigation['anchor'], href?: string): number | null {
+        if (anchor == null && !href) return null
         if (typeof anchor === 'number') return anchor
 
-        const sourceTop = this.getAnchorSourceTop(anchor)
+        const sourceTop = this.getAnchorSourceTop(anchor, href)
         return sourceTop == null ? null : this.getScrollTopForSourceTop(sourceTop)
     }
 
-    private getAnchorSourceTop(anchor?: ResolvedNavigation['anchor']): number | null {
-        if (anchor == null) return null
+    private getAnchorSourceTop(anchor?: ResolvedNavigation['anchor'], href?: string): number | null {
+        if (anchor == null && !href) return null
         if (typeof anchor === 'number') return anchor
 
-        const value = this.resolveAnchorValue(anchor)
+        const value = anchor == null ? null : this.resolveAnchorValue(anchor)
         if (typeof value === 'number') return value
 
-        const anchorIds = getAnchorIds(value)
+        const anchorIds = this.getAnchorIds(value, href)
         if (!anchorIds.length) return null
 
         const line = this.lines.find(item => {
@@ -948,6 +949,13 @@ export class BrowserRenderer implements Renderer {
         })
 
         return line?.top ?? this.getFileposSourceTop(anchorIds)
+    }
+
+    private getAnchorIds(value: unknown, href?: string): string[] {
+        const ids = getAnchorIds(value)
+        if (ids.length) return ids
+        const fragment = href ? this.getTOCFragment(href) : null
+        return fragment == null ? [] : [String(fragment)]
     }
 
     private getFileposSourceTop(anchorIds: readonly string[]): number | null {

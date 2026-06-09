@@ -2,9 +2,11 @@ import { readFile } from 'node:fs/promises'
 import { parseHTML } from 'linkedom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Book } from '../../src/core/types'
+import type { TOCViewItem } from '../../src/core/reader'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import { epub } from '../../src/parsers/epub'
 import { mobi } from '../../src/parsers/mobi'
+import { withTrialLimit } from '../../src/plugins/trial-limit'
 import { createReader, BrowserRenderer } from '../../src/renderers/browser'
 
 class MockResizeObserver {
@@ -1110,6 +1112,98 @@ describe('BrowserRenderer', () => {
         book.destroy?.()
     }, 10000)
 
+    it('uses EPUB TOC href fragments when anchor resolver values are unavailable', async () => {
+        const buf = await readFile('data/Structured Writing Rhetoric and Process.epub')
+        const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
+        const book = await epub().parse(ab, {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+        const originalResolveHref = book.resolveHref?.bind(book)
+        Object.assign(book, {
+            resolveHref(href: string) {
+                const resolved = originalResolveHref?.(href)
+                if (!resolved || !href.includes('#')) return resolved
+                return { ...resolved, anchor: () => null }
+            },
+        })
+
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '960')
+        container.setAttribute('data-height', '600')
+        document.body.appendChild(container)
+
+        const reader = createReader({
+            container,
+            layout: 'paginated',
+            maxColumnCount: 2,
+            styles: { fontSize: '16px', lineHeight: 1.7, minColumnWidth: '320px', maxColumnWidth: '720px', margin: '32px' },
+        })
+        let activeLabel: string | null = null
+        reader.on('relocate', event => {
+            activeLabel = event.tocItem?.label ?? null
+        })
+
+        await reader.openBook(book)
+        for (const label of ['1. Rhetoric', '2. Process', '1.2. The three domains']) {
+            const target = flattenTestTOC(book.toc ?? []).find(item => item.label === label)
+            expect(target).toBeDefined()
+
+            await reader.goTo(target!.href)
+
+            expect(activeLabel).toBe(label)
+            expect(container.textContent?.replace(/\u00a0/g, ' ')).toContain(label)
+        }
+
+        reader.destroy()
+        book.destroy?.()
+    }, 10000)
+
+    it('keeps Structured Writing subsection TOC active while paging with trial plugin enabled', async () => {
+        const buf = await readFile('data/Structured Writing Rhetoric and Process.epub')
+        const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
+        const book = await epub().parse(ab, {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '960')
+        container.setAttribute('data-height', '600')
+        document.body.appendChild(container)
+
+        const reader = createReader({
+            container,
+            layout: 'paginated',
+            maxColumnCount: 2,
+            styles: { fontSize: '16px', lineHeight: 1.7, minColumnWidth: '320px', maxColumnWidth: '720px', margin: '32px' },
+            plugins: [withTrialLimit()],
+        })
+        let activeLabel: string | null = null
+        reader.on('relocate', event => {
+            activeLabel = event.tocItem?.label ?? null
+        })
+
+        await reader.openBook(book)
+        await reader.goTo('OEBPS/pr02.html')
+        expect(activeLabel).toBe('Introduction')
+        expect(reader.canGoNext()).toBe(true)
+
+        for (let index = 0; index < 12 && activeLabel !== '1. Rhetoric'; index++) {
+            await reader.next()
+        }
+
+        const activeItems = flattenTestTOCView(reader.getTOCViewItems({ location: reader.getLocation() }))
+            .filter(item => item.active)
+
+        expect(activeLabel).toBe('1. Rhetoric')
+        expect(activeItems.map(item => item.label)).toEqual(['1. Rhetoric'])
+        expect(container.textContent?.replace(/\u00a0/g, ' ')).toContain('1. Rhetoric')
+
+        reader.destroy()
+        book.destroy?.()
+    }, 10000)
+
     it('clears stale location state when opening another book', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
@@ -1189,7 +1283,7 @@ describe('BrowserRenderer', () => {
 
         expect(lastLabel).toBe('null')
         expect(reader.getLocation()?.tocItem).toBeNull()
-        expect(reader.getTOCViewItems({ location: reader.getLocation() }).find(item => item.active)?.label)
+        expect(flattenTestTOCView(reader.getTOCViewItems({ location: reader.getLocation() })).find(item => item.active)?.label)
             .toBe('Missing Anchor')
 
         reader.destroy()
@@ -1390,6 +1484,14 @@ function flattenTestTOC(items: NonNullable<Book['toc']>): NonNullable<Book['toc'
     return items.flatMap(item =>
         item.subitems?.length
             ? [item, ...flattenTestTOC(item.subitems)]
+            : [item]
+    )
+}
+
+function flattenTestTOCView(items: readonly TOCViewItem[]): TOCViewItem[] {
+    return items.flatMap(item =>
+        item.children?.length
+            ? [item, ...flattenTestTOCView(item.children)]
             : [item]
     )
 }

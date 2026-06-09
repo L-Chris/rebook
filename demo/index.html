@@ -1114,33 +1114,36 @@
         }
 
         // Render TOC
-        const renderTOC = (items, container) => {
+        const renderTOC = (items, container, depth = 0) => {
             if (!items || items.length === 0) return
             const ul = document.createElement('ul')
             for (const item of items) {
                 const li = document.createElement('li')
+                const target = item.target
+                const children = item.children || []
                 
                 const a = document.createElement('a')
                 a.className = `toc-item${item.disabled ? ' disabled' : ''}${item.active ? ' active' : ''}`
                 a.textContent = item.label
                 a.href = '#'
-                a.dataset.href = item.href
-                addTOCElement(item.href, a)
+                a.dataset.href = target
+                addTOCElement(target, a)
                 if (item.active) {
-                    activeTOCHref = item.href
+                    activeTOCHref = target
                     activeTOCEl = a
                 }
-                a.style.paddingLeft = `${12 + (item.depth || 0) * 16}px`
+                a.style.paddingLeft = `${12 + depth * 16}px`
                 a.addEventListener('click', (e) => {
                     e.preventDefault()
                     if (item.disabled) {
                         showTrialBlocked()
                         return
                     }
-                    guardedGoTo(item.href)
+                    guardedGoTo(target)
                 })
 
                 li.appendChild(a)
+                if (children.length) renderTOC(children, li, depth + 1)
                 ul.appendChild(li)
             }
             container.appendChild(ul)
@@ -1158,9 +1161,10 @@
             const tocViewItems = reader.getTOCViewItems()
             renderTOC(tocViewItems, tocList)
             applyActiveTOC(activeTOCHref)
+            const flatTOCViewItems = flattenTOCViewItems(tocViewItems)
             debugDemo('toc refresh', {
-                count: tocViewItems.length,
-                active: summarizeTOCViewItem(tocViewItems.find(item => item.active)),
+                count: flatTOCViewItems.length,
+                active: summarizeTOCViewItem(flatTOCViewItems.find(item => item.active)),
                 currentLocation: summarizeLocation(reader.getLocation()),
                 currentActiveHref: activeTOCHref,
                 indexedHrefCount: tocElementsByHref.size,
@@ -1236,6 +1240,9 @@
             const normalizedPath = parts.join('/')
             return hash ? `${normalizedPath}#${hash}` : normalizedPath
         }
+
+        const flattenTOCViewItems = (items) =>
+            items.flatMap(item => item.children?.length ? [item, ...flattenTOCViewItems(item.children)] : [item])
 
         // Open a file
         const openFile = async (file, options = {}) => {
@@ -1652,7 +1659,8 @@
 
                 // Highlight current TOC item
                 const tocViewItems = reader.getTOCViewItems({ location: e })
-                const viewActive = tocViewItems.find(item => item.active)
+                const flatTOCViewItems = flattenTOCViewItems(tocViewItems)
+                const viewActive = flatTOCViewItems.find(item => item.active)
                 const fallbackLocation = {
                     index: e.index,
                     fraction: e.fraction,
@@ -1660,9 +1668,10 @@
                     tocItem: undefined,
                 }
                 const fallbackActive = reader.getCurrentTOCItem(fallbackLocation)
-                const fallbackViewActive = reader.getTOCViewItems({ location: fallbackLocation }).find(item => item.active)
+                const fallbackViewActive = flattenTOCViewItems(reader.getTOCViewItems({ location: fallbackLocation }))
+                    .find(item => item.active)
                 const eventActive = e.tocItem ?? fallbackActive
-                const href = viewActive?.href ?? fallbackViewActive?.href ?? eventActive?.href
+                const href = viewActive?.target ?? fallbackViewActive?.target ?? eventActive?.href
                 debugDemo('relocate', {
                     event: summarizeLocation(e),
                     eventKeys: Object.keys(e),
@@ -1673,7 +1682,7 @@
                     chosenHref: href,
                     previousHref: activeTOCHref,
                     activeDOMHref: activeTOCEl?.dataset.href,
-                    activeCount: tocViewItems.filter(item => item.active).length,
+                    activeCount: flatTOCViewItems.filter(item => item.active).length,
                 })
                 if (!href) {
                     activeTOCHref = null
@@ -1731,12 +1740,10 @@
 
         const summarizeTOCViewItem = (item) => item ? ({
             label: item.label,
-            href: item.href,
+            target: item.target,
             active: item.active,
             disabled: item.disabled,
-            depth: item.depth,
-            sectionIndex: item.sectionIndex,
-            sectionFraction: roundDebugNumber(item.sectionFraction),
+            children: item.children?.length ?? 0,
         }) : null
 
         const roundDebugNumber = (value) =>

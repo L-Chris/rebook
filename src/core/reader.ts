@@ -30,18 +30,18 @@ export interface ReaderSessionConfig {
 }
 
 export interface TOCViewItem {
-    item: TOCItem
-    key: string
-    index: number
+    /** Stable key for rendering and expansion state. */
+    id: string
+    /** Display label. */
     label: string
-    href: string
-    depth: number
-    parentHrefs: string[]
-    hasChildren: boolean
-    sectionIndex: number
-    sectionFraction: number
+    /** Opaque navigation target. Pass this to reader.goTo() or reader.canGoTo(). */
+    target: string
+    /** True when trial/access policy prevents navigation to this item. */
     disabled: boolean
+    /** True when this item is the current reading location. */
     active: boolean
+    /** Nested TOC items ready for recursive UI rendering. */
+    children?: readonly TOCViewItem[]
 }
 
 export interface TOCViewOptions {
@@ -192,10 +192,10 @@ export class ReaderSession {
     }
 
     /**
-     * Get flattened TOC items ready for reader UI rendering.
+     * Get TOC items ready for reader UI rendering.
      *
-     * The returned items include active and trial-disabled state so hosts do not
-     * need to duplicate href matching or trial policy logic.
+     * The returned tree includes active and trial-disabled state so hosts only
+     * need to render labels and pass item.target back to goTo().
      */
     getTOCViewItems(options: TOCViewOptions = {}): TOCViewItem[] {
         if (!this.book) return []
@@ -212,14 +212,12 @@ export class ReaderSession {
         if (trialLimit) {
             const trialItems = trialLimit.getTOCItems(sectionFractions, items)
             const activeItem = trialLimit.getCurrentTOCItem(trialItems, location)
-            return trialItems.map(item => ({
-                ...item,
-                active: isSameTOCItem(item.item, activeItem?.item ?? null),
-            }))
+            const trialByItem = new Map(trialItems.map(item => [item.item, item]))
+            return createTOCViewTree(items, activeItem?.item ?? null, trialByItem)
         }
 
         const activeItem = this.getCurrentTOCItem(location)
-        return flattenTOCViewItems(this.book, items, sectionFractions, activeItem)
+        return createTOCViewTree(items, activeItem)
     }
 
     /**
@@ -472,45 +470,28 @@ function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
     return items.flatMap(item => item.subitems?.length ? [item, ...flattenTOC(item.subitems)] : [item])
 }
 
-function flattenTOCViewItems(
-    book: Book,
+function createTOCViewTree(
     items: readonly TOCItem[],
-    sectionFractions: readonly number[],
     activeItem: TOCItem | null,
+    trialByItem?: ReadonlyMap<TOCItem, TrialTOCAccessItem>,
 ): TOCViewItem[] {
-    const result: TOCViewItem[] = []
-    const sectionLookup = createSectionIndexLookup(book)
     let index = 0
 
-    const walk = (tocItems: readonly TOCItem[], depth: number, parentHrefs: string[]) => {
-        for (const item of tocItems) {
-            const itemIndex = index++
-            const sectionIndex = resolveTOCSectionIndex(book, item.href, sectionLookup)
-            const sectionFraction = sectionIndex >= 0 ? sectionFractions[sectionIndex] ?? 0 : 0
-            const hasChildren = !!item.subitems?.length
-            result.push({
-                item,
-                key: `${depth}-${itemIndex}-${item.href}`,
-                index: itemIndex,
-                label: item.label || 'Untitled',
-                href: item.href,
-                depth,
-                parentHrefs,
-                hasChildren,
-                sectionIndex,
-                sectionFraction,
-                disabled: false,
-                active: isSameTOCItem(item, activeItem),
-            })
-
-            if (hasChildren) {
-                walk(item.subitems!, depth + 1, [...parentHrefs, item.href])
-            }
+    const walk = (tocItems: readonly TOCItem[]): TOCViewItem[] => tocItems.map(item => {
+        const itemIndex = index++
+        const trialItem = trialByItem?.get(item)
+        const children = item.subitems?.length ? walk(item.subitems) : undefined
+        return {
+            id: `${itemIndex}-${item.href}`,
+            label: item.label || 'Untitled',
+            target: trialItem?.href ?? item.href,
+            disabled: trialItem?.disabled ?? false,
+            active: isSameTOCItem(item, activeItem),
+            children,
         }
-    }
+    })
 
-    walk(items, 0, [])
-    return result
+    return walk(items)
 }
 
 function isSameTOCItem(item: TOCItem, activeItem: TOCItem | null): boolean {
@@ -520,10 +501,7 @@ function isSameTOCItem(item: TOCItem, activeItem: TOCItem | null): boolean {
     const itemHref = normalizeTOCHref(item.href)
     const activeHref = normalizeTOCHref(activeItem.href)
     if (!itemHref || !activeHref) return false
-    if (itemHref === activeHref) return true
-
-    if (activeHref.includes('#')) return false
-    return normalizeNavigationHref(itemHref) === normalizeNavigationHref(activeHref)
+    return itemHref === activeHref
 }
 
 function normalizeNavigationHref(href?: string | null): string {
