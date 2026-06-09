@@ -383,6 +383,7 @@
             <button id="btn-open" class="primary">Open File</button>
             <input type="file" id="file-input" accept=".epub,.mobi,.azw,.azw3,.fb2,.cbz,.pdf" hidden>
             <button id="btn-translate" title="Translation">Translate</button>
+            <button id="btn-tts" title="Text to speech">TTS</button>
             <button id="btn-settings" title="Settings">⚙</button>
         </div>
     </header>
@@ -479,6 +480,34 @@
         </div>
     </div>
 
+    <!-- TTS panel -->
+    <div class="settings-panel" id="tts-panel">
+        <h3>Text to Speech</h3>
+        <div class="setting-row">
+            <label>Enable</label>
+            <input type="checkbox" id="tts-check">
+        </div>
+        <div id="tts-fields">
+            <div class="setting-stack">
+                <input type="text" id="tts-endpoint-input" placeholder="TTS Endpoint">
+                <input type="text" id="tts-provider-input" placeholder="Provider (Default: mock)">
+                <input type="text" id="tts-voice-input" placeholder="Voice (Default: mock-narrator)">
+            </div>
+            <div class="setting-row">
+                <label>Segment</label>
+                <input type="number" id="tts-segment-chars-input" min="80" max="2000" value="500" title="Max chars per TTS segment">
+            </div>
+            <div class="setting-row">
+                <label>Playback</label>
+                <div class="export-controls">
+                    <button id="btn-tts-play" title="Speak current section">Speak</button>
+                    <button id="btn-tts-stop" title="Stop speech">Stop</button>
+                </div>
+            </div>
+            <div class="setting-note" id="tts-status">TTS plugin disabled.</div>
+        </div>
+    </div>
+
     <!-- Main -->
     <main>
         <!-- Sidebar -->
@@ -527,6 +556,7 @@
         import { fb2 } from '../src/parsers/fb2.ts'
         import { mobi } from '../src/parsers/mobi.ts'
         import { withTrialLimit } from '../src/plugins/trial-limit.ts'
+        import { withTTS } from '../src/plugins/tts.ts'
         import { withProfessionalTranslation, withTranslation } from '../src/plugins/translation.ts'
         import { createOpenAI } from '@ai-sdk/openai'
 
@@ -551,6 +581,7 @@
         const btnSidebar = document.getElementById('btn-sidebar')
         const btnSettings = document.getElementById('btn-settings')
         const btnTranslate = document.getElementById('btn-translate')
+        const btnTTS = document.getElementById('btn-tts')
         const sidebar = document.getElementById('sidebar')
         const tocList = document.getElementById('toc-list')
         const bookTitle = document.getElementById('book-title')
@@ -559,6 +590,7 @@
         const fontSizeSelect = document.getElementById('font-size-select')
         const settingsPanel = document.getElementById('settings-panel')
         const translationPanel = document.getElementById('translation-panel')
+        const ttsPanel = document.getElementById('tts-panel')
         const themeSelect = document.getElementById('theme-select')
         const hyphenateCheck = document.getElementById('hyphenate-check')
         const trialCheck = document.getElementById('trial-check')
@@ -575,6 +607,15 @@
         const professionalTranslationCheck = document.getElementById('professional-translation-check')
         const prefetchPagesInput = document.getElementById('prefetch-pages-input')
         const translationStatus = document.getElementById('translation-status')
+        const ttsCheck = document.getElementById('tts-check')
+        const ttsFields = document.getElementById('tts-fields')
+        const ttsEndpointInput = document.getElementById('tts-endpoint-input')
+        const ttsProviderInput = document.getElementById('tts-provider-input')
+        const ttsVoiceInput = document.getElementById('tts-voice-input')
+        const ttsSegmentCharsInput = document.getElementById('tts-segment-chars-input')
+        const btnTTSPlay = document.getElementById('btn-tts-play')
+        const btnTTSStop = document.getElementById('btn-tts-stop')
+        const ttsStatus = document.getElementById('tts-status')
         const progressBar = document.getElementById('progress-bar')
         const progressFill = document.getElementById('progress-fill')
         const progressText = document.getElementById('progress-text')
@@ -597,6 +638,11 @@
             model: '',
             translateMode: 'bilingual',
             prefetchPages: '2',
+            tts: false,
+            ttsEndpoint: 'http://127.0.0.1:4177',
+            ttsProvider: 'mock',
+            ttsVoice: 'mock-narrator',
+            ttsSegmentChars: '500',
         }
 
         let currentFile = null
@@ -604,6 +650,8 @@
         let activeTOCHref = null
         let reader = null
         let refreshTimer = null
+        let currentAudio = null
+        let ttsStopRequested = false
 
         const loadConfig = () => {
             try {
@@ -631,6 +679,11 @@
                 model: modelInput.value,
                 translateMode: translateModeSelect.value,
                 prefetchPages: prefetchPagesInput.value,
+                tts: ttsCheck.checked,
+                ttsEndpoint: ttsEndpointInput.value,
+                ttsProvider: ttsProviderInput.value,
+                ttsVoice: ttsVoiceInput.value,
+                ttsSegmentChars: ttsSegmentCharsInput.value,
             }))
         }
 
@@ -651,7 +704,13 @@
             modelInput.value = config.model
             translateModeSelect.value = config.translateMode
             prefetchPagesInput.value = config.prefetchPages ?? defaultConfig.prefetchPages
+            ttsCheck.checked = !!config.tts
+            ttsEndpointInput.value = config.ttsEndpoint ?? defaultConfig.ttsEndpoint
+            ttsProviderInput.value = config.ttsProvider ?? defaultConfig.ttsProvider
+            ttsVoiceInput.value = config.ttsVoice ?? defaultConfig.ttsVoice
+            ttsSegmentCharsInput.value = config.ttsSegmentChars ?? defaultConfig.ttsSegmentChars
             updateTranslationFields()
+            updateTTSFields()
             updateTrialFields()
         }
 
@@ -692,6 +751,25 @@
         const updateTrialFields = () => {
             trialPagesRow.style.display = trialCheck.checked ? 'flex' : 'none'
             updateTrialStatus()
+        }
+
+        const updateTTSFields = () => {
+            ttsFields.style.display = ttsCheck.checked ? 'block' : 'none'
+            updateTTSStatus()
+        }
+
+        const updateTTSStatus = (message) => {
+            if (message) {
+                ttsStatus.textContent = message
+                return
+            }
+            if (!ttsCheck.checked) {
+                ttsStatus.textContent = 'TTS plugin disabled.'
+                return
+            }
+            ttsStatus.textContent = currentBook?.tts
+                ? 'TTS ready.'
+                : 'TTS plugin will apply after opening or reloading a book.'
         }
 
         applyConfig(loadConfig())
@@ -743,6 +821,15 @@
                         },
                     })
                     : withTranslation(translationOptions))
+            }
+
+            if (ttsCheck.checked) {
+                plugins.push(withTTS({
+                    endpoint: ttsEndpointInput.value.trim() || defaultConfig.ttsEndpoint,
+                    provider: ttsProviderInput.value.trim() || undefined,
+                    voice: ttsVoiceInput.value.trim() || undefined,
+                    maxSegmentChars: Number(ttsSegmentCharsInput.value) || Number(defaultConfig.ttsSegmentChars),
+                }))
             }
 
             return createReader({
@@ -898,6 +985,7 @@
                 currentBook = book
                 activeTOCHref = null
                 updateTranslationStatus()
+                updateTTSStatus()
 
                 // Update UI
                 const title = formatLanguageMap(book.metadata?.title) || 'Untitled'
@@ -966,6 +1054,7 @@
         const closePanels = () => {
             settingsPanel.classList.remove('show')
             translationPanel.classList.remove('show')
+            ttsPanel.classList.remove('show')
         }
 
         btnSettings.addEventListener('click', (e) => {
@@ -982,11 +1071,22 @@
             if (show) translationPanel.classList.add('show')
         })
 
+        btnTTS.addEventListener('click', (e) => {
+            e.stopPropagation()
+            const show = !ttsPanel.classList.contains('show')
+            closePanels()
+            if (show) ttsPanel.classList.add('show')
+        })
+
         settingsPanel.addEventListener('click', (e) => {
             e.stopPropagation()
         })
 
         translationPanel.addEventListener('click', (e) => {
+            e.stopPropagation()
+        })
+
+        ttsPanel.addEventListener('click', (e) => {
             e.stopPropagation()
         })
 
@@ -1078,6 +1178,87 @@
         })
 
         exportSectionCount.addEventListener('change', saveConfig)
+
+        ttsCheck.addEventListener('change', () => {
+            updateTTSFields()
+            saveConfig()
+            stopTTS()
+            recreateReader()
+        })
+
+        ;[ttsEndpointInput, ttsProviderInput, ttsVoiceInput, ttsSegmentCharsInput].forEach(input => {
+            input.addEventListener('change', () => {
+                saveConfig()
+                if (ttsCheck.checked) {
+                    stopTTS()
+                    recreateReader()
+                }
+            })
+        })
+
+        btnTTSPlay.addEventListener('click', () => {
+            speakCurrentSection().catch(error => {
+                console.error('TTS failed:', error)
+                updateTTSStatus(`TTS failed: ${error.message}`)
+            })
+        })
+
+        btnTTSStop.addEventListener('click', stopTTS)
+
+        function stopTTS() {
+            ttsStopRequested = true
+            if (currentAudio) {
+                currentAudio.pause()
+                currentAudio = null
+            }
+            updateTTSStatus()
+        }
+
+        async function speakCurrentSection() {
+            if (!currentBook?.tts) {
+                alert('Enable TTS and reload the current book first.')
+                return
+            }
+            const sectionIndex = reader.getLocation()?.index ?? 0
+            const segments = await currentBook.tts.prepareSection(sectionIndex, {
+                voice: ttsVoiceInput.value.trim() || undefined,
+                maxSegmentChars: Number(ttsSegmentCharsInput.value) || Number(defaultConfig.ttsSegmentChars),
+            })
+            if (!segments.length) {
+                updateTTSStatus('No readable text in current section.')
+                return
+            }
+
+            ttsStopRequested = false
+            for (let i = 0; i < segments.length; i++) {
+                if (ttsStopRequested) break
+                const segment = segments[i]
+                updateTTSStatus(`Generating ${i + 1}/${segments.length}: ${segment.text.slice(0, 48)}`)
+                const result = await currentBook.tts.synthesizeSegment(segment, {
+                    provider: ttsProviderInput.value.trim() || undefined,
+                    voice: ttsVoiceInput.value.trim() || undefined,
+                })
+                if (ttsStopRequested) break
+                updateTTSStatus(`Playing ${i + 1}/${segments.length}: ${segment.text.slice(0, 48)}`)
+                await playAudio(result.audioUrl)
+            }
+            if (!ttsStopRequested) updateTTSStatus('TTS finished.')
+        }
+
+        function playAudio(url) {
+            return new Promise((resolve, reject) => {
+                currentAudio = new Audio(url)
+                currentAudio.addEventListener('ended', () => {
+                    currentAudio = null
+                    resolve()
+                }, { once: true })
+                currentAudio.addEventListener('error', () => {
+                    currentAudio = null
+                    reject(new Error('Audio playback failed.'))
+                }, { once: true })
+                currentAudio.play().catch(reject)
+            })
+        }
 
         // Progress bar click
         progressBar.addEventListener('click', (e) => {

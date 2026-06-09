@@ -14,7 +14,7 @@ It parses EPUB, MOBI/AZW3, FB2, and CBZ into a normalized `Book` contract. Brows
 - **Environment-agnostic parsers**: parser adapters make the same parser code run in browsers, Node.js, Mini Programs, and workers.
 - **Modular architecture**: parsers, renderers, exporters, plugins, and adapters are independent.
 - **AI-ready content model**: sections can expose structured blocks, styled segments, searchable text, and a mutable document tree.
-- **Built-in workflow pieces**: search, first-section export, trial-reading limits, professional translation pipelines, and an MCP server.
+- **Built-in workflow pieces**: search, first-section export, trial-reading limits, TTS playback hooks, professional translation pipelines, and an MCP server.
 
 ## Install
 

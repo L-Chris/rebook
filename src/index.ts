@@ -174,6 +174,21 @@ export {
     estimateBookPageCount,
     estimateTrialLimitState,
 } from './plugins/trial-limit'
+export {
+    withTTS,
+} from './plugins/tts'
+export type {
+    TTSBook,
+    TTSController,
+    TTSJob,
+    TTSJobStatus,
+    TTSOptions,
+    TTSSectionOptions,
+    TTSSegment,
+    TTSSynthesizeOptions,
+    TTSSynthesizeResult,
+    TTSVoice,
+} from './plugins/tts'
 export type {
     TrialLimitController,
     TrialLimitedBook,

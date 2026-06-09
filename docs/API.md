@@ -424,6 +424,44 @@ withTranslation({
 })
 ```
 
+### Text To Speech
+
+`withTTS()` adds a `book.tts` controller. It converts section blocks into stable
+speech segments with `sectionIndex`, `blockId`, `startOffset`, and `endOffset`,
+then calls a provider-based TTS backend such as the companion `rebook-tts`
+service.
+
+```typescript
+import { createReader, withTTS } from 'rebook'
+
+const reader = createReader({
+  container,
+  plugins: [
+    withTTS({
+      endpoint: 'http://127.0.0.1:4177',
+      provider: 'mock',
+      voice: 'mock-narrator',
+      maxSegmentChars: 500,
+    }),
+  ],
+})
+
+const book = await reader.open(file)
+const sectionIndex = reader.getLocation()?.index ?? 0
+const segments = await book.tts.prepareSection(sectionIndex)
+const first = await book.tts.synthesizeSegment(segments[0])
+
+new Audio(first.audioUrl).play()
+```
+
+For long chapters, create an async backend job instead of synchronously
+synthesizing every segment:
+
+```typescript
+const job = await book.tts.createSectionJob(sectionIndex, { concurrency: 2 })
+const latest = await book.tts.getJob(job.id)
+```
+
 ---
 
 ## Book
