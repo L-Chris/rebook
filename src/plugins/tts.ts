@@ -34,6 +34,8 @@ export interface TTSSectionOptions {
 export interface TTSSynthesizeOptions {
     provider?: string
     voice?: string
+    lang?: string
+    outputFormat?: string
     rate?: string
     pitch?: string
     volume?: string
@@ -81,6 +83,8 @@ export interface TTSOptions {
     endpoint?: string
     provider?: string
     voice?: string
+    lang?: string
+    outputFormat?: string
     rate?: string
     pitch?: string
     volume?: string
@@ -134,6 +138,8 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
                     body: JSON.stringify({
                         provider: synthesizeOptions.provider ?? options.provider,
                         voice: synthesizeOptions.voice ?? segment.voice ?? options.voice,
+                        lang: synthesizeOptions.lang ?? options.lang,
+                        outputFormat: synthesizeOptions.outputFormat ?? options.outputFormat,
                         rate: synthesizeOptions.rate ?? segment.rate ?? options.rate,
                         pitch: synthesizeOptions.pitch ?? segment.pitch ?? options.pitch,
                         volume: synthesizeOptions.volume ?? segment.volume ?? options.volume,
@@ -154,6 +160,8 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
                     body: JSON.stringify({
                         provider: jobOptions.provider ?? options.provider,
                         voice: jobOptions.voice ?? options.voice,
+                        lang: jobOptions.lang ?? options.lang,
+                        outputFormat: jobOptions.outputFormat ?? options.outputFormat,
                         rate: jobOptions.rate ?? options.rate,
                         pitch: jobOptions.pitch ?? options.pitch,
                         volume: jobOptions.volume ?? options.volume,

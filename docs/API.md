@@ -439,8 +439,8 @@ const reader = createReader({
   plugins: [
     withTTS({
       endpoint: 'http://127.0.0.1:4177',
-      provider: 'mock',
-      voice: 'mock-narrator',
+      provider: 'edge',
+      voice: 'zh-CN-XiaoyiNeural',
       maxSegmentChars: 500,
     }),
   ],
