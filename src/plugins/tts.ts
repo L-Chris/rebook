@@ -1381,32 +1381,21 @@ const voiceDesignSpeakerAnalysisSchema = {
     additionalProperties: false,
 } as const
 
-const speakerPlanSchema = {
+const speakerPlanItemSchema = {
     type: 'object',
-    description: '角色规划结果；只识别重要或反复发声角色，不进行文本分段。',
+    description: '规划出的重要或反复发声角色；只识别角色，不进行文本分段。',
     properties: {
-        speakers: {
-            type: 'array',
-            description: '规划出的重要或反复发声角色。',
-            items: {
-                type: 'object',
-                properties: {
-                    i: { type: 'number', description: 'speaker id；新增说话人从 nextSpeakerId 开始递增。' },
-                    n: { type: 'string', description: '稳定角色名。' },
-                    r: { type: 'string', enum: ['c', 'o'], description: 'role code：c=角色对白，o=其他/无法归属声音。' },
-                    g: { type: 'number', enum: [0, 1, 2], description: 'gender code：0=未知，1=男，2=女。' },
-                    a: { type: 'string', maxLength: 80, description: '年龄或年龄感。' },
-                    o: { type: 'string', maxLength: 120, description: '职业、身份或社会角色。' },
-                    p: { type: 'string', maxLength: 160, description: '性格、气质和行为特征。' },
-                    q: { type: 'string', maxLength: 160, description: '声音与表演风格，用于生成角色卡。' },
-                    h: { type: 'string', maxLength: 260, description: '说话人识别线索/上下文，不是声音风格。' },
-                },
-                required: ['i', 'n', 'r', 'g'],
-                additionalProperties: false,
-            },
-        },
+        i: { type: 'number', description: 'speaker id；新增说话人从 nextSpeakerId 开始递增。' },
+        n: { type: 'string', description: '稳定角色名。' },
+        r: { type: 'string', enum: ['c', 'o'], description: 'role code：c=角色对白，o=其他/无法归属声音。' },
+        g: { type: 'number', enum: [0, 1, 2], description: 'gender code：0=未知，1=男，2=女。' },
+        a: { type: 'string', maxLength: 80, description: '年龄或年龄感。' },
+        o: { type: 'string', maxLength: 120, description: '职业、身份或社会角色。' },
+        p: { type: 'string', maxLength: 160, description: '性格、气质和行为特征。' },
+        q: { type: 'string', maxLength: 160, description: '声音与表演风格，用于生成角色卡。' },
+        h: { type: 'string', maxLength: 260, description: '说话人识别线索/上下文，不是声音风格。' },
     },
-    required: ['speakers'],
+    required: ['i', 'n', 'r', 'g'],
     additionalProperties: false,
 } as const
 
@@ -1421,13 +1410,13 @@ async function planCompactSpeakersWithModel(
     analysisOptions?: TTSSpeakerAnalysisOptions,
 ): Promise<TTSCompactSpeakerPlan> {
     const startedAt = nowMs()
-    let output: TTSCompactSpeakerPlan
+    let output: unknown
     const modelRequest = buildCompactSpeakerModelRequest(request, 'voiceDesign', 'plan')
     try {
         const result = await generateText({
             model,
-            output: Output.object({
-                schema: jsonSchema<TTSCompactSpeakerPlan>(speakerPlanSchema),
+            output: Output.array({
+                element: jsonSchema<TTSCompactSpeakerInfo>(speakerPlanItemSchema),
                 description: 'Compact novel TTS speaker and voice plan.',
             }),
             timeout: normalizeTimeoutMs(analysisOptions?.timeoutMs),
@@ -1506,6 +1495,7 @@ function buildSpeakerPlanningSystemPrompt(lang?: string): string {
         promptSection('当前分支', [
             '角色规划阶段：只识别重要或反复发声角色，不进行文本分段。',
             '后续文本解析会使用你输出的 h 来保持说话人一致性。',
+            '如果 blocks 中存在对白或发言动作，必须输出本批文本里的核心发声角色；只有确实没有角色对白时才允许返回空列表。',
         ]),
         promptSection('输入格式', [
             'blocks 是待规划文本；knownSpeakers 是已知角色。',
@@ -1517,6 +1507,7 @@ function buildSpeakerPlanningSystemPrompt(lang?: string): string {
             '客户端会用 a/o/p/q 合成角色卡。',
         ]),
         promptSection('规划原则', [
+            '优先规划具名角色、反复出现的角色、参与多轮对话的角色，以及影响后续说话人判断的无名角色。',
             '重点提取稳定人物属性，尤其是性别、年龄感、职业或社会身份、性格气质。',
             'q 描述音色、语速节奏、表达方式和表演风格。',
             'h 只用于后续文本分段识别说话人，不是声音风格。',
@@ -1661,6 +1652,9 @@ function normalizeCompactSpeakerAnalysisOutput(output: unknown): TTSCompactSpeak
 }
 
 function normalizeCompactSpeakerPlanOutput(output: unknown): TTSCompactSpeakerPlan {
+    if (Array.isArray(output)) {
+        return { speakers: normalizeCompactSpeakerInfos(output) }
+    }
     if (!output || typeof output !== 'object' || !Array.isArray((output as { speakers?: unknown }).speakers)) {
         return { speakers: [] }
     }

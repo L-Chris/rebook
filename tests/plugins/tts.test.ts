@@ -6,14 +6,16 @@ import { EPUBParser } from '../../src/parsers/epub'
 import { withTTS, type TTSBook } from '../../src/plugins/tts'
 import type { Book, TextBlock } from '../../src/core/types'
 
-const { generateTextMock, outputObjectMock } = vi.hoisted(() => ({
+const { generateTextMock, outputArrayMock, outputObjectMock } = vi.hoisted(() => ({
     generateTextMock: vi.fn(),
+    outputArrayMock: vi.fn((options: any) => options),
     outputObjectMock: vi.fn((options: any) => options),
 }))
 
 vi.mock('ai', () => ({
     generateText: generateTextMock,
     Output: {
+        array: outputArrayMock,
         object: outputObjectMock,
     },
     jsonSchema: (schema: any) => schema,
@@ -126,6 +128,7 @@ const novelBook: Book = {
 describe('TTS Plugin', () => {
     beforeEach(() => {
         generateTextMock.mockReset()
+        outputArrayMock.mockClear()
         outputObjectMock.mockClear()
     })
 
@@ -465,19 +468,17 @@ describe('TTS Plugin', () => {
         const expectedSpeakerHint = '林七夜=盲眼少年；林七夜说道/问道时引用内容归他；别人谈论林七夜不代表他说话'
         generateTextMock
             .mockResolvedValueOnce({
-                output: {
-                    speakers: [{
-                        i: 1,
-                        n: '林七夜',
-                        r: 'c',
-                        g: 1,
-                        a: '少年',
-                        o: '盲眼学生',
-                        p: '冷静克制，敏锐',
-                        q: '清亮低沉，语速略慢',
-                        h: expectedSpeakerHint,
-                    }],
-                },
+                output: [{
+                    i: 1,
+                    n: '林七夜',
+                    r: 'c',
+                    g: 1,
+                    a: '少年',
+                    o: '盲眼学生',
+                    p: '冷静克制，敏锐',
+                    q: '清亮低沉，语速略慢',
+                    h: expectedSpeakerHint,
+                }],
             })
             .mockResolvedValueOnce({
                 output: {
@@ -489,9 +490,7 @@ describe('TTS Plugin', () => {
                 },
             })
             .mockResolvedValueOnce({
-                output: {
-                    speakers: [],
-                },
+                output: [],
             })
             .mockResolvedValueOnce({
                 output: {
@@ -535,8 +534,9 @@ describe('TTS Plugin', () => {
         expect(generateTextMock.mock.calls[1][0].system).toContain('当前是角色设计后的文本分段阶段')
         expect(firstSegmentPrompt.nextSpeakerId).toBeUndefined()
         expect(firstSegmentPrompt.voices).toBeUndefined()
-        expect(outputObjectMock.mock.calls[1][0].schema.required).toEqual(['segments'])
-        expect(outputObjectMock.mock.calls[1][0].schema.properties.speakers).toBeUndefined()
+        expect(outputArrayMock.mock.calls[0][0].element.required).toEqual(['i', 'n', 'r', 'g'])
+        expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['segments'])
+        expect(outputObjectMock.mock.calls[0][0].schema.properties.speakers).toBeUndefined()
         expect(firstSegmentPrompt.knownSpeakers).toEqual(expect.arrayContaining([
             expect.objectContaining({ i: 1, n: '林七夜', h: expectedSpeakerHint }),
         ]))
@@ -583,18 +583,16 @@ describe('TTS Plugin', () => {
         const expectedRoleCard = '角色：林七夜；性别：男；年龄：青年；身份/职业：学生；性格/气质：冷静克制；声线/表演：嗓音清亮'
         generateTextMock
             .mockResolvedValueOnce({
-                output: {
-                    speakers: [{
-                        i: 1,
-                        n: '林七夜',
-                        r: 'c',
-                        g: 1,
-                        a: '青年',
-                        o: '学生',
-                        p: '冷静克制',
-                        q: '嗓音清亮',
-                    }],
-                },
+                output: [{
+                    i: 1,
+                    n: '林七夜',
+                    r: 'c',
+                    g: 1,
+                    a: '青年',
+                    o: '学生',
+                    p: '冷静克制',
+                    q: '嗓音清亮',
+                }],
             })
             .mockResolvedValueOnce({
                 output: {
@@ -640,8 +638,9 @@ describe('TTS Plugin', () => {
         expect(generateTextMock.mock.calls[0][0].system).toContain('角色规划和语音规划引擎')
         expect(generateTextMock.mock.calls[1][0].system).toContain('当前是角色设计后的文本分段阶段')
         expect(segmentPrompt.voices).toBeUndefined()
-        expect(outputObjectMock.mock.calls[1][0].schema.required).toEqual(['segments'])
-        expect(outputObjectMock.mock.calls[1][0].schema.properties.speakers).toBeUndefined()
+        expect(outputArrayMock.mock.calls[0][0].element.required).toEqual(['i', 'n', 'r', 'g'])
+        expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['segments'])
+        expect(outputObjectMock.mock.calls[0][0].schema.properties.speakers).toBeUndefined()
         expect(segmentPrompt.knownSpeakers).toEqual(expect.arrayContaining([
             expect.objectContaining({ i: 1, n: '林七夜', r: 'c', g: 1 }),
         ]))

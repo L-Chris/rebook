@@ -404,7 +404,11 @@ function hasSegmentResponse(response) {
 function analyzeSpeakerPlan(request, response) {
     const knownSpeakers = Array.isArray(request?.knownSpeakers) ? request.knownSpeakers : []
     const requestVoiceCount = Array.isArray(request?.voices) ? request.voices.length : 0
-    const speakers = Array.isArray(response?.speakers) ? response.speakers : []
+    const speakers = Array.isArray(response)
+        ? response
+        : Array.isArray(response?.speakers)
+            ? response.speakers
+            : []
     const invalidSpeakers = []
     const duplicateSpeakerIds = []
     const presetVoiceSpeakers = []
