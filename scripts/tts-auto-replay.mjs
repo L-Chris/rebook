@@ -44,6 +44,7 @@ async function main() {
         endpoint: options.endpoint,
         provider: options.provider,
         model: options.model,
+        models: getPhaseModelNames(options),
         apiMode: options.apiMode,
         llmTimeoutMs: options.llmTimeoutMs,
         maxSegmentChars: options.maxSegmentChars,
@@ -71,7 +72,7 @@ async function main() {
     })))
 
     const llmEvents = []
-    const model = createLanguageModel(options)
+    const phaseModels = createPhaseLanguageModels(options, getPhaseModelNames(options))
     const fetchLog = []
     const loggedFetch = createLoggedFetch(globalThis.fetch.bind(globalThis), fetchLog)
     const wrapped = withTTS({
@@ -79,8 +80,9 @@ async function main() {
         provider: options.provider,
         lang: 'zh-CN',
         fetch: loggedFetch,
-        model,
+        model: phaseModels.initial,
         speakerAnalysis: {
+            models: phaseModels,
             timeoutMs: options.llmTimeoutMs,
             onLog: async event => {
                 const record = await persistLLMEvent(dirs.llm, llmEvents.length + 1, event)
@@ -164,6 +166,9 @@ function parseArgs(argv) {
         endpoint: process.env.REBOOK_TTS_ENDPOINT || DEFAULT_ENDPOINT,
         provider: process.env.REBOOK_TTS_PROVIDER || DEFAULT_PROVIDER,
         model: process.env.REBOOK_TTS_MODEL || process.env.OPENAI_MODEL || DEFAULT_MODEL,
+        planModel: process.env.REBOOK_TTS_PLAN_MODEL || undefined,
+        initialModel: process.env.REBOOK_TTS_INITIAL_MODEL || undefined,
+        repairModel: process.env.REBOOK_TTS_REPAIR_MODEL || undefined,
         apiMode: process.env.OPENAI_API_MODE || DEFAULT_API_MODE,
         outputDir: undefined,
         maxSegmentChars: 500,
@@ -182,6 +187,9 @@ function parseArgs(argv) {
         else if (arg === '--endpoint') options.endpoint = argv[++index] ?? options.endpoint
         else if (arg === '--provider') options.provider = argv[++index] ?? options.provider
         else if (arg === '--model') options.model = argv[++index] ?? options.model
+        else if (arg === '--plan-model') options.planModel = argv[++index] ?? options.planModel
+        else if (arg === '--initial-model') options.initialModel = argv[++index] ?? options.initialModel
+        else if (arg === '--repair-model') options.repairModel = argv[++index] ?? options.repairModel
         else if (arg === '--api-mode') options.apiMode = argv[++index] ?? options.apiMode
         else if (arg === '--out') options.outputDir = argv[++index]
         else if (arg === '--max-segment-chars') options.maxSegmentChars = Number(argv[++index] ?? options.maxSegmentChars)
@@ -217,6 +225,9 @@ Options:
   --endpoint URL              TTS service endpoint. Default: ${DEFAULT_ENDPOINT}
   --provider NAME             TTS provider. Default: ${DEFAULT_PROVIDER}
   --model NAME                OpenAI model. Default: ${DEFAULT_MODEL}
+  --plan-model NAME           Model for role planning. Default: text analysis model.
+  --initial-model NAME        Model for text analysis. Default: --model.
+  --repair-model NAME         Model for repair. Default: text analysis model.
   --api-mode MODE             chat or responses. Default: ${DEFAULT_API_MODE}
   --out DIR                   Output run directory.
   --max-segment-chars N       Max chars per TTS segment. Default: 500.
@@ -231,6 +242,10 @@ Environment:
   OPENAI_BASE_URL             Optional OpenAI-compatible base URL.
   OPENAI_MODEL                Optional fallback model name.
   OPENAI_API_MODE             chat or responses. Default: chat.
+  REBOOK_TTS_MODEL            Fallback model for all TTS LLM phases.
+  REBOOK_TTS_PLAN_MODEL       Optional role planning model.
+  REBOOK_TTS_INITIAL_MODEL    Optional text analysis model.
+  REBOOK_TTS_REPAIR_MODEL     Optional repair model.
   REBOOK_TTS_LLM_TIMEOUT_MS   Optional per LLM phase timeout.
   REBOOK_TTS_ENDPOINT         Optional TTS endpoint.
   .env and .env.local         Loaded automatically without overriding existing env vars.
@@ -281,7 +296,24 @@ function parseDotEnvLine(line) {
     return [key, value]
 }
 
-function createLanguageModel(options) {
+function getPhaseModelNames(options) {
+    const initial = options.initialModel || options.model || options.planModel
+    return {
+        plan: options.planModel || initial,
+        initial,
+        repair: options.repairModel || initial,
+    }
+}
+
+function createPhaseLanguageModels(options, modelNames) {
+    return {
+        plan: createLanguageModel(options, modelNames.plan),
+        initial: createLanguageModel(options, modelNames.initial),
+        repair: createLanguageModel(options, modelNames.repair),
+    }
+}
+
+function createLanguageModel(options, modelName) {
     const apiKey = process.env.OPENAI_API_KEY
     if (!apiKey) {
         throw new Error('OPENAI_API_KEY is required for tts:auto-replay')
@@ -294,7 +326,7 @@ function createLanguageModel(options) {
     if (options.apiMode !== 'chat') {
         throw new Error('OPENAI_API_MODE must be chat or responses')
     }
-    return openai.chat(options.model)
+    return openai.chat(modelName)
 }
 
 function normalizeOpenAIBaseURL(value) {
@@ -398,7 +430,7 @@ function analyzeLLMEvent(request, response) {
 }
 
 function hasSegmentResponse(response) {
-    return response && typeof response === 'object' && Array.isArray(response.segments)
+    return response && typeof response === 'object' && Array.isArray(response.assignments)
 }
 
 function analyzeSpeakerPlan(request, response) {
@@ -741,6 +773,7 @@ function formatAutoReport(report) {
         `- Book: ${basename(report.meta.bookPath)}`,
         `- Chapter: ${report.chapter.title} (section ${report.chapter.sectionIndex})`,
         `- Model: ${report.meta.model}`,
+        `- Phase models: plan=${report.meta.models?.plan ?? report.meta.model}, initial=${report.meta.models?.initial ?? report.meta.model}, repair=${report.meta.models?.repair ?? report.meta.model}`,
         `- Endpoint: ${report.meta.endpoint}`,
         `- LLM timeout: ${formatNullableMs(report.meta.llmTimeoutMs)}`,
         `- Total time: ${report.timings.totalMs}ms`,

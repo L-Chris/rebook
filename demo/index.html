@@ -582,6 +582,11 @@
                 <input type="checkbox" id="tts-multi-speaker-check" title="Use AI to split narration and character dialogue">
             </div>
             <div class="setting-stack" id="tts-multi-speaker-fields">
+                <input type="text" id="tts-ai-baseurl-input" placeholder="TTS AI Base URL (Optional)">
+                <input type="password" id="tts-ai-api-key-input" placeholder="TTS AI API Key">
+                <input type="text" id="tts-plan-model-input" placeholder="Role plan model">
+                <input type="text" id="tts-initial-model-input" placeholder="Text analysis model">
+                <input type="text" id="tts-repair-model-input" placeholder="Repair model">
                 <input type="text" id="tts-narrator-voice-input" placeholder="Narrator voice">
                 <input type="text" id="tts-male-voices-input" placeholder="Male character voices, comma separated">
                 <input type="text" id="tts-female-voices-input" placeholder="Female character voices, comma separated">
@@ -721,6 +726,11 @@
         const ttsRateInput = document.getElementById('tts-rate-input')
         const ttsMultiSpeakerCheck = document.getElementById('tts-multi-speaker-check')
         const ttsMultiSpeakerFields = document.getElementById('tts-multi-speaker-fields')
+        const ttsAIBaseUrlInput = document.getElementById('tts-ai-baseurl-input')
+        const ttsAIAPIKeyInput = document.getElementById('tts-ai-api-key-input')
+        const ttsPlanModelInput = document.getElementById('tts-plan-model-input')
+        const ttsInitialModelInput = document.getElementById('tts-initial-model-input')
+        const ttsRepairModelInput = document.getElementById('tts-repair-model-input')
         const ttsNarratorVoiceInput = document.getElementById('tts-narrator-voice-input')
         const ttsMaleVoicesInput = document.getElementById('tts-male-voices-input')
         const ttsFemaleVoicesInput = document.getElementById('tts-female-voices-input')
@@ -766,6 +776,11 @@
             ttsSegmentChars: '500',
             ttsRate: '+0%',
             ttsMultiSpeaker: false,
+            ttsAIBaseURL: '',
+            ttsAIAPIKey: '',
+            ttsPlanModel: '',
+            ttsInitialModel: '',
+            ttsRepairModel: '',
             ttsNarratorVoice: 'zh-CN-YunxiNeural',
             ttsMaleVoices: 'zh-CN-YunjianNeural, zh-CN-YunxiNeural',
             ttsFemaleVoices: 'zh-CN-XiaoyiNeural, zh-CN-XiaoxiaoNeural',
@@ -818,6 +833,11 @@
                 ttsSegmentChars: ttsSegmentCharsInput.value,
                 ttsRate: ttsRateInput.value,
                 ttsMultiSpeaker: ttsMultiSpeakerCheck.checked,
+                ttsAIBaseURL: ttsAIBaseUrlInput.value,
+                ttsAIAPIKey: ttsAIAPIKeyInput.value,
+                ttsPlanModel: ttsPlanModelInput.value,
+                ttsInitialModel: ttsInitialModelInput.value,
+                ttsRepairModel: ttsRepairModelInput.value,
                 ttsNarratorVoice: ttsNarratorVoiceInput.value,
                 ttsMaleVoices: ttsMaleVoicesInput.value,
                 ttsFemaleVoices: ttsFemaleVoicesInput.value,
@@ -851,6 +871,11 @@
             ttsSegmentCharsInput.value = config.ttsSegmentChars ?? defaultConfig.ttsSegmentChars
             ttsRateInput.value = config.ttsRate ?? defaultConfig.ttsRate
             ttsMultiSpeakerCheck.checked = !!config.ttsMultiSpeaker
+            ttsAIBaseUrlInput.value = config.ttsAIBaseURL ?? defaultConfig.ttsAIBaseURL
+            ttsAIAPIKeyInput.value = config.ttsAIAPIKey ?? defaultConfig.ttsAIAPIKey
+            ttsPlanModelInput.value = config.ttsPlanModel ?? defaultConfig.ttsPlanModel
+            ttsInitialModelInput.value = config.ttsInitialModel ?? defaultConfig.ttsInitialModel
+            ttsRepairModelInput.value = config.ttsRepairModel ?? defaultConfig.ttsRepairModel
             ttsNarratorVoiceInput.value = config.ttsNarratorVoice ?? defaultConfig.ttsNarratorVoice
             ttsMaleVoicesInput.value = config.ttsMaleVoices ?? defaultConfig.ttsMaleVoices
             ttsFemaleVoicesInput.value = config.ttsFemaleVoices ?? defaultConfig.ttsFemaleVoices
@@ -870,6 +895,18 @@
             if (!debugCheck.checked) return
             appendDebugEntry(label, payload)
             console.log(`[demo] ${label}`, payload)
+        }
+
+        const formatErrorDetail = (error) => {
+            if (!error || typeof error !== 'object') return String(error)
+            const parts = [
+                error.message || error.name,
+                typeof error.statusCode === 'number' ? `status=${error.statusCode}` : '',
+                error.url ? `url=${error.url}` : '',
+                error.responseBody ? `body=${String(error.responseBody).replace(/\s+/g, ' ').trim().slice(0, 500)}` : '',
+                error.cause?.message ? `cause=${error.cause.message}` : '',
+            ].filter(Boolean)
+            return parts.join(' | ') || String(error)
         }
 
         const safeStringify = (value) => {
@@ -990,6 +1027,9 @@
             ttsFields.style.display = ttsCheck.checked ? 'block' : 'none'
             ttsMultiSpeakerFields.style.display = ttsMultiSpeakerCheck.checked ? 'block' : 'none'
             ttsVoiceInput.placeholder = isMimo ? 'Voice (Default: mimo_default)' : 'Voice (Default: zh-CN-XiaoyiNeural)'
+            ttsPlanModelInput.placeholder = 'Role plan model (Default: Text analysis model)'
+            ttsInitialModelInput.placeholder = 'Text analysis model (Default: gpt-4o-mini)'
+            ttsRepairModelInput.placeholder = 'Repair model (Default: Text analysis model)'
             ttsNarratorVoiceInput.placeholder = isMimo ? 'Narrator voice (Default: mimo_default)' : 'Narrator voice'
             ttsMaleVoicesInput.style.display = isMimo ? 'none' : ''
             ttsFemaleVoicesInput.style.display = isMimo ? 'none' : ''
@@ -1006,8 +1046,8 @@
                 ttsStatus.textContent = 'TTS plugin disabled.'
                 return
             }
-            if (ttsMultiSpeakerCheck.checked && (!apiKeyInput.value.trim() || !modelInput.value.trim())) {
-                ttsStatus.textContent = 'Multi voice TTS needs AI API key and model in the Translation panel.'
+            if (ttsMultiSpeakerCheck.checked && !ttsAIAPIKeyInput.value.trim()) {
+                ttsStatus.textContent = 'Multi voice TTS needs TTS AI API key.'
                 return
             }
             ttsStatus.textContent = currentBook?.tts
@@ -1076,9 +1116,10 @@
                     player: ttsPlayer,
                 }
                 if (ttsMultiSpeakerCheck.checked) {
-                    const model = createAIModel()
-                    if (model) {
-                        ttsOptions.model = model
+                    const models = createTTSAnalysisModels()
+                    if (models) {
+                        ttsOptions.model = models.initial
+                        ttsOptions.speakerAnalysis = createTTSSpeakerAnalysisOptions(models)
                         ttsOptions.multiSpeaker = true
                         ttsOptions.voiceProfile = createTTSVoiceProfile()
                     }
@@ -1113,14 +1154,73 @@
             })
         }
 
-        function createAIModel() {
+        function createAIModel(modelName) {
             const apiKey = apiKeyInput.value.trim()
             if (!apiKey) return null
             const openaiOptions = { apiKey }
             const baseUrl = baseUrlInput.value.trim()
             if (baseUrl) openaiOptions.baseURL = baseUrl
             const openai = createOpenAI(openaiOptions)
-            return openai.chat(modelInput.value.trim() || 'gpt-4o-mini')
+            return openai.chat((modelName ?? modelInput.value).trim() || 'gpt-4o-mini')
+        }
+
+        function createTTSAIModel(modelName) {
+            const apiKey = ttsAIAPIKeyInput.value.trim()
+            if (!apiKey) return null
+            const openaiOptions = { apiKey }
+            const baseUrl = ttsAIBaseUrlInput.value.trim()
+            if (baseUrl) openaiOptions.baseURL = baseUrl
+            const openai = createOpenAI(openaiOptions)
+            return openai.chat(modelName.trim() || 'gpt-4o-mini')
+        }
+
+        function createTTSAnalysisModels() {
+            const apiKey = ttsAIAPIKeyInput.value.trim()
+            if (!apiKey) return null
+            const fallbackModel = 'gpt-4o-mini'
+            const planModelName = ttsPlanModelInput.value.trim() || ttsInitialModelInput.value.trim() || fallbackModel
+            const initialModelName = ttsInitialModelInput.value.trim() || fallbackModel
+            const repairModelName = ttsRepairModelInput.value.trim() || initialModelName
+            debugDemo('tts ai config', {
+                baseURL: ttsAIBaseUrlInput.value.trim() || '(default OpenAI)',
+                hasAPIKey: true,
+                models: {
+                    plan: planModelName,
+                    initial: initialModelName,
+                    repair: repairModelName,
+                },
+            })
+            return {
+                plan: createTTSAIModel(planModelName),
+                initial: createTTSAIModel(initialModelName),
+                repair: createTTSAIModel(repairModelName),
+            }
+        }
+
+        function createTTSSpeakerAnalysisOptions(models) {
+            return {
+                models,
+                onLog: event => {
+                    const response = event.response
+                    debugDemo('tts llm', {
+                        phase: event.phase,
+                        durationMs: event.durationMs,
+                        error: event.error,
+                        requestBlocks: Array.isArray(event.request?.blocks) ? event.request.blocks.length : undefined,
+                        responseShape: Array.isArray(response)
+                            ? 'array'
+                            : response && typeof response === 'object'
+                                ? Object.keys(response)
+                                : typeof response,
+                        assignments: Array.isArray(response?.assignments) ? response.assignments.length : undefined,
+                        speakers: Array.isArray(response)
+                            ? response.length
+                            : Array.isArray(response?.speakers)
+                                ? response.speakers.length
+                                : undefined,
+                    })
+                },
+            }
         }
 
         function createTTSVoiceProfile() {
@@ -1592,6 +1692,11 @@
             ttsSegmentCharsInput,
             ttsRateInput,
             ttsMultiSpeakerCheck,
+            ttsAIBaseUrlInput,
+            ttsAIAPIKeyInput,
+            ttsPlanModelInput,
+            ttsInitialModelInput,
+            ttsRepairModelInput,
             ttsNarratorVoiceInput,
             ttsMaleVoicesInput,
             ttsFemaleVoicesInput,
@@ -1613,8 +1718,18 @@
                     updateTTSStatus()
                     return
                 }
+                const detail = formatErrorDetail(error)
                 console.error('TTS failed:', error)
-                updateTTSStatus(`TTS failed: ${error.message}`)
+                debugDemo('tts failed', {
+                    detail,
+                    name: error?.name,
+                    message: error?.message,
+                    statusCode: error?.statusCode,
+                    url: error?.url,
+                    responseBody: error?.responseBody,
+                    cause: error?.cause?.message,
+                })
+                updateTTSStatus(`TTS failed: ${detail}`)
             })
         })
 
@@ -1648,11 +1763,12 @@
                 concurrency: 2,
             }
             if (ttsMultiSpeakerCheck.checked) {
-                const model = createAIModel()
-                if (!model) {
-                    throw new Error('Multi voice TTS needs AI API key and model in the Translation panel.')
+                const models = createTTSAnalysisModels()
+                if (!models) {
+                    throw new Error('Multi voice TTS needs TTS AI API key.')
                 }
-                prefetchOptions.model = model
+                prefetchOptions.model = models.initial
+                prefetchOptions.speakerAnalysis = createTTSSpeakerAnalysisOptions(models)
                 prefetchOptions.multiSpeaker = true
                 prefetchOptions.voiceProfile = createTTSVoiceProfile()
             }

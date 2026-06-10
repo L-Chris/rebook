@@ -249,32 +249,33 @@ describe('TTS Plugin', () => {
                             { i: 1, n: '林七夜', r: 'c', g: 1, v: 'voice-lin' },
                             { i: 2, n: '司小南', r: 'c', g: 2, v: 'voice-si' },
                         ],
-                        segments: [
+                        assignments: [
                             {
                                 b: 0,
-                                s: 0,
-                                e: 8,
+                                a: 0,
                                 i: 0,
                             },
                             {
                                 b: 0,
-                                s: 9,
-                                e: 12,
+                                a: 1,
                                 i: 1,
                                 c: 0.92,
                             },
                             {
                                 b: 0,
-                                s: 13,
-                                e: 19,
+                                a: 2,
                                 i: 0,
                             },
                             {
                                 b: 0,
-                                s: 20,
-                                e: 25,
+                                a: 3,
                                 i: 2,
                                 c: 0.88,
+                            },
+                            {
+                                b: 0,
+                                a: 4,
+                                i: 0,
                             },
                         ],
                     },
@@ -285,30 +286,26 @@ describe('TTS Plugin', () => {
                     speakers: [
                         { i: 3, n: '赵空城', r: 'c', g: 1, v: 'voice-zhao' },
                     ],
-                    segments: [
+                    assignments: [
                         {
                             b: 0,
-                            s: 0,
-                            e: 6,
+                            a: 0,
                             i: 0,
                         },
                         {
                             b: 0,
-                            s: 7,
-                            e: 11,
+                            a: 1,
                             i: 1,
                             c: 0.91,
                         },
                         {
                             b: 0,
-                            s: 12,
-                            e: 18,
+                            a: 2,
                             i: 0,
                         },
                         {
                             b: 0,
-                            s: 19,
-                            e: 25,
+                            a: 3,
                             i: 3,
                             c: 0.86,
                         },
@@ -369,6 +366,13 @@ describe('TTS Plugin', () => {
             l: novelBlocks[0].segments[0].text.length,
             x: novelBlocks[0].segments[0].text,
             m: 1,
+            u: [
+                expect.objectContaining({ a: 0 }),
+                expect.objectContaining({ a: 1, q: 1 }),
+                expect.objectContaining({ a: 2 }),
+                expect.objectContaining({ a: 3, q: 1 }),
+                expect.objectContaining({ a: 4 }),
+            ],
         }])
         expect(JSON.parse(generateTextMock.mock.calls[1][0].prompt).nextSpeakerId).toBe(3)
         expect(JSON.parse(generateTextMock.mock.calls[1][0].prompt).knownSpeakers).toEqual(expect.arrayContaining([
@@ -377,8 +381,8 @@ describe('TTS Plugin', () => {
             expect.objectContaining({ i: 2, n: '司小南', g: 2 }),
         ]))
         expect(JSON.parse(generateTextMock.mock.calls[1][0].prompt).knownSpeakers.some((speaker: any) => speaker.v || speaker.d)).toBe(false)
-        expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['speakers', 'segments'])
-        expect(outputObjectMock.mock.calls[0][0].schema.properties.segments.items.required).toEqual(['b', 's', 'e', 'i'])
+        expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['speakers', 'assignments'])
+        expect(outputObjectMock.mock.calls[0][0].schema.properties.assignments.items.required).toEqual(['b', 'a', 'i'])
         expect(outputObjectMock.mock.calls[0][0].schema.properties.speakers.items.properties.g.enum).toEqual([0, 1, 2])
         expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/v1/tts/voices'))).toHaveLength(1)
 
@@ -482,10 +486,10 @@ describe('TTS Plugin', () => {
             })
             .mockResolvedValueOnce({
                 output: {
-                    segments: [
-                        { b: 0, s: 0, e: 3, i: 0 },
-                        { b: 0, s: 4, e: 7, i: 1, c: 0.93 },
-                        { b: 0, s: 8, e: firstText.length, i: 0 },
+                    assignments: [
+                        { b: 0, a: 0, i: 0 },
+                        { b: 0, a: 1, i: 1, c: 0.93 },
+                        { b: 0, a: 2, i: 0 },
                     ],
                 },
             })
@@ -494,9 +498,9 @@ describe('TTS Plugin', () => {
             })
             .mockResolvedValueOnce({
                 output: {
-                    segments: [
-                        { b: 0, s: 0, e: 6, i: 0 },
-                        { b: 0, s: 7, e: 11, i: 1, c: 0.94 },
+                    assignments: [
+                        { b: 0, a: 0, i: 0 },
+                        { b: 0, a: 1, i: 1, c: 0.94 },
                     ],
                 },
             })
@@ -531,11 +535,11 @@ describe('TTS Plugin', () => {
         expect(firstPlanPrompt.voices).toBeUndefined()
         expect(firstPlanPrompt.nextSpeakerId).toBe(1)
         expect(generateTextMock.mock.calls[0][0].system).toContain('角色规划和语音规划引擎')
-        expect(generateTextMock.mock.calls[1][0].system).toContain('当前是角色设计后的文本分段阶段')
+        expect(generateTextMock.mock.calls[1][0].system).toContain('当前是角色设计后的文本解析阶段')
         expect(firstSegmentPrompt.nextSpeakerId).toBeUndefined()
         expect(firstSegmentPrompt.voices).toBeUndefined()
         expect(outputArrayMock.mock.calls[0][0].element.required).toEqual(['i', 'n', 'r', 'g'])
-        expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['segments'])
+        expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['assignments'])
         expect(outputObjectMock.mock.calls[0][0].schema.properties.speakers).toBeUndefined()
         expect(firstSegmentPrompt.knownSpeakers).toEqual(expect.arrayContaining([
             expect.objectContaining({ i: 1, n: '林七夜', h: expectedSpeakerHint }),
@@ -596,9 +600,9 @@ describe('TTS Plugin', () => {
             })
             .mockResolvedValueOnce({
                 output: {
-                    segments: [
-                        { b: 0, s: 0, e: 7, i: 0 },
-                        { b: 0, s: 8, e: 11, i: 1 },
+                    assignments: [
+                        { b: 0, a: 0, i: 0 },
+                        { b: 0, a: 1, i: 1 },
                     ],
                 },
             })
@@ -635,11 +639,16 @@ describe('TTS Plugin', () => {
         const segmentPrompt = JSON.parse(generateTextMock.mock.calls[1][0].prompt)
         expect(planPrompt.voiceDesign).toBeUndefined()
         expect(planPrompt.voices).toBeUndefined()
+        expect(planPrompt.blocks[0].u).toBeUndefined()
         expect(generateTextMock.mock.calls[0][0].system).toContain('角色规划和语音规划引擎')
-        expect(generateTextMock.mock.calls[1][0].system).toContain('当前是角色设计后的文本分段阶段')
+        expect(generateTextMock.mock.calls[1][0].system).toContain('当前是角色设计后的文本解析阶段')
         expect(segmentPrompt.voices).toBeUndefined()
+        expect(segmentPrompt.blocks[0].u).toEqual([
+            expect.objectContaining({ a: 0 }),
+            expect.objectContaining({ a: 1, q: 1 }),
+        ])
         expect(outputArrayMock.mock.calls[0][0].element.required).toEqual(['i', 'n', 'r', 'g'])
-        expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['segments'])
+        expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['assignments'])
         expect(outputObjectMock.mock.calls[0][0].schema.properties.speakers).toBeUndefined()
         expect(segmentPrompt.knownSpeakers).toEqual(expect.arrayContaining([
             expect.objectContaining({ i: 1, n: '林七夜', r: 'c', g: 1 }),
@@ -650,6 +659,73 @@ describe('TTS Plugin', () => {
             voicePrompt: expectedRoleCard,
         })
         expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/v1/tts/voices'))).toBe(false)
+    })
+
+    it('uses phase-specific models for voice design speaker analysis', async () => {
+        const text = '“别动。”林七夜说道。'
+        const phaseBook: Book = {
+            sections: [{
+                id: 'phase-models',
+                size: 100,
+                load: () => '',
+                getBlocks: async () => [{
+                    id: 'phase-models-p1',
+                    type: 'paragraph',
+                    segments: [{ text }],
+                }],
+            }],
+        }
+        const planModel = { phase: 'plan' }
+        const initialModel = { phase: 'initial' }
+        const repairModel = { phase: 'repair' }
+        generateTextMock
+            .mockResolvedValueOnce({
+                output: [{ i: 1, n: '林七夜', r: 'c', g: 1 }],
+            })
+            .mockResolvedValueOnce({
+                output: {
+                    assignments: [{ b: 0, a: 0, i: 1, c: 0.6 }],
+                },
+            })
+            .mockResolvedValueOnce({
+                output: {
+                    assignments: [
+                        { b: 0, a: 0, i: 1, c: 0.95 },
+                        { b: 0, a: 1, i: 0, c: 0.95 },
+                    ],
+                },
+            })
+        const fetchMock = vi.fn(async (url: string) => {
+            if (url.includes('/v1/tts/providers')) {
+                return new Response(JSON.stringify({
+                    providers: [{
+                        id: 'design-lab',
+                        name: 'Design Lab',
+                        capabilities: { voiceDesign: true },
+                    }],
+                }))
+            }
+            return new Response(JSON.stringify({}))
+        })
+        const wrapped = withTTS({
+            endpoint: 'http://tts.test',
+            provider: 'design-lab',
+            fetch: fetchMock as any,
+            speakerAnalysis: {
+                models: {
+                    plan: planModel as any,
+                    initial: initialModel as any,
+                    repair: repairModel as any,
+                },
+            },
+        })(phaseBook) as TTSBook
+
+        await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 80 })
+
+        expect(generateTextMock).toHaveBeenCalledTimes(3)
+        expect(generateTextMock.mock.calls[0][0].model).toBe(planModel)
+        expect(generateTextMock.mock.calls[1][0].model).toBe(initialModel)
+        expect(generateTextMock.mock.calls[2][0].model).toBe(repairModel)
     })
 
     it('repairs mixed AI blocks that were assigned to one speaker', async () => {
@@ -670,7 +746,7 @@ describe('TTS Plugin', () => {
             .mockResolvedValueOnce({
                 output: {
                     speakers: [{ i: 1, n: '林七夜', r: 'c', g: 1 }],
-                    segments: [{ b: 0, s: 0, e: mixedText.length, i: 1, c: 0.6 }],
+                    assignments: [{ b: 0, a: 0, i: 1, c: 0.6 }],
                 },
             })
             .mockImplementationOnce(async (options: any) => {
@@ -681,7 +757,10 @@ describe('TTS Plugin', () => {
                     l: mixedText.length,
                     x: mixedText,
                     m: 1,
-                    k: expect.any(String),
+                    u: [
+                        expect.objectContaining({ a: 0, q: 1 }),
+                        expect.objectContaining({ a: 1 }),
+                    ],
                 }])
                 expect(body.knownSpeakers).toEqual(expect.arrayContaining([
                     expect.objectContaining({ i: 1, n: '林七夜', r: 'c', g: 1 }),
@@ -689,9 +768,9 @@ describe('TTS Plugin', () => {
                 return {
                     output: {
                         speakers: [],
-                        segments: [
-                            { b: 0, s: 1, e: 12, i: 1, c: 0.95 },
-                            { b: 0, s: 13, e: mixedText.length, i: 0, c: 0.95 },
+                        assignments: [
+                            { b: 0, a: 0, i: 1, c: 0.95 },
+                            { b: 0, a: 1, i: 0, c: 0.95 },
                         ],
                     },
                 }
@@ -756,10 +835,8 @@ describe('TTS Plugin', () => {
                         { i: 1, n: '阿诺', r: 'c', g: 1 },
                         { i: 2, n: '同伴', r: 'c', g: 1 },
                     ],
-                    segments: [
-                        { b: 0, s: 0, e: 3, i: 0, c: 1 },
-                        { b: 0, s: 3, e: 15, i: 1, c: 0.9 },
-                        { b: 0, s: 15, e: 19, i: 0, c: 1 },
+                    assignments: [
+                        { b: 0, a: 1, i: 0, c: 1 },
                     ],
                 },
             })
@@ -771,7 +848,10 @@ describe('TTS Plugin', () => {
                     l: mixedText.length,
                     x: mixedText,
                     m: 1,
-                    k: expect.any(String),
+                    u: [
+                        expect.objectContaining({ a: 0, q: 1 }),
+                        expect.objectContaining({ a: 1 }),
+                    ],
                 }])
                 expect(body.knownSpeakers).toEqual(expect.arrayContaining([
                     expect.objectContaining({ i: 1, n: '阿诺' }),
@@ -780,9 +860,9 @@ describe('TTS Plugin', () => {
                 return {
                     output: {
                         speakers: [],
-                        segments: [
-                            { b: 0, s: 1, e: 10, i: 2, c: 0.96 },
-                            { b: 0, s: 11, e: mixedText.length, i: 0, c: 0.96 },
+                        assignments: [
+                            { b: 0, a: 0, i: 2, c: 0.96 },
+                            { b: 0, a: 1, i: 0, c: 0.96 },
                         ],
                     },
                 }
@@ -841,9 +921,8 @@ describe('TTS Plugin', () => {
             .mockResolvedValueOnce({
                 output: {
                     speakers: [{ i: 1, n: '阿诺', r: 'c', g: 1 }],
-                    segments: [
-                        { b: 0, s: 0, e: 14, i: 0, c: 0.9 },
-                        { b: 0, s: 14, e: mixedText.length, i: 1, c: 0.9 },
+                    assignments: [
+                        { b: 0, a: 0, i: 0, c: 0.9 },
                     ],
                 },
             })
@@ -855,15 +934,20 @@ describe('TTS Plugin', () => {
                     l: mixedText.length,
                     x: mixedText,
                     m: 1,
-                    k: expect.any(String),
+                    u: [
+                        expect.objectContaining({ a: 0, q: 1 }),
+                        expect.objectContaining({ a: 1 }),
+                        expect.objectContaining({ a: 2, q: 1 }),
+                    ],
                 }])
-                expect(options.system).toContain('同时跨过引号内对白和引号外叙述/归属文本')
+                expect(options.system).toContain('代码已经拆出旁白、动作、发言归属短语和引号内对白原子')
                 return {
                     output: {
                         speakers: [],
-                        segments: [
-                            { b: 0, s: 1, e: 7, i: 1, c: 0.96 },
-                            { b: 0, s: 8, e: mixedText.length - 1, i: 1, c: 0.96 },
+                        assignments: [
+                            { b: 0, a: 0, i: 1, c: 0.96 },
+                            { b: 0, a: 1, i: 0, c: 0.96 },
+                            { b: 0, a: 2, i: 1, c: 0.96 },
                         ],
                     },
                 }
@@ -912,6 +996,7 @@ describe('TTS Plugin', () => {
 
     it('trims leading speech boundary punctuation from compact AI segments', async () => {
         const text = '，“不过……听说是比那更离谱的事情。”'
+        const onLog = vi.fn()
         const punctuationBook: Book = {
             sections: [{
                 id: 'punctuation-boundary',
@@ -927,13 +1012,13 @@ describe('TTS Plugin', () => {
         generateTextMock.mockResolvedValueOnce({
             output: {
                 speakers: [{ i: 1, n: '同伴', r: 'c', g: 1 }],
-                segments: [{ b: 0, s: 0, e: text.length, i: 1 }],
+                assignments: [{ b: 0, a: 0, i: 1 }],
             },
         })
         const wrapped = withTTS({
             fetch: vi.fn(async () => new Response(JSON.stringify({ voices: [] }))) as any,
             model: mockModel as any,
-            speakerAnalysis: { timeoutMs: 12345 },
+            speakerAnalysis: { timeoutMs: 12345, onLog },
             voiceProfile: { male: 'male-voice' },
         })(punctuationBook) as TTSBook
 
@@ -945,10 +1030,17 @@ describe('TTS Plugin', () => {
         expect(generateTextMock).toHaveBeenCalledTimes(1)
         const systemPrompt = generateTextMock.mock.calls[0][0].system
         expect(systemPrompt).toContain('任何引号外可读的旁白、动作或发言归属文本都必须是 i=0')
-        expect(outputObjectMock.mock.calls[0][0].schema.properties.segments.items.properties.c.description)
+        expect(outputObjectMock.mock.calls[0][0].schema.properties.assignments.items.properties.c.description)
             .toContain('仅当置信度 <= 0.8')
         expect(generateTextMock.mock.calls[0][0].timeout).toEqual({ totalMs: 12345 })
         expect(generateTextMock.mock.calls[0][0].abortSignal).toBeInstanceOf(AbortSignal)
+        expect(onLog).toHaveBeenCalledWith(expect.objectContaining({
+            phase: 'initial',
+            response: {
+                speakers: [{ i: 1, n: '同伴', r: 'c', g: 1 }],
+                assignments: [{ b: 0, a: 0, i: 1 }],
+            },
+        }))
         expect(segments).toHaveLength(1)
         expect(segments[0]).toMatchObject({
             startOffset: 2,
@@ -1106,7 +1198,11 @@ describe('TTS Plugin', () => {
         generateTextMock.mockResolvedValue({
             output: {
                 speakers: [],
-                segments: [{ b: 0, s: 0, e: 12, i: 0 }],
+                assignments: [
+                    { b: 0, a: 0, i: 0 },
+                    { b: 0, a: 1, i: 0 },
+                    { b: 0, a: 2, i: 0 },
+                ],
             },
         })
         const englishBook: Book = {
@@ -1185,36 +1281,21 @@ describe('TTS Plugin', () => {
         generateTextMock.mockImplementation(async (options: any) => {
             const body = JSON.parse(options.prompt)
             const block = body.blocks.find((item: any) => /“[^”]{1,40}”/.test(item.x)) ?? body.blocks[0]
-            const quoteStart = block.x.indexOf('“')
-            const quoteEnd = block.x.indexOf('”', quoteStart + 1)
-            const hasQuote = quoteStart >= 0 && quoteEnd > quoteStart
+            const atoms = Array.isArray(block.u) ? block.u : []
+            const hasQuote = atoms.some((atom: any) => atom.q === 1)
             return {
                 output: {
                     speakers: hasQuote
                         ? [{ i: 1, n: '林七夜', r: 'c', g: 1 }]
                         : [],
-                    segments: hasQuote
-                        ? [
-                            {
-                                b: block.b,
-                                s: 0,
-                                e: quoteStart,
-                                i: 0,
-                            },
-                            {
-                                b: block.b,
-                                s: quoteStart + 1,
-                                e: quoteEnd,
-                                i: 1,
-                                c: 0.8,
-                            },
-                        ]
-                        : [{
+                    assignments: atoms.length
+                        ? atoms.map((atom: any) => ({
                             b: block.b,
-                            s: 0,
-                            e: Math.min(block.x.length, 80),
-                            i: 0,
-                        }],
+                            a: atom.a,
+                            i: atom.q === 1 ? 1 : 0,
+                            c: atom.q === 1 ? 0.8 : undefined,
+                        }))
+                        : [],
                 },
             }
         })

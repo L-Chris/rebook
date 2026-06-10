@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 const execFileAsync = promisify(execFile)
 
 describe('tts replay script', () => {
-    it('reports gaps, out-of-range segments, and mixed single-speaker blocks', async () => {
+    it('reports gaps, invalid atom assignments, and mixed single-speaker blocks', async () => {
         const dir = await mkdtemp(join(tmpdir(), 'rebook-tts-replay-'))
         try {
             const reqPath = join(dir, 'req.json')
@@ -23,19 +23,39 @@ describe('tts replay script', () => {
                         voices: [],
                         knownSpeakers: [{ i: 0, n: '旁白', r: 'n', g: 0 }],
                         blocks: [
-                            { b: 0, t: 'paragraph', x: '“你好。”他说。', m: 1 },
-                            { b: 1, t: 'paragraph', x: '天气很好。' },
-                            { b: 2, t: 'paragraph', x: '他继续向前走。' },
+                            {
+                                b: 0,
+                                t: 'paragraph',
+                                x: '“你好。”他说。',
+                                m: 1,
+                                u: [
+                                    { a: 0, s: 1, e: 4, x: '你好。', q: 1 },
+                                    { a: 1, s: 5, e: 8, x: '他说。' },
+                                ],
+                            },
+                            {
+                                b: 1,
+                                t: 'paragraph',
+                                x: '天气很好。',
+                                u: [{ a: 0, s: 0, e: 5, x: '天气很好。' }],
+                            },
+                            {
+                                b: 2,
+                                t: 'paragraph',
+                                x: '他继续向前走。',
+                                u: [{ a: 0, s: 0, e: 7, x: '他继续向前走。' }],
+                            },
                         ],
                     }),
                 }],
             }))
             await writeFile(resPath, JSON.stringify({
                 speakers: [{ i: 1, n: '他说', r: 'c', g: 0 }],
-                segments: [
-                    { b: 0, s: 0, e: 7, i: 1 },
-                    { b: 1, s: 0, e: 99, i: 0 },
-                    { b: 2, s: 0, e: 2, i: 0 },
+                assignments: [
+                    { b: 0, a: 0, i: 1 },
+                    { b: 1, a: 0, i: 0 },
+                    { b: 2, a: 0, i: 0 },
+                    { b: 99, a: 0, i: 0 },
                 ],
             }))
 
@@ -50,9 +70,9 @@ describe('tts replay script', () => {
             expect(report.summary.blocks).toBe(3)
             expect(report.summary.gapCount).toBe(1)
             expect(report.summary.tailGapCount).toBe(1)
-            expect(report.summary.outOfRangeCount).toBe(1)
+            expect(report.summary.invalidSegmentCount).toBe(1)
             expect(report.summary.mixedSingleSpeakerCount).toBe(1)
-            expect(report.examples.gaps[0]).toMatchObject({ b: 2, kind: 'tail' })
+            expect(report.examples.gaps[0]).toMatchObject({ b: 0, kind: 'tail' })
         } finally {
             await rm(dir, { recursive: true, force: true })
         }

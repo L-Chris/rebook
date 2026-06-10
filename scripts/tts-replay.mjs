@@ -96,7 +96,7 @@ export function extractSpeakerRequest(value) {
 export function extractSpeakerResponse(value) {
     const content = value?.choices?.[0]?.message?.content ?? value?.output ?? value
     const response = parseJsonContent(content, 'response')
-    if (!response || typeof response !== 'object' || !Array.isArray(response.segments)) {
+    if (!response || typeof response !== 'object' || !Array.isArray(response.assignments)) {
         throw new Error('Unsupported response shape')
     }
     return response
@@ -117,22 +117,31 @@ export function analyzeReplay(request, response, options = {}) {
     }
     const blocks = Array.isArray(request.blocks) ? request.blocks : []
     const speakers = Array.isArray(response.speakers) ? response.speakers : []
-    const rawSegments = Array.isArray(response.segments) ? response.segments : []
+    const rawSegments = Array.isArray(response.assignments) ? response.assignments : []
     const blockById = new Map(blocks.map(block => [block.b, block]))
     const segments = []
     const invalidSegments = []
 
     rawSegments.forEach((segment, index) => {
-        if (!isFiniteNumber(segment?.b) || !isFiniteNumber(segment?.s) || !isFiniteNumber(segment?.e) || !isFiniteNumber(segment?.i)) {
+        if (!isFiniteNumber(segment?.b) || !isFiniteNumber(segment?.a) || !isFiniteNumber(segment?.i)) {
             invalidSegments.push({ index, segment })
+            return
+        }
+        const block = blockById.get(segment.b)
+        const atom = Array.isArray(block?.u)
+            ? block.u.find(item => item?.a === segment.a)
+            : undefined
+        if (!atom || !isFiniteNumber(atom.s) || !isFiniteNumber(atom.e)) {
+            invalidSegments.push({ index, segment, reason: 'unknown atom' })
             return
         }
         segments.push({
             index,
             b: segment.b,
-            s: segment.s,
-            e: segment.e,
-            i: segment.i,
+            a: segment.a,
+            s: atom.s,
+            e: atom.e,
+            i: block?.m === 1 && atom.q !== 1 ? 0 : segment.i,
             c: isFiniteNumber(segment.c) ? segment.c : undefined,
         })
     })

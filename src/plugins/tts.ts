@@ -1,5 +1,41 @@
 import { generateText, jsonSchema, Output, type LanguageModel } from 'ai'
-import type { Book, RebookPlugin, TextBlock, TextSegment } from '../core/types'
+import type { Book, RebookPlugin, TextBlock } from '../core/types'
+import {
+    getReadableBlocks,
+    hasSpeakableText,
+    normalizeText,
+    splitText,
+    trimSilentGapEdges,
+    trimSpeechPartBoundaryEdges,
+    type ReadableBlock,
+    type ReadableBlockText,
+} from './tts/text-utils'
+import {
+    buildSpeakerAnalysisRepairPrompt,
+    buildSpeakerAnalysisSystemPrompt,
+    buildSpeakerPlanningSystemPrompt,
+    type TTSCompactSpeakerAnalysisMode,
+} from './tts/speaker-prompts'
+import {
+    getSpeakerAnalysisSchema,
+    speakerAnalysisSchema,
+    speakerPlanItemSchema,
+    voiceDesignSpeakerAnalysisSchema,
+    type TTSCompactKnownSpeaker,
+    type TTSCompactSpeakerAttribution,
+    type TTSCompactSpeakerAtom,
+    type TTSCompactSpeakerAnalysis,
+    type TTSCompactSpeakerAnalysisBlock,
+    type TTSCompactSpeakerAnalysisOutput,
+    type TTSCompactSpeakerAnalysisRequest,
+    type TTSCompactSpeakerAnalysisSegment,
+    type TTSCompactSpeakerInfo,
+    type TTSCompactSpeakerModelRequest,
+    type TTSCompactSpeakerModelRequestKind,
+    type TTSCompactSpeakerPlan,
+    type TTSCompactVoice,
+} from './tts/speaker-schemas'
+export { createBrowserTTSAudioPlayer } from './tts/audio-player'
 
 type FetchLike = typeof fetch
 
@@ -21,7 +57,28 @@ function createTimeoutSignal(timeoutMs: number | undefined): AbortSignal | undef
 }
 
 function getErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error)
+    if (!error || typeof error !== 'object') return String(error)
+    const value = error as {
+        name?: string
+        message?: string
+        statusCode?: number
+        url?: string
+        responseBody?: string
+        cause?: unknown
+    }
+    const parts = [
+        value.message || value.name,
+        typeof value.statusCode === 'number' ? `status=${value.statusCode}` : undefined,
+        value.url ? `url=${value.url}` : undefined,
+        value.responseBody ? `body=${trimErrorDetail(value.responseBody)}` : undefined,
+        value.cause instanceof Error ? `cause=${value.cause.message}` : undefined,
+    ].filter(Boolean)
+    return parts.length ? parts.join(' | ') : String(error)
+}
+
+function trimErrorDetail(value: string): string {
+    const text = value.replace(/\s+/g, ' ').trim()
+    return text.length > 500 ? `${text.slice(0, 500)}...` : text
 }
 
 export interface TTSVoice {
@@ -128,80 +185,19 @@ export interface TTSSpeakerAnalysisLogEvent {
     error?: string
 }
 
-interface TTSCompactSpeakerAnalysisSegment {
-    b: number
-    s: number
-    e: number
-    i: number
-    c?: number
-}
-
-interface TTSCompactSpeakerAnalysis {
-    speakers?: readonly TTSCompactSpeakerInfo[]
-    segments: readonly TTSCompactSpeakerAnalysisSegment[]
-}
-
-interface TTSCompactSpeakerPlan {
-    speakers: readonly TTSCompactSpeakerInfo[]
-}
-
-interface TTSCompactSpeakerAnalysisBlock {
-    b: number
-    t: TextBlock['type']
-    l: number
-    x: string
-    m?: 1
-    k?: string
-}
-
-interface TTSCompactSpeakerInfo {
-    i: number
-    n: string
-    r?: 'n' | 'c' | 'o'
-    g?: 0 | 1 | 2
-    v?: string
-    d?: string
-    a?: string
-    o?: string
-    p?: string
-    q?: string
-    h?: string
-}
-
-interface TTSCompactVoice {
-    v: string
-    n?: string
-    l?: string
-    g?: 0 | 1 | 2
-    p?: string
-}
-
-type TTSCompactKnownSpeaker = TTSCompactSpeakerInfo
-
-interface TTSCompactSpeakerAnalysisRequest {
-    sectionIndex: number
-    nextSpeakerId: number
-    voiceLanguage: string
-    voices?: readonly TTSCompactVoice[]
-    blocks: readonly TTSCompactSpeakerAnalysisBlock[]
-    knownSpeakers: readonly TTSCompactKnownSpeaker[]
-    voiceDesign?: 1
-}
-
-interface TTSCompactSpeakerModelRequest {
-    nextSpeakerId?: number
-    voices?: readonly TTSCompactVoice[]
-    blocks: readonly TTSCompactSpeakerAnalysisBlock[]
-    knownSpeakers: readonly TTSCompactKnownSpeaker[]
-}
-
-type TTSCompactSpeakerAnalysisMode = 'presetVoice' | 'voiceDesign'
-type TTSCompactSpeakerModelRequestKind = 'plan' | 'initial' | 'repair'
+export type TTSSpeakerAnalysisPhase = 'plan' | 'initial' | 'repair'
 
 export type TTSSpeakerAnalyzer = (request: TTSSpeakerAnalysisRequest) => Promise<TTSSpeakerAnalysis> | TTSSpeakerAnalysis
 
+export interface TTSSpeakerAnalysisModels {
+    plan?: LanguageModel
+    initial?: LanguageModel
+    repair?: LanguageModel
+}
+
 export interface TTSSpeakerAnalysisOptions {
     model?: LanguageModel
+    models?: TTSSpeakerAnalysisModels
     prompt?: string
     timeoutMs?: number
     onLog?: (event: TTSSpeakerAnalysisLogEvent) => void | Promise<void>
@@ -281,6 +277,16 @@ export interface TTSJob {
     updatedAt: string
     error?: string
     results: TTSSynthesizeResult[]
+    failures?: TTSJobFailure[]
+}
+
+export interface TTSJobFailure {
+    index: number
+    segmentId: string
+    speaker?: string
+    voice?: string
+    textPreview: string
+    error: string
 }
 
 export interface TTSPrefetchedSection {
@@ -440,7 +446,7 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
                 voiceProfileKey,
                 speakerAnalyzer: sectionOptions.speakerAnalyzer || options.speakerAnalyzer ? 'custom' : undefined,
                 speakerAnalysisPrompt: sectionOptions.speakerAnalysis?.prompt ?? options.speakerAnalysis?.prompt,
-                model: sectionOptions.model || sectionOptions.speakerAnalysis?.model || options.model || options.speakerAnalysis?.model ? 'model' : undefined,
+                model: hasSpeakerAnalysisModel(sectionOptions, options) ? 'model' : undefined,
                 maxSegmentChars: sectionOptions.maxSegmentChars ?? options.maxSegmentChars,
                 includeFootnotes: sectionOptions.includeFootnotes ?? options.includeFootnotes,
                 includeAnnotationRefs: sectionOptions.includeAnnotationRefs ?? options.includeAnnotationRefs,
@@ -562,328 +568,6 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
     }
 }
 
-interface BrowserPlaybackState {
-    abortController: AbortController
-    sources: Set<AudioBufferSourceNode>
-    timers: Set<ReturnType<typeof setTimeout>>
-    audio?: HTMLAudioElement
-    stopped: boolean
-}
-
-export function createBrowserTTSAudioPlayer(options: BrowserTTSAudioPlayerOptions = {}): TTSAudioPlayer {
-    const fetchImpl = options.fetch ?? globalThis.fetch?.bind(globalThis)
-    let audioContext = options.audioContext
-    let playback: BrowserPlaybackState | null = null
-
-    const stopPlayback = () => {
-        const active = playback
-        if (!active) return
-        active.stopped = true
-        active.abortController.abort()
-        for (const timer of active.timers) clearTimeout(timer)
-        active.timers.clear()
-        for (const source of active.sources) {
-            try {
-                source.stop()
-            } catch {
-                // The source may not have started yet, or may already have ended.
-            }
-        }
-        active.sources.clear()
-        if (active.audio) {
-            active.audio.pause()
-            active.audio = undefined
-        }
-        playback = null
-    }
-
-    const getSignal = (state: BrowserPlaybackState, signal?: AbortSignal): AbortSignal => {
-        if (signal?.aborted) state.abortController.abort()
-        signal?.addEventListener('abort', () => state.abortController.abort(), { once: true })
-        return state.abortController.signal
-    }
-
-    const ensureAudioContext = async (): Promise<AudioContext | null> => {
-        if (audioContext?.state === 'closed') audioContext = undefined
-        if (!audioContext) {
-            const AudioContextCtor = getAudioContextConstructor()
-            if (!AudioContextCtor) return null
-            audioContext = new AudioContextCtor()
-        }
-        await audioContext.resume()
-        return audioContext
-    }
-
-    return {
-        async playPrefetchedSection(prefetch, playbackOptions = {}) {
-            stopPlayback()
-            const state: BrowserPlaybackState = {
-                abortController: new AbortController(),
-                sources: new Set(),
-                timers: new Set(),
-                stopped: false,
-            }
-            playback = state
-            const signal = getSignal(state, playbackOptions.signal)
-
-            const playedWithAudioContext = await playWithAudioContext({
-                prefetch,
-                state,
-                signal,
-                getAudioContext: ensureAudioContext,
-                fetchImpl,
-                preloadAhead: playbackOptions.preloadAhead ?? options.preloadAhead ?? 8,
-                playbackOptions,
-            })
-            if (!playedWithAudioContext) {
-                await playWithAudioElement({
-                    prefetch,
-                    state,
-                    signal,
-                    playbackOptions,
-                })
-            }
-            if (playback === state) playback = null
-        },
-        stop: stopPlayback,
-        async destroy() {
-            stopPlayback()
-            if (audioContext && audioContext.state !== 'closed') {
-                await audioContext.close()
-            }
-            audioContext = undefined
-        },
-    }
-}
-
-interface PlayWithAudioContextOptions {
-    prefetch: TTSPrefetchedSection
-    state: BrowserPlaybackState
-    signal: AbortSignal
-    getAudioContext(): Promise<AudioContext | null>
-    fetchImpl?: FetchLike
-    preloadAhead: number
-    playbackOptions: TTSAudioPlaybackOptions
-}
-
-async function playWithAudioContext(options: PlayWithAudioContextOptions): Promise<boolean> {
-    if (!options.fetchImpl) return false
-    const context = await options.getAudioContext()
-    if (!context) return false
-
-    const segments = options.prefetch.segments
-    const preloadAhead = Math.max(1, Math.floor(options.preloadAhead))
-    const bufferPromises = new Map<number, Promise<{ result: TTSSynthesizeResult, buffer: AudioBuffer }>>()
-    let scheduledCount = 0
-    let lastEnded: Promise<void> = Promise.resolve()
-    let decodeFailureCount = 0
-    let otherFailureCount = 0
-
-    const loadBuffer = (index: number) => {
-        if (index >= segments.length) return null
-        const existing = bufferPromises.get(index)
-        if (existing) return existing
-        const segment = segments[index]!
-        const promise = options.prefetch.waitForSegment(segment.id, {
-            pollIntervalMs: options.playbackOptions.pollIntervalMs,
-            signal: options.signal,
-        }).then(async result => ({
-            result,
-            buffer: await decodeAudioUrl(context, options.fetchImpl!, result.audioUrl, options.signal),
-        }))
-        bufferPromises.set(index, promise)
-        return promise
-    }
-    const preloadBuffer = (index: number) => {
-        const promise = loadBuffer(index)
-        if (promise) void promise.catch(() => {})
-    }
-    const reportSegmentError = (segment: TTSSegment, index: number, error: unknown, result?: TTSSynthesizeResult) => {
-        if (error instanceof TTSAudioDecodeError) decodeFailureCount += 1
-        else otherFailureCount += 1
-        options.playbackOptions.onSegmentError?.({ segment, index, total: segments.length, result, error })
-    }
-
-    try {
-        for (let index = 0; index < Math.min(preloadAhead, segments.length); index++) preloadBuffer(index)
-
-        let nextStartTime = context.currentTime + 0.08
-        for (let index = 0; index < segments.length; index++) {
-            if (options.state.stopped || options.signal.aborted) break
-            for (let preloadIndex = index; preloadIndex < Math.min(index + preloadAhead, segments.length); preloadIndex++) {
-                preloadBuffer(preloadIndex)
-            }
-
-            const segment = segments[index]!
-            let loaded: { result: TTSSynthesizeResult, buffer: AudioBuffer } | null
-            try {
-                loaded = await loadBuffer(index)
-            } catch (error) {
-                if (options.signal.aborted || options.state.stopped) throw error
-                reportSegmentError(segment, index, error)
-                continue
-            }
-            if (!loaded || options.state.stopped || options.signal.aborted) break
-
-            const startAt = Math.max(nextStartTime, context.currentTime + 0.02)
-            const event = { segment, index, total: segments.length, result: loaded.result }
-            schedulePlaybackCallback(options.state, context, startAt, () => options.playbackOptions.onSegmentStart?.(event))
-            options.playbackOptions.onSegmentQueued?.(event)
-            lastEnded = scheduleAudioBuffer(options.state, context, loaded.buffer, startAt)
-                .then(() => options.playbackOptions.onSegmentEnd?.(event))
-            scheduledCount += 1
-            nextStartTime = startAt + loaded.buffer.duration
-        }
-
-        await lastEnded
-        if (scheduledCount === 0 && decodeFailureCount > 0 && otherFailureCount === 0) return false
-        return true
-    } catch (error) {
-        if (options.signal.aborted || options.state.stopped) throw error
-        if (scheduledCount === 0) return false
-        throw error
-    }
-}
-
-async function playWithAudioElement(options: {
-    prefetch: TTSPrefetchedSection
-    state: BrowserPlaybackState
-    signal: AbortSignal
-    playbackOptions: TTSAudioPlaybackOptions
-}): Promise<void> {
-    const AudioCtor = (globalThis as { Audio?: new (url?: string) => HTMLAudioElement }).Audio
-    if (!AudioCtor) throw new Error('TTS playback requires AudioContext or HTMLAudioElement support.')
-
-    for (let index = 0; index < options.prefetch.segments.length; index++) {
-        if (options.state.stopped || options.signal.aborted) break
-        const segment = options.prefetch.segments[index]!
-        try {
-            const result = await options.prefetch.waitForSegment(segment.id, {
-                pollIntervalMs: options.playbackOptions.pollIntervalMs,
-                signal: options.signal,
-            })
-            if (options.state.stopped || options.signal.aborted) break
-            const event = { segment, index, total: options.prefetch.segments.length, result }
-            options.playbackOptions.onSegmentQueued?.(event)
-            options.playbackOptions.onSegmentStart?.(event)
-            await playAudioElement(options.state, AudioCtor, result.audioUrl)
-            options.playbackOptions.onSegmentEnd?.(event)
-        } catch (error) {
-            if (options.signal.aborted || options.state.stopped) throw error
-            options.playbackOptions.onSegmentError?.({ segment, index, total: options.prefetch.segments.length, error })
-        }
-    }
-}
-
-async function decodeAudioUrl(
-    context: AudioContext,
-    fetchImpl: FetchLike,
-    url: string,
-    signal: AbortSignal,
-): Promise<AudioBuffer> {
-    const response = await fetchImpl(url, { signal, cache: 'force-cache' })
-    if (!response.ok) throw new Error(`Audio fetch failed (${response.status})`)
-    const contentType = response.headers.get('content-type') ?? undefined
-    const buffer = await response.arrayBuffer()
-    if (buffer.byteLength === 0) {
-        throw new TTSAudioDecodeError(url, buffer.byteLength, contentType, 'Audio response is empty.')
-    }
-    try {
-        return await decodeAudioData(context, buffer)
-    } catch (error) {
-        throw new TTSAudioDecodeError(url, buffer.byteLength, contentType, 'Unable to decode audio data.', error)
-    }
-}
-
-class TTSAudioDecodeError extends Error {
-    readonly url: string
-    readonly byteLength: number
-    readonly mimeType?: string
-
-    constructor(url: string, byteLength: number, mimeType: string | undefined, message: string, cause?: unknown) {
-        super(message, { cause })
-        this.name = 'TTSAudioDecodeError'
-        this.url = url
-        this.byteLength = byteLength
-        this.mimeType = mimeType
-    }
-}
-
-function decodeAudioData(context: AudioContext, buffer: ArrayBuffer): Promise<AudioBuffer> {
-    return new Promise((resolve, reject) => {
-        const maybePromise = context.decodeAudioData(buffer.slice(0), resolve, reject)
-        if (maybePromise?.then) maybePromise.then(resolve, reject)
-    })
-}
-
-function schedulePlaybackCallback(
-    state: BrowserPlaybackState,
-    context: AudioContext,
-    startAt: number,
-    callback: () => void,
-) {
-    const delay = Math.max(0, (startAt - context.currentTime) * 1000)
-    const timer = setTimeout(() => {
-        state.timers.delete(timer)
-        if (!state.stopped) callback()
-    }, delay)
-    state.timers.add(timer)
-}
-
-function scheduleAudioBuffer(
-    state: BrowserPlaybackState,
-    context: AudioContext,
-    buffer: AudioBuffer,
-    startAt: number,
-): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const source = context.createBufferSource()
-        source.buffer = buffer
-        source.connect(context.destination)
-        state.sources.add(source)
-        source.addEventListener('ended', () => {
-            state.sources.delete(source)
-            resolve()
-        }, { once: true })
-        try {
-            source.start(startAt)
-        } catch (error) {
-            state.sources.delete(source)
-            reject(error)
-        }
-    })
-}
-
-function playAudioElement(
-    state: BrowserPlaybackState,
-    AudioCtor: new (url?: string) => HTMLAudioElement,
-    url: string,
-): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const audio = new AudioCtor(url)
-        state.audio = audio
-        audio.addEventListener('ended', () => {
-            if (state.audio === audio) state.audio = undefined
-            resolve()
-        }, { once: true })
-        audio.addEventListener('error', () => {
-            if (state.audio === audio) state.audio = undefined
-            reject(new Error('Audio playback failed.'))
-        }, { once: true })
-        audio.play().catch(reject)
-    })
-}
-
-type AudioContextConstructor = new () => AudioContext
-
-function getAudioContextConstructor(): AudioContextConstructor | undefined {
-    const scope = globalThis as typeof globalThis & {
-        AudioContext?: AudioContextConstructor
-        webkitAudioContext?: AudioContextConstructor
-    }
-    return scope.AudioContext ?? scope.webkitAudioContext
-}
-
 function createPrefetchedSection(
     controller: Pick<TTSController, 'getJob'>,
     segments: TTSSegment[],
@@ -928,7 +612,11 @@ function createPrefetchedSection(
                 if (!terminal) {
                     await refreshJob()
                 } else {
-                    throw new Error(`TTS segment was not generated: ${segmentId}`)
+                    const failure = latestJob.failures?.find(item => item.segmentId === segmentId)
+                    const detail = failure?.error ?? latestJob.error
+                    throw new Error(detail
+                        ? `TTS segment was not generated: ${segmentId}: ${detail}`
+                        : `TTS segment was not generated: ${segmentId}`)
                 }
                 if (!resultsBySegmentId.has(segmentId) && !terminal) {
                     await delay(pollIntervalMs, waitOptions.signal)
@@ -936,6 +624,21 @@ function createPrefetchedSection(
             }
         },
     }
+}
+
+function hasSpeakerAnalysisModel(sectionOptions: TTSSectionOptions, options: TTSOptions): boolean {
+    return Boolean(
+        sectionOptions.model
+        || sectionOptions.speakerAnalysis?.model
+        || sectionOptions.speakerAnalysis?.models?.plan
+        || sectionOptions.speakerAnalysis?.models?.initial
+        || sectionOptions.speakerAnalysis?.models?.repair
+        || options.model
+        || options.speakerAnalysis?.model
+        || options.speakerAnalysis?.models?.plan
+        || options.speakerAnalysis?.models?.initial
+        || options.speakerAnalysis?.models?.repair,
+    )
 }
 
 async function buildSectionSegments(book: Book, sectionIndex: number, options: ResolvedTTSSectionOptions): Promise<TTSSegment[]> {
@@ -972,16 +675,6 @@ async function buildSectionSegments(book: Book, sectionIndex: number, options: R
     return segments
 }
 
-interface ReadableBlock {
-    block: TextBlock
-    readable: ReadableBlockText
-}
-
-interface ReadableBlockText {
-    text: string
-    mapOffset(offset: number, end?: boolean): number
-}
-
 interface TTSSpeechPart {
     block: TextBlock
     readable: ReadableBlockText
@@ -1001,16 +694,6 @@ interface TTSSpeechPart {
     emotion?: string
     voicePrompt?: string
     stylePrompt?: string
-}
-
-function getReadableBlocks(blocks: readonly TextBlock[], options: TTSSectionOptions): ReadableBlock[] {
-    const readableBlocks: ReadableBlock[] = []
-    for (const block of blocks) {
-        const readable = getReadableBlockText(block, options)
-        if (!readable?.text) continue
-        readableBlocks.push({ block, readable })
-    }
-    return readableBlocks
 }
 
 async function buildMultiSpeakerSegments(
@@ -1144,9 +827,9 @@ async function analyzeWithModelSpeakerAnalyzer(
     readableBlocks: readonly ReadableBlock[],
     options: ResolvedTTSSectionOptions,
 ): Promise<TTSSpeechPart[]> {
-    const model = options.model ?? options.speakerAnalysis?.model
-    if (!model) {
-        throw new Error('TTS multiSpeaker requires a LanguageModel via withTTS({ model }) or a custom speakerAnalyzer.')
+    const initialModel = getSpeakerAnalysisModel(options, 'initial')
+    if (!initialModel) {
+        throw new Error('TTS multiSpeaker requires a LanguageModel via withTTS({ model }), speakerAnalysis.models.initial, or a custom speakerAnalyzer.')
     }
     const readableByCompactBlockId = new Map(readableBlocks.map((item, index) => [index, item]))
     const providerCatalog = await (options.providerCatalog?.() ?? [])
@@ -1159,13 +842,17 @@ async function analyzeWithModelSpeakerAnalyzer(
         nextSpeakerId: options.speakerVoiceState.nextSpeakerId,
         voiceLanguage,
         voices,
-        blocks: readableBlocks.map(({ block, readable }, index) => ({
-            b: index,
-            t: block.type,
-            l: readable.text.length,
-            x: readable.text,
-            m: hasLikelyMixedNarrationDialogue(readable.text) ? 1 : undefined,
-        })),
+        blocks: readableBlocks.map(({ block, readable }, index) => {
+            const mixed = hasLikelyMixedNarrationDialogue(readable.text)
+            return {
+                b: index,
+                t: block.type,
+                l: readable.text.length,
+                x: readable.text,
+                m: mixed ? 1 : undefined,
+                u: buildCompactSpeakerAtoms(readable.text),
+            }
+        }),
         knownSpeakers: getCompactKnownSpeakerAssignments(options.speakerVoiceState),
         voiceDesign,
     }
@@ -1179,8 +866,9 @@ async function analyzeWithModelSpeakerAnalyzer(
             ...request,
             voices: undefined,
         }
+        const planModel = getSpeakerAnalysisModel(options, 'plan') ?? initialModel
         const plan = await planCompactSpeakersWithModel(
-            model,
+            planModel,
             buildSpeakerPlanningSystemPrompt(options.lang),
             planRequest,
             options.speakerAnalysis,
@@ -1195,24 +883,26 @@ async function analyzeWithModelSpeakerAnalyzer(
     const startedAt = nowMs()
     let output: TTSCompactSpeakerAnalysis
     const modelRequest = buildCompactSpeakerModelRequest(request, analysisMode, 'initial')
+    let rawOutput: unknown
     try {
         const result = await generateText({
-            model,
+            model: initialModel,
             output: Output.object({
-                schema: jsonSchema<TTSCompactSpeakerAnalysis>(analysisSchema),
-                description: 'Compact novel TTS speaker analysis result.',
+                schema: jsonSchema<TTSCompactSpeakerAnalysisOutput>(analysisSchema),
+                description: 'Compact novel TTS atom speaker assignments. Use assignments, not segments.',
             }),
             timeout: normalizeTimeoutMs(options.speakerAnalysis?.timeoutMs),
             abortSignal: createTimeoutSignal(options.speakerAnalysis?.timeoutMs),
             system,
             prompt: JSON.stringify(modelRequest),
         })
-        output = result.output
+        rawOutput = result.output
+        output = normalizeCompactSpeakerAnalysisOutput(rawOutput, request)
         await options.speakerAnalysis?.onLog?.({
             phase: 'initial',
             sectionIndex,
             request: modelRequest,
-            response: output,
+            response: rawOutput,
             durationMs: Math.round((nowMs() - startedAt) * 10) / 10,
         })
     } catch (error) {
@@ -1220,16 +910,17 @@ async function analyzeWithModelSpeakerAnalyzer(
             phase: 'initial',
             sectionIndex,
             request: modelRequest,
-            response: null,
+            response: rawOutput ?? null,
             durationMs: Math.round((nowMs() - startedAt) * 10) / 10,
             error: getErrorMessage(error),
         })
         throw error
     }
+    const repairModel = getSpeakerAnalysisModel(options, 'repair') ?? initialModel
     const analysis = await repairCompactAnalysisWithModelIfNeeded(
-        model,
+        repairModel,
         request,
-        normalizeCompactSpeakerAnalysisOutput(output),
+        output,
         analysisSchema,
         repairSystem,
         options.speakerAnalysis,
@@ -1239,6 +930,20 @@ async function analyzeWithModelSpeakerAnalyzer(
         splitCompactQuoteNarrationSegments(request, analysis),
         options.speakerVoiceState,
     )
+}
+
+function getSpeakerAnalysisModel(
+    options: ResolvedTTSSectionOptions,
+    phase: TTSSpeakerAnalysisPhase,
+): LanguageModel | undefined {
+    const phaseModels = options.speakerAnalysis?.models
+    if (phase === 'plan') {
+        return phaseModels?.plan ?? phaseModels?.initial ?? options.speakerAnalysis?.model ?? options.model
+    }
+    if (phase === 'repair') {
+        return phaseModels?.repair ?? phaseModels?.initial ?? options.speakerAnalysis?.model ?? options.model ?? phaseModels?.plan
+    }
+    return phaseModels?.initial ?? options.speakerAnalysis?.model ?? options.model ?? phaseModels?.plan
 }
 
 function normalizeAnalysisSegments(
@@ -1314,95 +1019,6 @@ const NARRATOR_SPEAKER_LABEL = '旁白'
 const NARRATOR_SPEAKER_ID = 0
 const OTHER_SPEAKER = 'other'
 
-const speakerAnalysisSchema = {
-    type: 'object',
-    description: '预设音色文本解析结果；返回朗读片段，并仅在需要新增或修正说话人时返回 speakers。',
-    properties: {
-        segments: {
-            type: 'array',
-            description: 'TTS 朗读片段。覆盖所有非静默可读文本；偏移基于对应 block.x 的 UTF-16 下标。',
-            items: {
-                type: 'object',
-                properties: {
-                    b: { type: 'number', description: 'block index，对应输入 blocks[].b。' },
-                    s: { type: 'number', description: 'startOffset，UTF-16 起始下标，包含。' },
-                    e: { type: 'number', description: 'endOffset，UTF-16 结束下标，不包含。' },
-                    i: { type: 'number', description: 'speaker id；旁白使用 0。' },
-                    c: { type: 'number', description: 'confidence；仅当置信度 <= 0.8 或分配不确定时输出。' },
-                },
-                required: ['b', 's', 'e', 'i'],
-                additionalProperties: false,
-            },
-        },
-        speakers: {
-            type: 'array',
-            description: '新增或必须纠正的说话人；不要重复返回已知说话人。',
-            items: {
-                type: 'object',
-                properties: {
-                    i: { type: 'number', description: 'speaker id；新增说话人从 nextSpeakerId 开始递增。' },
-                    n: { type: 'string', description: '稳定角色名。' },
-                    r: { type: 'string', enum: ['n', 'c', 'o'], description: 'role code：n=旁白，c=角色对白，o=其他/无法归属声音。' },
-                    g: { type: 'number', enum: [0, 1, 2], description: 'gender code：0=未知，1=男，2=女。' },
-                    v: { type: 'string', description: 'voice id；从输入 voices 中选择。' },
-                    h: { type: 'string', maxLength: 260, description: '说话人识别线索/上下文，用于后续保持身份一致。' },
-                },
-                required: ['i', 'n', 'r', 'g'],
-                additionalProperties: false,
-            },
-        },
-    },
-    required: ['speakers', 'segments'],
-    additionalProperties: false,
-} as const
-
-const voiceDesignSpeakerAnalysisSchema = {
-    type: 'object',
-    description: '角色设计后的文本解析结果；只返回朗读片段，speaker id 必须来自 knownSpeakers。',
-    properties: {
-        segments: {
-            type: 'array',
-            description: 'TTS 朗读片段。覆盖所有非静默可读文本；偏移基于对应 block.x 的 UTF-16 下标。',
-            items: {
-                type: 'object',
-                properties: {
-                    b: { type: 'number', description: 'block index，对应输入 blocks[].b。' },
-                    s: { type: 'number', description: 'startOffset，UTF-16 起始下标，包含。' },
-                    e: { type: 'number', description: 'endOffset，UTF-16 结束下标，不包含。' },
-                    i: { type: 'number', description: 'speaker id；必须来自 knownSpeakers，旁白使用 0。' },
-                    c: { type: 'number', description: 'confidence；仅当置信度 <= 0.8 或分配不确定时输出。' },
-                },
-                required: ['b', 's', 'e', 'i'],
-                additionalProperties: false,
-            },
-        },
-    },
-    required: ['segments'],
-    additionalProperties: false,
-} as const
-
-const speakerPlanItemSchema = {
-    type: 'object',
-    description: '规划出的重要或反复发声角色；只识别角色，不进行文本分段。',
-    properties: {
-        i: { type: 'number', description: 'speaker id；新增说话人从 nextSpeakerId 开始递增。' },
-        n: { type: 'string', description: '稳定角色名。' },
-        r: { type: 'string', enum: ['c', 'o'], description: 'role code：c=角色对白，o=其他/无法归属声音。' },
-        g: { type: 'number', enum: [0, 1, 2], description: 'gender code：0=未知，1=男，2=女。' },
-        a: { type: 'string', maxLength: 80, description: '年龄或年龄感。' },
-        o: { type: 'string', maxLength: 120, description: '职业、身份或社会角色。' },
-        p: { type: 'string', maxLength: 160, description: '性格、气质和行为特征。' },
-        q: { type: 'string', maxLength: 160, description: '声音与表演风格，用于生成角色卡。' },
-        h: { type: 'string', maxLength: 260, description: '说话人识别线索/上下文，不是声音风格。' },
-    },
-    required: ['i', 'n', 'r', 'g'],
-    additionalProperties: false,
-} as const
-
-function getSpeakerAnalysisSchema(mode: TTSCompactSpeakerAnalysisMode) {
-    return mode === 'voiceDesign' ? voiceDesignSpeakerAnalysisSchema : speakerAnalysisSchema
-}
-
 async function planCompactSpeakersWithModel(
     model: LanguageModel,
     system: string,
@@ -1446,165 +1062,15 @@ async function planCompactSpeakersWithModel(
     return normalizeCompactSpeakerPlanOutput(output)
 }
 
-function buildSpeakerAnalysisSystemPrompt(lang: string | undefined, mode: TTSCompactSpeakerAnalysisMode): string {
-    const modeSections = mode === 'presetVoice'
-        ? [
-            promptSection('当前分支', [
-                '预设音色文本解析：模型负责分段、识别新说话人，并在有 voices 时为新说话人选择 v。',
-                '新增重要或反复出现的说话人时，从 nextSpeakerId 开始分配正整数 id，并按首次出现顺序递增。',
-                '如果提供 voices，为新增说话人按角色、性别、语言地区和人物气质选择 v。',
-                '对白中的新说话人名称要使用从上下文能稳定推断出的角色名。',
-            ]),
-        ]
-        : [
-            promptSection('当前分支', [
-                '当前是角色设计后的文本分段阶段。',
-                '模型只负责把文本切成说话人片段；角色规划已完成。',
-            ]),
-        ]
-    return joinPromptSections([
-        promptSection('角色', [
-            '你是多角色小说 TTS 的说话人分析引擎。',
-            languagePromptLine(lang),
-        ]),
-        ...modeSections,
-        promptSection('输入格式', [
-            'blocks 使用紧凑字段；m=1 表示可能同时包含旁白和对白。',
-            'knownSpeakers.h 是说话人识别线索/上下文。',
-        ]),
-        promptSection('分段目标', [
-            '把每个 block 拆成有序、连续、无重叠的 TTS 朗读片段。',
-            '覆盖每个 block 中所有非静默可读文本，不遗漏开头、中间或末尾文本。',
-            '有引号对白优先使用引号内实际朗读内容的偏移；可以跳过引号和纯空白。',
-        ]),
-        speakerAttributionPromptSection(),
-        promptSection('禁止项', [
-            '不要把无引号旁白归给角色；除非确实是叙述性引用，否则不要把有引号对白归给旁白。',
-            '不要把混合旁白/对白的段落整段归给一个说话人。',
-            '不要把姓名、发言归属短语、句首或句尾几个字从自然的旁白/对白范围中切开。',
-        ]),
-    ])
-}
-
-function buildSpeakerPlanningSystemPrompt(lang?: string): string {
-    return joinPromptSections([
-        promptSection('角色', [
-            '你是多角色小说 TTS 的角色规划和语音规划引擎。',
-            languagePromptLine(lang),
-        ]),
-        promptSection('当前分支', [
-            '角色规划阶段：只识别重要或反复发声角色，不进行文本分段。',
-            '后续文本解析会使用你输出的 h 来保持说话人一致性。',
-            '如果 blocks 中存在对白或发言动作，必须输出本批文本里的核心发声角色；只有确实没有角色对白时才允许返回空列表。',
-        ]),
-        promptSection('输入格式', [
-            'blocks 是待规划文本；knownSpeakers 是已知角色。',
-            'knownSpeakers.h 是已有的说话人识别线索/上下文。',
-        ]),
-        promptSection('输出原则', [
-            '新增说话人从 nextSpeakerId 开始分配正整数 id，并按首次出现顺序递增。',
-            '已在 knownSpeakers 中出现的说话人必须精确复用 i；除非需要纠正，否则不要重复返回。',
-            '客户端会用 a/o/p/q 合成角色卡。',
-        ]),
-        promptSection('规划原则', [
-            '优先规划具名角色、反复出现的角色、参与多轮对话的角色，以及影响后续说话人判断的无名角色。',
-            '重点提取稳定人物属性，尤其是性别、年龄感、职业或社会身份、性格气质。',
-            'q 描述音色、语速节奏、表达方式和表演风格。',
-            'h 只用于后续文本分段识别说话人，不是声音风格。',
-            'h 要写入别名、称呼、人物关系、常见发言动作、发言归属词、容易误判的直接称呼、场景范围和对话上下文。',
-            'h 要提炼可复用规则，不要只复述一句当前原文。例：阿诺=名为阿诺的年轻人；“阿诺，...”多半是在称呼他而非他说话；阿诺开口/说道/叹气/回答时才强指向他是说话人。',
-            '规划时特别总结：某角色被别人频繁称呼、某角色经常被代词谈论、某些引语前后有发言动作、某个场景里的核心对话参与者。',
-        ]),
-        promptSection('禁止项', [
-            'a/o/p/q 不要塞入当前句子内容；使用短语，不要写长段落。',
-            '未知细节可以保守推断或省略。',
-            '除非一次性无名说话人影响对话连续性，否则不要纳入规划。',
-            '不要包含旁白 i=0。',
-        ]),
-    ])
-}
-
-function buildSpeakerAnalysisRepairPrompt(
-    lang: string | undefined,
-    mode: TTSCompactSpeakerAnalysisMode,
-    customAnalysisPrompt?: string,
-): string {
-    const outputLines = mode === 'presetVoice'
-        ? [
-            'speakers 只返回纠错必需的新增或修正说话人；没有则返回空数组。',
-        ]
-        : [
-            '沿用 knownSpeakers 中的说话人。',
-        ]
-    return joinPromptSections([
-        promptSection('角色', [
-            '你是多角色小说 TTS 的纠错分段引擎。',
-            languagePromptLine(lang),
-        ]),
-        promptSection('当前分支', [
-            '纠错文本解析阶段：代码已经筛出需要重判的异常 blocks。',
-            '不要判断是否需要纠错；直接为传入 blocks 重新输出正确 segments。',
-        ]),
-        promptSection('输入格式', [
-            'blocks 是需要重判的异常文本；m=1 表示可能同时包含旁白和对白。',
-            'knownSpeakers.h 是说话人识别线索/上下文。',
-            'k 存在时优先用 k 计算精确 UTF-16 偏移。',
-        ]),
-        promptSection('输出原则', [
-            ...outputLines,
-            '只返回传入 blocks 的 corrected segments。',
-        ]),
-        promptSection('纠错重点', [
-            '把旁白、动作、发言归属短语和引号内对白拆成相邻范围。',
-            '引号后的发言归属短语（如 asked/said/replied 或 问道/说道/回答/叹道/开口）通常标识引号内对白的说话人；该归属短语本身仍然是旁白。',
-            '如果一个片段同时跨过引号内对白和引号外叙述/归属文本，必须拆开重判，不要把“对白 + 某人说道/动作”放进同一个说话人片段。',
-            '修正示例：“小明，你在看什么？”小红问道。=> 引号内对白说话人是小红；“小红问道”是旁白。',
-            '修正示例：“他不是盲人。”阿诺说道，“他一定看得见。” => 两段引号都是阿诺；“阿诺说道，”是旁白。',
-        ]),
-        speakerAttributionPromptSection(),
-        promptSection('覆盖与偏移', [
-            '覆盖每个传入 block 的所有非静默可读文本，不遗漏开头、中间或末尾文本。',
-            '不要产生过碎的语义片段；不要把姓名、发言归属短语、句首或句尾几个字从自然的旁白/对白范围中切开。',
-        ]),
-        customAnalysisPrompt ? promptSection('调用方补充约束', [customAnalysisPrompt]) : '',
-        promptSection('禁止项', [
-            '不要返回未传入 block 的 segments。',
-            '不要把引号外叙述/动作/归属短语归给角色。',
-        ]),
-    ])
-}
-
-function joinPromptSections(sections: readonly string[]): string {
-    return sections.filter(Boolean).join('\n\n')
-}
-
-function promptSection(title: string, lines: readonly (string | undefined)[]): string {
-    return [`## ${title}`, ...lines.filter(Boolean)].join('\n')
-}
-
-function languagePromptLine(lang: string | undefined): string | undefined {
-    return lang ? `语言提示：${lang}。` : undefined
-}
-
-function speakerAttributionPromptSection(): string {
-    return promptSection('说话人识别规则', [
-        '旁白固定使用 i=0。',
-        '识别说话人时，knownSpeakers.h 是重要线索：其中可能包含别名、人物关系、常见发言动作、称呼陷阱、场景范围和对话上下文。',
-        '任何引号外可读的旁白、动作或发言归属文本都必须是 i=0，即使其中包含角色名。',
-        '引号内位于逗号、顿号、冒号前的人名通常是称呼对象，不是说话人。例如 “小明，你在看什么？”小红问道。对白说话人是小红。',
-        '引号之间或引号后的发言归属短语优先级高于引号内提到的人名、代词或话题。',
-        '一句话中出现“引语 + 某人说道/问道/回答/叹道/开口 + 引语”时，两个引语通常属于该发言归属中的某人，中间归属短语仍是旁白。',
-        '不要把对话内容里被讨论的人名或代词当作说话人证据；优先看引号外的发言动作、上下文轮次和 h 线索。',
-        '角色对白片段应尽量推断男/女性别；只有文本确实缺少证据时才使用未知。',
-        '无法归属的声音、人群、广播、系统提示或模糊的非旁白声音使用 r=o。',
-        '同一角色必须复用 knownSpeakers 的 id 和名称。',
-    ])
-}
-
-function normalizeCompactSpeakerAnalysisOutput(output: unknown): TTSCompactSpeakerAnalysis {
-    if (!output || typeof output !== 'object' || !Array.isArray((output as { segments?: unknown }).segments)) {
-        return { speakers: [], segments: [] }
+function normalizeCompactSpeakerAnalysisOutput(
+    output: unknown,
+    request: TTSCompactSpeakerAnalysisRequest,
+): TTSCompactSpeakerAnalysis {
+    if (!output || typeof output !== 'object' || !Array.isArray((output as { assignments?: unknown }).assignments)) {
+        throw new Error('TTS speaker analysis response must include assignments.')
     }
+    const blockById = new Map(request.blocks.map(block => [block.b, block]))
+    const expectedAtoms = request.blocks.reduce((count, block) => count + (block.u?.length ?? 0), 0)
     const speakers: TTSCompactSpeakerInfo[] = []
     if (Array.isArray((output as { speakers?: unknown }).speakers)) {
         for (const speaker of (output as { speakers: unknown[] }).speakers) {
@@ -1627,26 +1093,35 @@ function normalizeCompactSpeakerAnalysisOutput(output: unknown): TTSCompactSpeak
         }
     }
     const segments: TTSCompactSpeakerAnalysisSegment[] = []
-    for (const segment of (output as { segments: unknown[] }).segments) {
-        if (!segment || typeof segment !== 'object') continue
-        const item = segment as Partial<TTSCompactSpeakerAnalysisSegment>
+    for (const [index, segment] of (output as { assignments: unknown[] }).assignments.entries()) {
+        if (!segment || typeof segment !== 'object') {
+            throw new Error(`TTS speaker analysis assignment ${index} must be an object.`)
+        }
+        const item = segment as Partial<TTSCompactSpeakerAttribution>
         if (
             typeof item.b !== 'number'
-            || typeof item.s !== 'number'
-            || typeof item.e !== 'number'
+            || typeof item.a !== 'number'
             || typeof item.i !== 'number'
             || !Number.isFinite(item.b)
-            || !Number.isFinite(item.s)
-            || !Number.isFinite(item.e)
+            || !Number.isFinite(item.a)
             || !Number.isFinite(item.i)
-        ) continue
+        ) throw new Error(`TTS speaker analysis assignment ${index} must include numeric b, a, and i.`)
+        const block = blockById.get(item.b)
+        const atom = block?.u?.find(value => value.a === item.a)
+        if (!atom) throw new Error(`TTS speaker analysis assignment ${index} references unknown atom ${item.b}:${item.a}.`)
+        const speakerId = atom && block?.m === 1 && atom.q !== 1
+            ? NARRATOR_SPEAKER_ID
+            : Number(item.i)
         segments.push({
             b: item.b,
-            s: Number(item.s),
-            e: Number(item.e),
-            i: Number(item.i),
+            s: atom.s,
+            e: atom.e,
+            i: speakerId,
             c: typeof item.c === 'number' ? item.c : undefined,
         })
+    }
+    if (expectedAtoms > 0 && !segments.length) {
+        throw new Error('TTS speaker analysis response did not assign any readable atoms.')
     }
     return { speakers, segments }
 }
@@ -1787,6 +1262,27 @@ function hasAnyQuote(text: string): boolean {
     return false
 }
 
+function buildCompactSpeakerAtoms(text: string): TTSCompactSpeakerAtom[] {
+    const intervals = hasAnyQuote(text)
+        ? getQuoteIntervals(text)
+        : [{ start: 0, end: text.length, quoted: false }]
+    const atoms: TTSCompactSpeakerAtom[] = []
+    for (const interval of intervals) {
+        const range = trimSilentGapEdges(text, interval.start, interval.end)
+        const value = text.slice(range.start, range.end)
+        if (!hasSpeakableText(value)) continue
+        atoms.push({
+            a: atoms.length,
+            s: range.start,
+            e: range.end,
+            x: value,
+            q: interval.quoted ? 1 : undefined,
+        })
+    }
+    if (atoms.length) return atoms
+    return [{ a: 0, s: 0, e: text.length, x: text }]
+}
+
 function buildCompactSpeakerModelRequest(
     request: TTSCompactSpeakerAnalysisRequest,
     mode: TTSCompactSpeakerAnalysisMode,
@@ -1796,8 +1292,22 @@ function buildCompactSpeakerModelRequest(
     return {
         nextSpeakerId: canCreateSpeakers ? request.nextSpeakerId : undefined,
         voices: request.voices?.length ? request.voices : undefined,
-        blocks: request.blocks,
+        blocks: request.blocks.map(block => compactBlockForModel(block, kind)),
         knownSpeakers: request.knownSpeakers.map(compactSpeakerForModel),
+    }
+}
+
+function compactBlockForModel(
+    block: TTSCompactSpeakerAnalysisBlock,
+    kind: TTSCompactSpeakerModelRequestKind,
+): TTSCompactSpeakerAnalysisBlock {
+    if (kind !== 'plan') return block
+    return {
+        b: block.b,
+        t: block.t,
+        l: block.l,
+        x: block.x,
+        m: block.m,
     }
 }
 
@@ -1827,30 +1337,32 @@ async function repairCompactAnalysisWithModelIfNeeded(
         nextSpeakerId: getNextCompactSpeakerId(request, analysis),
         blocks: request.blocks
             .filter(block => repairBlockIds.has(block.b))
-            .map(block => ({ ...block, k: buildCompactOffsetGuide(block.x) })),
+            .map(block => ({ ...block, u: block.u?.length ? block.u : buildCompactSpeakerAtoms(block.x) })),
         knownSpeakers: mergeCompactSpeakerInfos(request.knownSpeakers, analysis.speakers ?? []),
     }
     const startedAt = nowMs()
     let output: TTSCompactSpeakerAnalysis
     const modelRequest = buildCompactSpeakerModelRequest(repairRequest, analysisSchema === voiceDesignSpeakerAnalysisSchema ? 'voiceDesign' : 'presetVoice', 'repair')
+    let rawOutput: unknown
     try {
         const result = await generateText({
             model,
             output: Output.object({
-                schema: jsonSchema<TTSCompactSpeakerAnalysis>(analysisSchema),
-                description: 'Compact corrected novel TTS speaker analysis result.',
+                schema: jsonSchema<TTSCompactSpeakerAnalysisOutput>(analysisSchema),
+                description: 'Compact corrected novel TTS atom speaker assignments. Use assignments, not segments.',
             }),
             timeout: normalizeTimeoutMs(analysisOptions?.timeoutMs),
             abortSignal: createTimeoutSignal(analysisOptions?.timeoutMs),
             system: repairSystem,
             prompt: JSON.stringify(modelRequest),
         })
-        output = result.output
+        rawOutput = result.output
+        output = normalizeCompactSpeakerAnalysisOutput(rawOutput, repairRequest)
         await analysisOptions?.onLog?.({
             phase: 'repair',
             sectionIndex: request.sectionIndex,
             request: modelRequest,
-            response: output,
+            response: rawOutput,
             durationMs: Math.round((nowMs() - startedAt) * 10) / 10,
         })
     } catch (error) {
@@ -1858,13 +1370,13 @@ async function repairCompactAnalysisWithModelIfNeeded(
             phase: 'repair',
             sectionIndex: request.sectionIndex,
             request: modelRequest,
-            response: null,
+            response: rawOutput ?? null,
             durationMs: Math.round((nowMs() - startedAt) * 10) / 10,
             error: getErrorMessage(error),
         })
         throw error
     }
-    const repair = normalizeCompactSpeakerAnalysisOutput(output)
+    const repair = output
     if (!repair.segments.length) return analysis
     const repairedBlockIds = new Set(repair.segments.map(segment => segment.b))
 
@@ -2005,15 +1517,6 @@ function isOpenQuote(value: string): boolean {
 
 function isCloseQuote(value: string): boolean {
     return value === '”' || value === '」' || value === '』' || value === '"'
-}
-
-function buildCompactOffsetGuide(text: string): string | undefined {
-    if (text.length > 180) return undefined
-    const items: string[] = []
-    for (let index = 0; index < text.length; index++) {
-        items.push(`${index}:${text[index]}`)
-    }
-    return items.join(' ')
 }
 
 function getNextCompactSpeakerId(
@@ -2644,243 +2147,6 @@ function normalizeVoiceProfileForCache(profile: TTSVoiceProfile | undefined): un
         other: profile.other,
         speakers: profile.speakers,
     }
-}
-
-function getReadableBlockText(block: TextBlock, options: TTSSectionOptions): ReadableBlockText | null {
-    if (!options.includeFootnotes && isTTSFootnoteBlock(block)) return null
-
-    if (['paragraph', 'heading', 'listItem', 'blockquote', 'pre'].includes(block.type)) {
-        return buildReadableInlineText(block.segments, options)
-    }
-    if (block.type === 'table' && block.table) {
-        const text = normalizeText(block.table.rows
-            .flatMap(row => row.cells.map(cell => cell.text))
-            .join(' '))
-        return text ? identityReadableText(text) : null
-    }
-    return null
-}
-
-function buildReadableInlineText(
-    segments: readonly TextSegment[],
-    options: TTSSectionOptions,
-): ReadableBlockText | null {
-    let rawText = ''
-    let originalOffset = 0
-    let offsetMap: number[] = []
-
-    for (const segment of segments) {
-        if (!options.includeAnnotationRefs && isTTSNoterefSegment(segment)) {
-            originalOffset += segment.text.length
-            continue
-        }
-        for (let index = 0; index < segment.text.length; index++) {
-            rawText += segment.text[index]
-            offsetMap.push(originalOffset + index)
-        }
-        originalOffset += segment.text.length
-    }
-
-    if (!options.includeAnnotationRefs) {
-        const removed = removeInlineAnnotationRefs(rawText, offsetMap)
-        rawText = removed.text
-        offsetMap = removed.offsetMap
-    }
-
-    const readable = normalizeTextWithMap(rawText, offsetMap)
-    return readable.text ? readable : null
-}
-
-function identityReadableText(text: string): ReadableBlockText {
-    return {
-        text,
-        mapOffset(offset, end = false) {
-            if (end) return Math.min(text.length, Math.max(0, offset))
-            return Math.min(Math.max(0, offset), Math.max(0, text.length - 1))
-        },
-    }
-}
-
-function normalizeTextWithMap(text: string, offsetMap: readonly number[]): ReadableBlockText {
-    let normalized = ''
-    const normalizedMap: number[] = []
-    let pendingSpaceOffset: number | undefined
-
-    for (let index = 0; index < text.length; index++) {
-        const char = text[index]
-        const sourceOffset = offsetMap[index] ?? index
-        if (/\s/.test(char)) {
-            if (normalized.length > 0 && pendingSpaceOffset === undefined) pendingSpaceOffset = sourceOffset
-            continue
-        }
-        if (pendingSpaceOffset !== undefined && normalized.length > 0) {
-            normalized += ' '
-            normalizedMap.push(pendingSpaceOffset)
-        }
-        pendingSpaceOffset = undefined
-        normalized += char
-        normalizedMap.push(sourceOffset)
-    }
-
-    return {
-        text: normalized,
-        mapOffset(offset, end = false) {
-            if (!normalizedMap.length) return 0
-            const bounded = Math.min(Math.max(0, offset), normalized.length)
-            if (end) {
-                if (bounded <= 0) return normalizedMap[0]
-                return (normalizedMap[bounded - 1] ?? normalizedMap[normalizedMap.length - 1]) + 1
-            }
-            return normalizedMap[Math.min(bounded, normalizedMap.length - 1)] ?? normalizedMap[0]
-        },
-    }
-}
-
-function removeInlineAnnotationRefs(
-    text: string,
-    offsetMap: readonly number[],
-): { text: string, offsetMap: number[] } {
-    const keep = new Array(text.length).fill(true)
-    const patterns = [
-        /[\s\u00a0]*[\[［]\s*\d{1,4}\s*[\]］]/g,
-        /[\s\u00a0]*[¹²³⁴⁵⁶⁷⁸⁹⁰]+/g,
-    ]
-
-    for (const pattern of patterns) {
-        for (const match of text.matchAll(pattern)) {
-            const start = match.index ?? 0
-            const end = start + match[0].length
-            for (let index = start; index < end; index++) keep[index] = false
-        }
-    }
-
-    let nextText = ''
-    const nextMap: number[] = []
-    for (let index = 0; index < text.length; index++) {
-        if (!keep[index]) continue
-        nextText += text[index]
-        nextMap.push(offsetMap[index] ?? index)
-    }
-    return { text: nextText, offsetMap: nextMap }
-}
-
-function isTTSFootnoteBlock(block: TextBlock): boolean {
-    if (hasRebookRole(block.attrs, 'footnote')) return true
-    const attrs = block.attrs ?? {}
-    const tokens = getSourceTokens(attrs)
-    if (tokens.some(token => token === 'footnote' || token === 'doc-footnote' || token === 'endnote' || token === 'doc-endnote')) return true
-    const text = block.segments.map(segment => segment.text).join('')
-    if (!tokens.includes('note')) return false
-    const anchor = attrs.id ?? attrs.name
-    return (anchor ? isFootnoteAnchorId(anchor) : false) || isFootnoteContentText(text)
-}
-
-function isTTSNoterefSegment(segment: TextSegment): boolean {
-    const attrs = segment.source?.attrs
-    if (hasRebookRole(attrs, 'noteref')) return true
-    if (segment.text === '\uFFFC' && attrs?.['data-rebook-footnote-content']) return true
-    return getSourceTokens(attrs).some(token =>
-        token === 'noteref'
-        || token === 'doc-noteref'
-        || token === 'footnote-ref'
-        || token === 'epub-footnote'
-        || token === 'epub-footnote1'
-    )
-}
-
-function hasRebookRole(attrs: Readonly<Record<string, string>> | undefined, role: string): boolean {
-    return attrs?.['data-rebook-role']?.split(/\s+/).includes(role) ?? false
-}
-
-function getSourceTokens(attrs: Readonly<Record<string, string>> | undefined): string[] {
-    return [
-        attrs?.['epub:type'],
-        attrs?.type,
-        attrs?.role,
-        attrs?.rel,
-        attrs?.class,
-    ]
-        .filter(Boolean)
-        .flatMap(value => value!.toLowerCase().split(/\s+/))
-        .filter(Boolean)
-}
-
-function isFootnoteAnchorId(value: string): boolean {
-    return /^(?:m|fn|footnote|note|endnote|en)[-_]?\d{1,4}$/i.test(value)
-}
-
-function isFootnoteContentText(value: string): boolean {
-    return /^[\s\u00a0]*[\[［]\s*\d{1,4}\s*[\]］]/.test(value)
-}
-
-function splitText(text: string, maxChars: number): Array<{ text: string, start: number, end: number }> {
-    const parts: Array<{ text: string, start: number, end: number }> = []
-    const sentencePattern = /[^。！？.!?；;]+[。！？.!?；;]?/g
-    let currentText = ''
-    let currentStart = 0
-    let currentEnd = 0
-
-    for (const match of text.matchAll(sentencePattern)) {
-        const raw = match[0]
-        const sentence = raw.trim()
-        if (!sentence) continue
-        const rawStart = match.index ?? currentEnd
-        const leading = raw.length - raw.trimStart().length
-        const start = rawStart + leading
-        const end = start + sentence.length
-        if (!currentText) {
-            currentText = sentence
-            currentStart = start
-            currentEnd = end
-            continue
-        }
-        if (currentText.length + sentence.length + 1 > maxChars) {
-            parts.push({ text: currentText, start: currentStart, end: currentEnd })
-            currentText = sentence
-            currentStart = start
-            currentEnd = end
-        } else {
-            currentText = `${currentText} ${sentence}`
-            currentEnd = end
-        }
-    }
-
-    if (currentText) parts.push({ text: currentText, start: currentStart, end: currentEnd })
-    if (!parts.length && text.trim()) {
-        for (let start = 0; start < text.length; start += maxChars) {
-            const chunk = text.slice(start, start + maxChars).trim()
-            if (chunk) parts.push({ text: chunk, start, end: start + chunk.length })
-        }
-    }
-    return parts
-}
-
-function normalizeText(text: string): string {
-    return text.replace(/\s+/g, ' ').trim()
-}
-
-function hasSpeakableText(text: string): boolean {
-    return normalizeText(text).replace(/[\s"'“”‘’「」『』()[\]{}<>《》。，、？！：；,.!?;:\-—–…]+/g, '').length > 0
-}
-
-function trimSilentGapEdges(text: string, start: number, end: number): { start: number, end: number } {
-    let nextStart = start
-    let nextEnd = end
-    while (nextStart < nextEnd && /[\s"'“”‘’「」『』]/.test(text[nextStart] ?? '')) nextStart += 1
-    while (nextEnd > nextStart && /[\s"'“”‘’「」『』]/.test(text[nextEnd - 1] ?? '')) nextEnd -= 1
-    return { start: nextStart, end: nextEnd }
-}
-
-function trimSpeechPartBoundaryEdges(text: string, start: number, end: number): { start: number, end: number } {
-    let nextStart = start
-    let nextEnd = end
-    while (nextStart < nextEnd && isLeadingSpeechBoundary(text[nextStart] ?? '')) nextStart += 1
-    while (nextEnd > nextStart && /[\s"'“”‘’「」『』]/.test(text[nextEnd - 1] ?? '')) nextEnd -= 1
-    return { start: nextStart, end: nextEnd }
-}
-
-function isLeadingSpeechBoundary(value: string): boolean {
-    return /[\s"'“”‘’「」『』,，、。.!！?？;；:：—–-…]/.test(value)
 }
 
 function isTerminalJob(job: TTSJob): boolean {
