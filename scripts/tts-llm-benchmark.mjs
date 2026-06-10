@@ -20,18 +20,6 @@ const DEFAULT_MODELS = [
 const DEFAULT_API_MODE = 'chat'
 const DEFAULT_LLM_TIMEOUT_MS = 120000
 
-const BENCHMARK_VOICES = [
-    { id: 'mimo_default', name: 'Mimo Default', locale: 'zh-CN', gender: 'unknown', provider: 'mimo' },
-    { id: '冰糖', name: '冰糖', locale: 'zh-CN', gender: 'female', provider: 'mimo' },
-    { id: '茉莉', name: '茉莉', locale: 'zh-CN', gender: 'female', provider: 'mimo' },
-    { id: '苏打', name: '苏打', locale: 'zh-CN', gender: 'male', provider: 'mimo' },
-    { id: '白桦', name: '白桦', locale: 'zh-CN', gender: 'male', provider: 'mimo' },
-    { id: 'Mia', name: 'Mia', locale: 'en-US', gender: 'female', provider: 'mimo' },
-    { id: 'Chloe', name: 'Chloe', locale: 'en-US', gender: 'female', provider: 'mimo' },
-    { id: 'Milo', name: 'Milo', locale: 'en-US', gender: 'male', provider: 'mimo' },
-    { id: 'Dean', name: 'Dean', locale: 'en-US', gender: 'male', provider: 'mimo' },
-]
-
 async function main() {
     const totalStartedAt = Date.now()
     await loadDotEnvFiles()
@@ -233,7 +221,7 @@ function printHelp() {
 Options:
   --book PATH                 EPUB path. Default: ${DEFAULT_BOOK_PATH}
   --chapter TEXT              Chapter title. Default: ${DEFAULT_CHAPTER}
-  --endpoint URL              TTS service endpoint. Voice catalog is mocked for mimo. Default: ${DEFAULT_ENDPOINT}
+  --endpoint URL              TTS service endpoint. Provider capability is mocked for mimo. Default: ${DEFAULT_ENDPOINT}
   --provider NAME             Provider used by withTTS. Default: ${DEFAULT_PROVIDER}
   --models A,B,C              Comma-separated model list. Default: ${DEFAULT_MODELS.join(',')}
   --api-mode MODE             chat or responses. Default: ${DEFAULT_API_MODE}
@@ -293,9 +281,12 @@ function analyzeLLMEvent(request, response) {
 
 function analyzeSpeakerPlan(request, response) {
     const knownSpeakers = Array.isArray(request?.knownSpeakers) ? request.knownSpeakers : []
+    const requestVoiceDesign = request?.voiceDesign === 1
+    const requestVoiceCount = Array.isArray(request?.voices) ? request.voices.length : 0
     const speakers = Array.isArray(response?.speakers) ? response.speakers : []
     const invalidSpeakers = []
     const duplicateSpeakerIds = []
+    const presetVoiceSpeakers = []
     const seenIds = new Set(knownSpeakers.map(speaker => speaker?.i).filter(Number.isFinite))
     for (const [index, speaker] of speakers.entries()) {
         if (
@@ -311,22 +302,30 @@ function analyzeSpeakerPlan(request, response) {
         }
         if (seenIds.has(speaker.i)) duplicateSpeakerIds.push({ index, id: speaker.i, name: speaker.n })
         seenIds.add(speaker.i)
+        if (typeof speaker?.v === 'string' && speaker.v.trim()) presetVoiceSpeakers.push({ index, id: speaker.i, name: speaker.n, voice: speaker.v })
     }
+    const unexpectedVoiceCatalog = requestVoiceDesign && requestVoiceCount > 0
+    const unexpectedPresetVoices = requestVoiceDesign && presetVoiceSpeakers.length > 0
     return {
         summary: {
             kind: 'plan',
+            requestVoiceDesign,
+            requestVoiceCount,
             knownSpeakers: knownSpeakers.length,
             speakers: speakers.length,
             invalidSpeakerCount: invalidSpeakers.length,
             duplicateSpeakerIdCount: duplicateSpeakerIds.length,
             voiceDesignCount: speakers.filter(hasVoiceDesignSpeakerInfo).length,
-            presetVoiceCount: speakers.filter(speaker => typeof speaker?.v === 'string' && speaker.v.trim()).length,
+            presetVoiceCount: presetVoiceSpeakers.length,
+            unexpectedVoiceCatalog,
+            unexpectedPresetVoices,
             errorCount: invalidSpeakers.length + duplicateSpeakerIds.length,
-            warningCount: 0,
+            warningCount: Number(unexpectedVoiceCatalog) + Number(unexpectedPresetVoices),
         },
         examples: {
             invalidSpeakers: invalidSpeakers.slice(0, 8),
             duplicateSpeakerIds: duplicateSpeakerIds.slice(0, 8),
+            presetVoiceSpeakers: presetVoiceSpeakers.slice(0, 8),
         },
     }
 }
@@ -338,8 +337,12 @@ function formatLLMEventReport(replay) {
             '',
             `Known speakers: ${replay.summary.knownSpeakers}`,
             `Planned speakers: ${replay.summary.speakers}`,
+            `Request voiceDesign: ${replay.summary.requestVoiceDesign ? 'yes' : 'no'}`,
+            `Request voices: ${replay.summary.requestVoiceCount}`,
             `Voice design prompts: ${replay.summary.voiceDesignCount}`,
             `Preset voices: ${replay.summary.presetVoiceCount}`,
+            `Unexpected voice catalog in design plan: ${replay.summary.unexpectedVoiceCatalog ? 'yes' : 'no'}`,
+            `Unexpected preset voices in design plan: ${replay.summary.unexpectedPresetVoices ? 'yes' : 'no'}`,
             `Invalid speakers: ${replay.summary.invalidSpeakerCount}`,
             `Duplicate speaker ids: ${replay.summary.duplicateSpeakerIdCount}`,
         ].join('\n')
@@ -391,7 +394,7 @@ function createBenchmarkFetch(fetchImpl, logs, provider) {
         const startedAt = Date.now()
         const method = init?.method ?? 'GET'
         const url = typeof input === 'string' || input instanceof URL ? String(input) : input.url
-        if (provider === 'mimo' && isVoiceCatalogUrl(url)) {
+        if (provider === 'mimo' && isProviderCatalogUrl(url)) {
             logs.push({
                 at: new Date(startedAt).toISOString(),
                 elapsedMs: Date.now() - startedAt,
@@ -401,7 +404,13 @@ function createBenchmarkFetch(fetchImpl, logs, provider) {
                 ok: true,
                 mocked: true,
             })
-            return new Response(JSON.stringify({ voices: BENCHMARK_VOICES }), {
+            return new Response(JSON.stringify({
+                providers: [{
+                    id: 'mimo',
+                    name: 'Xiaomi MiMo TTS',
+                    capabilities: { voiceDesign: true },
+                }],
+            }), {
                 status: 200,
                 headers: { 'content-type': 'application/json' },
             })
@@ -430,9 +439,9 @@ function createBenchmarkFetch(fetchImpl, logs, provider) {
     }
 }
 
-function isVoiceCatalogUrl(value) {
+function isProviderCatalogUrl(value) {
     try {
-        return new URL(String(value)).pathname.endsWith('/v1/tts/voices')
+        return new URL(String(value)).pathname.endsWith('/v1/tts/providers')
     } catch {
         return false
     }
@@ -626,7 +635,12 @@ function formatLLMSummary(event, index) {
             '',
             `- Duration: ${event.durationMs}ms`,
             `- Planned speakers: ${event.summary.speakers}`,
+            `- Request voiceDesign: ${event.summary.requestVoiceDesign ? 'yes' : 'no'}`,
+            `- Request voices: ${event.summary.requestVoiceCount}`,
             `- Voice design prompts: ${event.summary.voiceDesignCount}`,
+            `- Preset voices: ${event.summary.presetVoiceCount}`,
+            `- Unexpected voice catalog in design plan: ${event.summary.unexpectedVoiceCatalog ? 'yes' : 'no'}`,
+            `- Unexpected preset voices in design plan: ${event.summary.unexpectedPresetVoices ? 'yes' : 'no'}`,
             `- Invalid speakers: ${event.summary.invalidSpeakerCount}`,
             `- Duplicate speaker ids: ${event.summary.duplicateSpeakerIdCount}`,
             `- Replay: ${event.replayPath}`,

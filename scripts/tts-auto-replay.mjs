@@ -403,9 +403,12 @@ function hasSegmentResponse(response) {
 
 function analyzeSpeakerPlan(request, response) {
     const knownSpeakers = Array.isArray(request?.knownSpeakers) ? request.knownSpeakers : []
+    const requestVoiceDesign = request?.voiceDesign === 1
+    const requestVoiceCount = Array.isArray(request?.voices) ? request.voices.length : 0
     const speakers = Array.isArray(response?.speakers) ? response.speakers : []
     const invalidSpeakers = []
     const duplicateSpeakerIds = []
+    const presetVoiceSpeakers = []
     const seenIds = new Set(knownSpeakers.map(speaker => speaker?.i).filter(Number.isFinite))
     for (const [index, speaker] of speakers.entries()) {
         if (
@@ -421,22 +424,30 @@ function analyzeSpeakerPlan(request, response) {
         }
         if (seenIds.has(speaker.i)) duplicateSpeakerIds.push({ index, id: speaker.i, name: speaker.n })
         seenIds.add(speaker.i)
+        if (typeof speaker?.v === 'string' && speaker.v.trim()) presetVoiceSpeakers.push({ index, id: speaker.i, name: speaker.n, voice: speaker.v })
     }
+    const unexpectedVoiceCatalog = requestVoiceDesign && requestVoiceCount > 0
+    const unexpectedPresetVoices = requestVoiceDesign && presetVoiceSpeakers.length > 0
     return {
         summary: {
             kind: 'plan',
+            requestVoiceDesign,
+            requestVoiceCount,
             knownSpeakers: knownSpeakers.length,
             speakers: speakers.length,
             invalidSpeakerCount: invalidSpeakers.length,
             duplicateSpeakerIdCount: duplicateSpeakerIds.length,
             voiceDesignCount: speakers.filter(hasVoiceDesignSpeakerInfo).length,
-            presetVoiceCount: speakers.filter(speaker => typeof speaker?.v === 'string' && speaker.v.trim()).length,
+            presetVoiceCount: presetVoiceSpeakers.length,
+            unexpectedVoiceCatalog,
+            unexpectedPresetVoices,
             errorCount: invalidSpeakers.length + duplicateSpeakerIds.length,
-            warningCount: 0,
+            warningCount: Number(unexpectedVoiceCatalog) + Number(unexpectedPresetVoices),
         },
         examples: {
             invalidSpeakers: invalidSpeakers.slice(0, 8),
             duplicateSpeakerIds: duplicateSpeakerIds.slice(0, 8),
+            presetVoiceSpeakers: presetVoiceSpeakers.slice(0, 8),
         },
     }
 }
@@ -448,8 +459,12 @@ function formatLLMEventReport(replay) {
             '',
             `Known speakers: ${replay.summary.knownSpeakers}`,
             `Planned speakers: ${replay.summary.speakers}`,
+            `Request voiceDesign: ${replay.summary.requestVoiceDesign ? 'yes' : 'no'}`,
+            `Request voices: ${replay.summary.requestVoiceCount}`,
             `Voice design prompts: ${replay.summary.voiceDesignCount}`,
             `Preset voices: ${replay.summary.presetVoiceCount}`,
+            `Unexpected voice catalog in design plan: ${replay.summary.unexpectedVoiceCatalog ? 'yes' : 'no'}`,
+            `Unexpected preset voices in design plan: ${replay.summary.unexpectedPresetVoices ? 'yes' : 'no'}`,
             `Invalid speakers: ${replay.summary.invalidSpeakerCount}`,
             `Duplicate speaker ids: ${replay.summary.duplicateSpeakerIdCount}`,
         ].join('\n')
@@ -690,6 +705,7 @@ function classifyFetchUrl(url) {
     try {
         const parsed = new URL(String(url))
         if (/\/v1\/tts\/voices/.test(parsed.pathname)) return 'tts-voices'
+        if (/\/v1\/tts\/providers/.test(parsed.pathname)) return 'tts-providers'
         if (/\/v1\/tts\/jobs\/[^/]+$/.test(parsed.pathname)) return 'tts-job-poll'
         if (/\/v1\/tts\/jobs$/.test(parsed.pathname)) return 'tts-job-create'
         if (/\/v1\/tts\/synthesize/.test(parsed.pathname)) return 'tts-synthesize'
@@ -809,8 +825,12 @@ function formatLLMSummary(event, index) {
             '',
             `- Duration: ${event.durationMs}ms`,
             `- Planned speakers: ${event.summary.speakers}`,
+            `- Request voiceDesign: ${event.summary.requestVoiceDesign ? 'yes' : 'no'}`,
+            `- Request voices: ${event.summary.requestVoiceCount}`,
             `- Voice design prompts: ${event.summary.voiceDesignCount}`,
             `- Preset voices: ${event.summary.presetVoiceCount}`,
+            `- Unexpected voice catalog in design plan: ${event.summary.unexpectedVoiceCatalog ? 'yes' : 'no'}`,
+            `- Unexpected preset voices in design plan: ${event.summary.unexpectedPresetVoices ? 'yes' : 'no'}`,
             `- Invalid speakers: ${event.summary.invalidSpeakerCount}`,
             `- Duplicate speaker ids: ${event.summary.duplicateSpeakerIdCount}`,
             `- Replay: ${event.replayPath}`,
