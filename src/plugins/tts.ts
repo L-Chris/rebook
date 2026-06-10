@@ -52,6 +52,7 @@ export interface TTSSpeakerVoiceProfile {
     speaker?: string
     role?: TTSSpeakerRole
     gender?: TTSSpeakerGender
+    speakerHint?: string
     rate?: string
     pitch?: string
     volume?: string
@@ -78,6 +79,7 @@ export interface TTSSpeakerVoiceAssignment {
     role?: TTSSpeakerRole
     gender?: TTSSpeakerGender
     voice?: string
+    speakerHint?: string
     voicePrompt?: string
     stylePrompt?: string
 }
@@ -135,7 +137,7 @@ interface TTSCompactSpeakerAnalysisSegment {
 }
 
 interface TTSCompactSpeakerAnalysis {
-    speakers: readonly TTSCompactSpeakerInfo[]
+    speakers?: readonly TTSCompactSpeakerInfo[]
     segments: readonly TTSCompactSpeakerAnalysisSegment[]
 }
 
@@ -163,6 +165,7 @@ interface TTSCompactSpeakerInfo {
     o?: string
     p?: string
     q?: string
+    h?: string
 }
 
 interface TTSCompactVoice {
@@ -184,6 +187,16 @@ interface TTSCompactSpeakerAnalysisRequest {
     knownSpeakers: readonly TTSCompactKnownSpeaker[]
     voiceDesign?: 1
 }
+
+interface TTSCompactSpeakerModelRequest {
+    nextSpeakerId?: number
+    voices?: readonly TTSCompactVoice[]
+    blocks: readonly TTSCompactSpeakerAnalysisBlock[]
+    knownSpeakers: readonly TTSCompactKnownSpeaker[]
+}
+
+type TTSCompactSpeakerAnalysisMode = 'presetVoice' | 'voiceDesign'
+type TTSCompactSpeakerModelRequestKind = 'plan' | 'initial' | 'repair'
 
 export type TTSSpeakerAnalyzer = (request: TTSSpeakerAnalysisRequest) => Promise<TTSSpeakerAnalysis> | TTSSpeakerAnalysis
 
@@ -980,6 +993,7 @@ interface TTSSpeechPart {
     role: TTSSpeakerRole
     gender: TTSSpeakerGender
     confidence?: number
+    speakerHint?: string
     voice?: string
     rate?: string
     pitch?: string
@@ -1155,7 +1169,11 @@ async function analyzeWithModelSpeakerAnalyzer(
         knownSpeakers: getCompactKnownSpeakerAssignments(options.speakerVoiceState),
         voiceDesign,
     }
-    const system = options.speakerAnalysis?.prompt ?? buildSpeakerAnalysisSystemPrompt(options.lang)
+    const analysisMode: TTSCompactSpeakerAnalysisMode = voiceDesign ? 'voiceDesign' : 'presetVoice'
+    const customAnalysisPrompt = options.speakerAnalysis?.prompt
+    const system = customAnalysisPrompt ?? buildSpeakerAnalysisSystemPrompt(voiceLanguage, analysisMode)
+    const repairSystem = buildSpeakerAnalysisRepairPrompt(voiceLanguage, analysisMode, customAnalysisPrompt)
+    const analysisSchema = getSpeakerAnalysisSchema(analysisMode)
     if (voiceDesign) {
         const planRequest: TTSCompactSpeakerAnalysisRequest = {
             ...request,
@@ -1176,23 +1194,24 @@ async function analyzeWithModelSpeakerAnalyzer(
     }
     const startedAt = nowMs()
     let output: TTSCompactSpeakerAnalysis
+    const modelRequest = buildCompactSpeakerModelRequest(request, analysisMode, 'initial')
     try {
         const result = await generateText({
             model,
             output: Output.object({
-                schema: jsonSchema<TTSCompactSpeakerAnalysis>(speakerAnalysisSchema),
+                schema: jsonSchema<TTSCompactSpeakerAnalysis>(analysisSchema),
                 description: 'Compact novel TTS speaker analysis result.',
             }),
             timeout: normalizeTimeoutMs(options.speakerAnalysis?.timeoutMs),
             abortSignal: createTimeoutSignal(options.speakerAnalysis?.timeoutMs),
             system,
-            prompt: JSON.stringify(request),
+            prompt: JSON.stringify(modelRequest),
         })
         output = result.output
         await options.speakerAnalysis?.onLog?.({
             phase: 'initial',
             sectionIndex,
-            request,
+            request: modelRequest,
             response: output,
             durationMs: Math.round((nowMs() - startedAt) * 10) / 10,
         })
@@ -1200,7 +1219,7 @@ async function analyzeWithModelSpeakerAnalyzer(
         await options.speakerAnalysis?.onLog?.({
             phase: 'initial',
             sectionIndex,
-            request,
+            request: modelRequest,
             response: null,
             durationMs: Math.round((nowMs() - startedAt) * 10) / 10,
             error: getErrorMessage(error),
@@ -1209,12 +1228,17 @@ async function analyzeWithModelSpeakerAnalyzer(
     }
     const analysis = await repairCompactAnalysisWithModelIfNeeded(
         model,
-        system,
         request,
         normalizeCompactSpeakerAnalysisOutput(output),
+        analysisSchema,
+        repairSystem,
         options.speakerAnalysis,
     )
-    return normalizeCompactAnalysisSegments(readableByCompactBlockId, analysis, options.speakerVoiceState)
+    return normalizeCompactAnalysisSegments(
+        readableByCompactBlockId,
+        splitCompactQuoteNarrationSegments(request, analysis),
+        options.speakerVoiceState,
+    )
 }
 
 function normalizeAnalysisSegments(
@@ -1292,17 +1316,19 @@ const OTHER_SPEAKER = 'other'
 
 const speakerAnalysisSchema = {
     type: 'object',
+    description: '预设音色文本解析结果；返回朗读片段，并仅在需要新增或修正说话人时返回 speakers。',
     properties: {
         segments: {
             type: 'array',
+            description: 'TTS 朗读片段。覆盖所有非静默可读文本；偏移基于对应 block.x 的 UTF-16 下标。',
             items: {
                 type: 'object',
                 properties: {
-                    b: { type: 'number' },
-                    s: { type: 'number' },
-                    e: { type: 'number' },
-                    i: { type: 'number' },
-                    c: { type: 'number' },
+                    b: { type: 'number', description: 'block index，对应输入 blocks[].b。' },
+                    s: { type: 'number', description: 'startOffset，UTF-16 起始下标，包含。' },
+                    e: { type: 'number', description: 'endOffset，UTF-16 结束下标，不包含。' },
+                    i: { type: 'number', description: 'speaker id；旁白使用 0。' },
+                    c: { type: 'number', description: 'confidence；仅当置信度 <= 0.8 或分配不确定时输出。' },
                 },
                 required: ['b', 's', 'e', 'i'],
                 additionalProperties: false,
@@ -1310,19 +1336,16 @@ const speakerAnalysisSchema = {
         },
         speakers: {
             type: 'array',
+            description: '新增或必须纠正的说话人；不要重复返回已知说话人。',
             items: {
                 type: 'object',
                 properties: {
-                    i: { type: 'number' },
-                    n: { type: 'string' },
-                    r: { type: 'string', enum: ['n', 'c', 'o'] },
-                    g: { type: 'number', enum: [0, 1, 2] },
-                    v: { type: 'string' },
-                    d: { type: 'string', maxLength: 260 },
-                    a: { type: 'string', maxLength: 80 },
-                    o: { type: 'string', maxLength: 120 },
-                    p: { type: 'string', maxLength: 160 },
-                    q: { type: 'string', maxLength: 160 },
+                    i: { type: 'number', description: 'speaker id；新增说话人从 nextSpeakerId 开始递增。' },
+                    n: { type: 'string', description: '稳定角色名。' },
+                    r: { type: 'string', enum: ['n', 'c', 'o'], description: 'role code：n=旁白，c=角色对白，o=其他/无法归属声音。' },
+                    g: { type: 'number', enum: [0, 1, 2], description: 'gender code：0=未知，1=男，2=女。' },
+                    v: { type: 'string', description: 'voice id；从输入 voices 中选择。' },
+                    h: { type: 'string', maxLength: 260, description: '说话人识别线索/上下文，用于后续保持身份一致。' },
                 },
                 required: ['i', 'n', 'r', 'g'],
                 additionalProperties: false,
@@ -1333,24 +1356,50 @@ const speakerAnalysisSchema = {
     additionalProperties: false,
 } as const
 
-const speakerPlanSchema = {
+const voiceDesignSpeakerAnalysisSchema = {
     type: 'object',
+    description: '角色设计后的文本解析结果；只返回朗读片段，speaker id 必须来自 knownSpeakers。',
     properties: {
-        speakers: {
+        segments: {
             type: 'array',
+            description: 'TTS 朗读片段。覆盖所有非静默可读文本；偏移基于对应 block.x 的 UTF-16 下标。',
             items: {
                 type: 'object',
                 properties: {
-                    i: { type: 'number' },
-                    n: { type: 'string' },
-                    r: { type: 'string', enum: ['c', 'o'] },
-                    g: { type: 'number', enum: [0, 1, 2] },
-                    v: { type: 'string' },
-                    d: { type: 'string', maxLength: 260 },
-                    a: { type: 'string', maxLength: 80 },
-                    o: { type: 'string', maxLength: 120 },
-                    p: { type: 'string', maxLength: 160 },
-                    q: { type: 'string', maxLength: 160 },
+                    b: { type: 'number', description: 'block index，对应输入 blocks[].b。' },
+                    s: { type: 'number', description: 'startOffset，UTF-16 起始下标，包含。' },
+                    e: { type: 'number', description: 'endOffset，UTF-16 结束下标，不包含。' },
+                    i: { type: 'number', description: 'speaker id；必须来自 knownSpeakers，旁白使用 0。' },
+                    c: { type: 'number', description: 'confidence；仅当置信度 <= 0.8 或分配不确定时输出。' },
+                },
+                required: ['b', 's', 'e', 'i'],
+                additionalProperties: false,
+            },
+        },
+    },
+    required: ['segments'],
+    additionalProperties: false,
+} as const
+
+const speakerPlanSchema = {
+    type: 'object',
+    description: '角色规划结果；只识别重要或反复发声角色，不进行文本分段。',
+    properties: {
+        speakers: {
+            type: 'array',
+            description: '规划出的重要或反复发声角色。',
+            items: {
+                type: 'object',
+                properties: {
+                    i: { type: 'number', description: 'speaker id；新增说话人从 nextSpeakerId 开始递增。' },
+                    n: { type: 'string', description: '稳定角色名。' },
+                    r: { type: 'string', enum: ['c', 'o'], description: 'role code：c=角色对白，o=其他/无法归属声音。' },
+                    g: { type: 'number', enum: [0, 1, 2], description: 'gender code：0=未知，1=男，2=女。' },
+                    a: { type: 'string', maxLength: 80, description: '年龄或年龄感。' },
+                    o: { type: 'string', maxLength: 120, description: '职业、身份或社会角色。' },
+                    p: { type: 'string', maxLength: 160, description: '性格、气质和行为特征。' },
+                    q: { type: 'string', maxLength: 160, description: '声音与表演风格，用于生成角色卡。' },
+                    h: { type: 'string', maxLength: 260, description: '说话人识别线索/上下文，不是声音风格。' },
                 },
                 required: ['i', 'n', 'r', 'g'],
                 additionalProperties: false,
@@ -1361,6 +1410,10 @@ const speakerPlanSchema = {
     additionalProperties: false,
 } as const
 
+function getSpeakerAnalysisSchema(mode: TTSCompactSpeakerAnalysisMode) {
+    return mode === 'voiceDesign' ? voiceDesignSpeakerAnalysisSchema : speakerAnalysisSchema
+}
+
 async function planCompactSpeakersWithModel(
     model: LanguageModel,
     system: string,
@@ -1369,6 +1422,7 @@ async function planCompactSpeakersWithModel(
 ): Promise<TTSCompactSpeakerPlan> {
     const startedAt = nowMs()
     let output: TTSCompactSpeakerPlan
+    const modelRequest = buildCompactSpeakerModelRequest(request, 'voiceDesign', 'plan')
     try {
         const result = await generateText({
             model,
@@ -1379,13 +1433,13 @@ async function planCompactSpeakersWithModel(
             timeout: normalizeTimeoutMs(analysisOptions?.timeoutMs),
             abortSignal: createTimeoutSignal(analysisOptions?.timeoutMs),
             system,
-            prompt: JSON.stringify(request),
+            prompt: JSON.stringify(modelRequest),
         })
         output = result.output
         await analysisOptions?.onLog?.({
             phase: 'plan',
             sectionIndex: request.sectionIndex,
-            request,
+            request: modelRequest,
             response: output,
             durationMs: Math.round((nowMs() - startedAt) * 10) / 10,
         })
@@ -1393,7 +1447,7 @@ async function planCompactSpeakersWithModel(
         await analysisOptions?.onLog?.({
             phase: 'plan',
             sectionIndex: request.sectionIndex,
-            request,
+            request: modelRequest,
             response: null,
             durationMs: Math.round((nowMs() - startedAt) * 10) / 10,
             error: getErrorMessage(error),
@@ -1403,57 +1457,157 @@ async function planCompactSpeakersWithModel(
     return normalizeCompactSpeakerPlanOutput(output)
 }
 
-function buildSpeakerAnalysisSystemPrompt(lang?: string): string {
-    return [
-        'You are a speaker-analysis engine for multi-voice web-novel TTS.',
-        lang ? `Language hint: ${lang}.` : '',
-        'Input blocks use compact fields: b=block index, t=block type, l=UTF-16 text length, x=block text.',
-        'Correction blocks may include k=indexed characters. Use k to calculate exact offsets.',
-        'Input block m=1 means the block likely contains both narration and dialogue and must be inspected carefully.',
-        'Known speakers use compact fields: i=speaker id, n=speaker name, r=role, g=gender, v=voice id, d=voice design role card/prompt.',
-        'Available voices may be omitted. When supplied, they use compact fields: v=voice id, n=voice name, l=locale, g=gender, p=provider.',
-        'Split the supplied chapter blocks into consecutive TTS speaker segments.',
-        'Return speakers only for new or corrected speaker metadata that is necessary for segmentation: i=speaker id, n=speaker name, r=role, g=gender, v=voice id.',
-        'Return segments for speech ranges only: b=block index, s=startOffset, e=endOffset, i=speaker id. Add c=confidence only when confidence is <= 0.8 or the assignment is uncertain; omit c when confidence is > 0.8.',
-        'Role codes: r=n narrator, r=c character dialogue, r=o other speech. Gender codes: g=0 unknown, g=1 male, g=2 female.',
-        'Use i=0 for narration. Do not include narration in speakers unless correcting metadata.',
-        'Reuse knownSpeakers i exactly for an already known speaker. Do not repeat known speaker metadata unless it must be corrected.',
-        'For a new important or recurring speaker, assign a positive id starting at nextSpeakerId and increasing in first-appearance order within this response, and add one speakers item for it.',
-        'If voices are supplied, choose v from voices for new speakers according to role, gender, locale, and character tone. Known speaker voices are already provided in knownSpeakers.',
-        'If input voiceDesign=1, this is the text-segmentation pass after character planning: reuse knownSpeakers ids and role cards, do not choose preset voice ids, and omit v. Only return a/o/p/q/d for a genuinely new speaking character that was not in knownSpeakers.',
-        'For dialogue, use the most stable character name you can infer from context in the speakers item for each new speaker.',
-        'A name used as a direct address inside dialogue before a comma, such as "Ano, ..." or “阿诺，…”, is usually the addressee, not the speaker. Use nearby attribution clauses to identify the actual speaker.',
-        'Example: in “小明，你在看什么？”小红问道。 the dialogue speaker is 小红 and the attribution phrase 小红问道 is narration.',
-        'For character segments, infer gender as male or female unless the text genuinely does not provide enough evidence; then use unknown.',
-        'Use r=o for unattributed voices, crowds, broadcasts, monsters, systems, or ambiguous non-narrator speech.',
-        'Preserve speaker identity across the request. Reuse knownSpeakers ids and names exactly when the same character appears.',
-        'Mixed narration/dialogue paragraphs must be split into adjacent segments instead of assigned to one speaker; a block marked m=1 with both quoted and unquoted readable text is invalid if returned as one whole-speaker segment.',
-        'For every m=1 block, inspect text outside quote marks. Any readable unquoted narration or attribution text outside quotes must be i=0, even when it contains a character name; do not return multiple same-speaker segments to cover both quote and narration.',
-        'Do not assign unquoted narration to a character, and do not assign quoted dialogue to narrator unless it is truly narration.',
-        'For quoted dialogue, prefer offsets for the speech content inside quote marks; it is OK to skip quote marks and pure whitespace.',
-        'Cover all non-silent text in each block with ordered, non-overlapping segments. Do not leave readable prefix, middle, or trailing text uncovered.',
-        'Do not output text content. Use UTF-16 offsets into the corresponding block text. e is exclusive and must satisfy 0 <= s < e <= l.',
-        'Return only the requested JSON object.',
-    ].filter(Boolean).join('\n')
+function buildSpeakerAnalysisSystemPrompt(lang: string | undefined, mode: TTSCompactSpeakerAnalysisMode): string {
+    const modeSections = mode === 'presetVoice'
+        ? [
+            promptSection('当前分支', [
+                '预设音色文本解析：模型负责分段、识别新说话人，并在有 voices 时为新说话人选择 v。',
+                '新增重要或反复出现的说话人时，从 nextSpeakerId 开始分配正整数 id，并按首次出现顺序递增。',
+                '如果提供 voices，为新增说话人按角色、性别、语言地区和人物气质选择 v。',
+                '对白中的新说话人名称要使用从上下文能稳定推断出的角色名。',
+            ]),
+        ]
+        : [
+            promptSection('当前分支', [
+                '当前是角色设计后的文本分段阶段。',
+                '模型只负责把文本切成说话人片段；角色规划已完成。',
+            ]),
+        ]
+    return joinPromptSections([
+        promptSection('角色', [
+            '你是多角色小说 TTS 的说话人分析引擎。',
+            languagePromptLine(lang),
+        ]),
+        ...modeSections,
+        promptSection('输入格式', [
+            'blocks 使用紧凑字段；m=1 表示可能同时包含旁白和对白。',
+            'knownSpeakers.h 是说话人识别线索/上下文。',
+        ]),
+        promptSection('分段目标', [
+            '把每个 block 拆成有序、连续、无重叠的 TTS 朗读片段。',
+            '覆盖每个 block 中所有非静默可读文本，不遗漏开头、中间或末尾文本。',
+            '有引号对白优先使用引号内实际朗读内容的偏移；可以跳过引号和纯空白。',
+        ]),
+        speakerAttributionPromptSection(),
+        promptSection('禁止项', [
+            '不要把无引号旁白归给角色；除非确实是叙述性引用，否则不要把有引号对白归给旁白。',
+            '不要把混合旁白/对白的段落整段归给一个说话人。',
+            '不要把姓名、发言归属短语、句首或句尾几个字从自然的旁白/对白范围中切开。',
+        ]),
+    ])
 }
 
 function buildSpeakerPlanningSystemPrompt(lang?: string): string {
-    return [
-        'You are a character and voice-planning engine for multi-voice web-novel TTS.',
-        lang ? `Language hint: ${lang}.` : '',
-        'Input blocks use compact fields: b=block index, t=block type, l=UTF-16 text length, x=block text.',
-        'Known speakers use compact fields: i=speaker id, n=speaker name, r=role, g=gender, d=voice design role card/prompt.',
-        'Do not segment text. Identify important or recurring speaking characters likely to appear in these blocks.',
-        'Reuse knownSpeakers i exactly for an already known speaker and do not repeat known metadata unless it needs correction.',
-        'For new speakers, assign positive ids starting at nextSpeakerId and increasing in first-appearance order.',
-        'Return speakers only: i=speaker id, n=stable character name, r=role, g=gender, a=age, o=occupation/identity, p=personality/temperament, q=voice style, d=optional final voice design role card.',
-        'Use r=c for character dialogue and r=o for ambiguous non-narrator voices, crowds, systems, broadcasts, monsters, or unattributed voices.',
-        'Gender codes: g=0 unknown, g=1 male, g=2 female.',
-        'For voiceDesign=1, extract stable character attributes, especially gender, apparent age, occupation or social identity, and personality. q should describe timbre, speech rhythm, and performance style. Do not choose preset voice ids and omit v. You may omit d; the client can compile a role card from a/o/p/q.',
-        'Do not include current sentence content in a/o/p/q/d. Use short phrases, not paragraphs. For unknown details, infer conservatively from context or omit the field.',
-        'Avoid one-off unnamed speakers unless they are needed for dialogue continuity. Do not include narrator i=0.',
-        'Return only the requested JSON object.',
-    ].filter(Boolean).join('\n')
+    return joinPromptSections([
+        promptSection('角色', [
+            '你是多角色小说 TTS 的角色规划和语音规划引擎。',
+            languagePromptLine(lang),
+        ]),
+        promptSection('当前分支', [
+            '角色规划阶段：只识别重要或反复发声角色，不进行文本分段。',
+            '后续文本解析会使用你输出的 h 来保持说话人一致性。',
+        ]),
+        promptSection('输入格式', [
+            'blocks 是待规划文本；knownSpeakers 是已知角色。',
+            'knownSpeakers.h 是已有的说话人识别线索/上下文。',
+        ]),
+        promptSection('输出原则', [
+            '新增说话人从 nextSpeakerId 开始分配正整数 id，并按首次出现顺序递增。',
+            '已在 knownSpeakers 中出现的说话人必须精确复用 i；除非需要纠正，否则不要重复返回。',
+            '客户端会用 a/o/p/q 合成角色卡。',
+        ]),
+        promptSection('规划原则', [
+            '重点提取稳定人物属性，尤其是性别、年龄感、职业或社会身份、性格气质。',
+            'q 描述音色、语速节奏、表达方式和表演风格。',
+            'h 只用于后续文本分段识别说话人，不是声音风格。',
+            'h 要写入别名、称呼、人物关系、常见发言动作、发言归属词、容易误判的直接称呼、场景范围和对话上下文。',
+            'h 要提炼可复用规则，不要只复述一句当前原文。例：阿诺=名为阿诺的年轻人；“阿诺，...”多半是在称呼他而非他说话；阿诺开口/说道/叹气/回答时才强指向他是说话人。',
+            '规划时特别总结：某角色被别人频繁称呼、某角色经常被代词谈论、某些引语前后有发言动作、某个场景里的核心对话参与者。',
+        ]),
+        promptSection('禁止项', [
+            'a/o/p/q 不要塞入当前句子内容；使用短语，不要写长段落。',
+            '未知细节可以保守推断或省略。',
+            '除非一次性无名说话人影响对话连续性，否则不要纳入规划。',
+            '不要包含旁白 i=0。',
+        ]),
+    ])
+}
+
+function buildSpeakerAnalysisRepairPrompt(
+    lang: string | undefined,
+    mode: TTSCompactSpeakerAnalysisMode,
+    customAnalysisPrompt?: string,
+): string {
+    const outputLines = mode === 'presetVoice'
+        ? [
+            'speakers 只返回纠错必需的新增或修正说话人；没有则返回空数组。',
+        ]
+        : [
+            '沿用 knownSpeakers 中的说话人。',
+        ]
+    return joinPromptSections([
+        promptSection('角色', [
+            '你是多角色小说 TTS 的纠错分段引擎。',
+            languagePromptLine(lang),
+        ]),
+        promptSection('当前分支', [
+            '纠错文本解析阶段：代码已经筛出需要重判的异常 blocks。',
+            '不要判断是否需要纠错；直接为传入 blocks 重新输出正确 segments。',
+        ]),
+        promptSection('输入格式', [
+            'blocks 是需要重判的异常文本；m=1 表示可能同时包含旁白和对白。',
+            'knownSpeakers.h 是说话人识别线索/上下文。',
+            'k 存在时优先用 k 计算精确 UTF-16 偏移。',
+        ]),
+        promptSection('输出原则', [
+            ...outputLines,
+            '只返回传入 blocks 的 corrected segments。',
+        ]),
+        promptSection('纠错重点', [
+            '把旁白、动作、发言归属短语和引号内对白拆成相邻范围。',
+            '引号后的发言归属短语（如 asked/said/replied 或 问道/说道/回答/叹道/开口）通常标识引号内对白的说话人；该归属短语本身仍然是旁白。',
+            '如果一个片段同时跨过引号内对白和引号外叙述/归属文本，必须拆开重判，不要把“对白 + 某人说道/动作”放进同一个说话人片段。',
+            '修正示例：“小明，你在看什么？”小红问道。=> 引号内对白说话人是小红；“小红问道”是旁白。',
+            '修正示例：“他不是盲人。”阿诺说道，“他一定看得见。” => 两段引号都是阿诺；“阿诺说道，”是旁白。',
+        ]),
+        speakerAttributionPromptSection(),
+        promptSection('覆盖与偏移', [
+            '覆盖每个传入 block 的所有非静默可读文本，不遗漏开头、中间或末尾文本。',
+            '不要产生过碎的语义片段；不要把姓名、发言归属短语、句首或句尾几个字从自然的旁白/对白范围中切开。',
+        ]),
+        customAnalysisPrompt ? promptSection('调用方补充约束', [customAnalysisPrompt]) : '',
+        promptSection('禁止项', [
+            '不要返回未传入 block 的 segments。',
+            '不要把引号外叙述/动作/归属短语归给角色。',
+        ]),
+    ])
+}
+
+function joinPromptSections(sections: readonly string[]): string {
+    return sections.filter(Boolean).join('\n\n')
+}
+
+function promptSection(title: string, lines: readonly (string | undefined)[]): string {
+    return [`## ${title}`, ...lines.filter(Boolean)].join('\n')
+}
+
+function languagePromptLine(lang: string | undefined): string | undefined {
+    return lang ? `语言提示：${lang}。` : undefined
+}
+
+function speakerAttributionPromptSection(): string {
+    return promptSection('说话人识别规则', [
+        '旁白固定使用 i=0。',
+        '识别说话人时，knownSpeakers.h 是重要线索：其中可能包含别名、人物关系、常见发言动作、称呼陷阱、场景范围和对话上下文。',
+        '任何引号外可读的旁白、动作或发言归属文本都必须是 i=0，即使其中包含角色名。',
+        '引号内位于逗号、顿号、冒号前的人名通常是称呼对象，不是说话人。例如 “小明，你在看什么？”小红问道。对白说话人是小红。',
+        '引号之间或引号后的发言归属短语优先级高于引号内提到的人名、代词或话题。',
+        '一句话中出现“引语 + 某人说道/问道/回答/叹道/开口 + 引语”时，两个引语通常属于该发言归属中的某人，中间归属短语仍是旁白。',
+        '不要把对话内容里被讨论的人名或代词当作说话人证据；优先看引号外的发言动作、上下文轮次和 h 线索。',
+        '角色对白片段应尽量推断男/女性别；只有文本确实缺少证据时才使用未知。',
+        '无法归属的声音、人群、广播、系统提示或模糊的非旁白声音使用 r=o。',
+        '同一角色必须复用 knownSpeakers 的 id 和名称。',
+    ])
 }
 
 function normalizeCompactSpeakerAnalysisOutput(output: unknown): TTSCompactSpeakerAnalysis {
@@ -1477,6 +1631,7 @@ function normalizeCompactSpeakerAnalysisOutput(output: unknown): TTSCompactSpeak
                 o: typeof item.o === 'string' ? normalizeVoicePrompt(item.o) : undefined,
                 p: typeof item.p === 'string' ? normalizeVoicePrompt(item.p) : undefined,
                 q: typeof item.q === 'string' ? normalizeVoicePrompt(item.q) : undefined,
+                h: typeof item.h === 'string' ? normalizeSpeakerHint(item.h) : undefined,
             })
         }
     }
@@ -1531,16 +1686,143 @@ function normalizeCompactSpeakerInfos(values: readonly unknown[]): TTSCompactSpe
             o: typeof item.o === 'string' ? normalizeVoicePrompt(item.o) : undefined,
             p: typeof item.p === 'string' ? normalizeVoicePrompt(item.p) : undefined,
             q: typeof item.q === 'string' ? normalizeVoicePrompt(item.q) : undefined,
+            h: typeof item.h === 'string' ? normalizeSpeakerHint(item.h) : undefined,
         })
     }
     return speakers
 }
 
-async function repairCompactAnalysisWithModelIfNeeded(
-    model: LanguageModel,
-    system: string,
+function splitCompactQuoteNarrationSegments(
     request: TTSCompactSpeakerAnalysisRequest,
     analysis: TTSCompactSpeakerAnalysis,
+): TTSCompactSpeakerAnalysis {
+    const blockById = new Map(request.blocks.map(block => [block.b, block]))
+    const segments: TTSCompactSpeakerAnalysisSegment[] = []
+    let changed = false
+    for (const segment of analysis.segments) {
+        const block = blockById.get(segment.b)
+        if (!block || block.m !== 1 || !hasAnyQuote(block.x)) {
+            segments.push(segment)
+            continue
+        }
+        const split = splitSegmentByQuoteIntervals(block.x, segment)
+        if (split.length !== 1 || split[0] !== segment) changed = true
+        segments.push(...split)
+    }
+    if (!changed) return analysis
+    return {
+        ...analysis,
+        segments: mergeAdjacentCompactSegments(segments),
+    }
+}
+
+function splitSegmentByQuoteIntervals(
+    text: string,
+    segment: TTSCompactSpeakerAnalysisSegment,
+): TTSCompactSpeakerAnalysisSegment[] {
+    const pieces: TTSCompactSpeakerAnalysisSegment[] = []
+    for (const interval of getQuoteIntervals(text)) {
+        const start = Math.max(segment.s, interval.start)
+        const end = Math.min(segment.e, interval.end)
+        if (end <= start || !hasSpeakableText(text.slice(start, end))) continue
+        pieces.push({
+            ...segment,
+            s: start,
+            e: end,
+            i: interval.quoted ? segment.i : NARRATOR_SPEAKER_ID,
+        })
+    }
+    return pieces.length ? pieces : [segment]
+}
+
+function getQuoteIntervals(text: string): { start: number, end: number, quoted: boolean }[] {
+    const intervals: { start: number, end: number, quoted: boolean }[] = []
+    let start = 0
+    let quoted = false
+    for (let index = 0; index < text.length; index++) {
+        const char = text[index] ?? ''
+        if (char === '"') {
+            pushQuoteInterval(intervals, start, index, quoted)
+            quoted = !quoted
+            start = index + 1
+        } else if (!quoted && isOpenQuote(char)) {
+            pushQuoteInterval(intervals, start, index, false)
+            quoted = true
+            start = index + 1
+        } else if (quoted && isCloseQuote(char)) {
+            pushQuoteInterval(intervals, start, index, true)
+            quoted = false
+            start = index + 1
+        }
+    }
+    pushQuoteInterval(intervals, start, text.length, quoted)
+    return intervals
+}
+
+function pushQuoteInterval(
+    intervals: { start: number, end: number, quoted: boolean }[],
+    start: number,
+    end: number,
+    quoted: boolean,
+): void {
+    if (end > start) intervals.push({ start, end, quoted })
+}
+
+function mergeAdjacentCompactSegments(
+    segments: readonly TTSCompactSpeakerAnalysisSegment[],
+): TTSCompactSpeakerAnalysisSegment[] {
+    const sorted = [...segments].sort((a, b) => a.b - b.b || a.s - b.s || a.e - b.e)
+    const merged: TTSCompactSpeakerAnalysisSegment[] = []
+    for (const segment of sorted) {
+        const previous = merged[merged.length - 1]
+        if (previous && previous.b === segment.b && previous.i === segment.i && previous.e === segment.s) {
+            previous.e = segment.e
+            previous.c = mergeSpeakerConfidence(previous.c, segment.c)
+        } else {
+            merged.push({ ...segment })
+        }
+    }
+    return merged
+}
+
+function hasAnyQuote(text: string): boolean {
+    for (let index = 0; index < text.length; index++) {
+        const char = text[index] ?? ''
+        if (isOpenQuote(char) || isCloseQuote(char)) return true
+    }
+    return false
+}
+
+function buildCompactSpeakerModelRequest(
+    request: TTSCompactSpeakerAnalysisRequest,
+    mode: TTSCompactSpeakerAnalysisMode,
+    kind: TTSCompactSpeakerModelRequestKind,
+): TTSCompactSpeakerModelRequest {
+    const canCreateSpeakers = kind === 'plan' || (kind === 'initial' && mode === 'presetVoice')
+    return {
+        nextSpeakerId: canCreateSpeakers ? request.nextSpeakerId : undefined,
+        voices: request.voices?.length ? request.voices : undefined,
+        blocks: request.blocks,
+        knownSpeakers: request.knownSpeakers.map(compactSpeakerForModel),
+    }
+}
+
+function compactSpeakerForModel(speaker: TTSCompactKnownSpeaker): TTSCompactKnownSpeaker {
+    return {
+        i: speaker.i,
+        n: speaker.n,
+        r: speaker.r,
+        g: speaker.g,
+        h: speaker.h,
+    }
+}
+
+async function repairCompactAnalysisWithModelIfNeeded(
+    model: LanguageModel,
+    request: TTSCompactSpeakerAnalysisRequest,
+    analysis: TTSCompactSpeakerAnalysis,
+    analysisSchema: typeof speakerAnalysisSchema | typeof voiceDesignSpeakerAnalysisSchema,
+    repairSystem: string,
     analysisOptions?: TTSSpeakerAnalysisOptions,
 ): Promise<TTSCompactSpeakerAnalysis> {
     const repairBlockIds = findSpeakerAnalysisRepairBlocks(request, analysis)
@@ -1552,27 +1834,28 @@ async function repairCompactAnalysisWithModelIfNeeded(
         blocks: request.blocks
             .filter(block => repairBlockIds.has(block.b))
             .map(block => ({ ...block, k: buildCompactOffsetGuide(block.x) })),
-        knownSpeakers: mergeCompactSpeakerInfos(request.knownSpeakers, analysis.speakers),
+        knownSpeakers: mergeCompactSpeakerInfos(request.knownSpeakers, analysis.speakers ?? []),
     }
     const startedAt = nowMs()
     let output: TTSCompactSpeakerAnalysis
+    const modelRequest = buildCompactSpeakerModelRequest(repairRequest, analysisSchema === voiceDesignSpeakerAnalysisSchema ? 'voiceDesign' : 'presetVoice', 'repair')
     try {
         const result = await generateText({
             model,
             output: Output.object({
-                schema: jsonSchema<TTSCompactSpeakerAnalysis>(speakerAnalysisSchema),
+                schema: jsonSchema<TTSCompactSpeakerAnalysis>(analysisSchema),
                 description: 'Compact corrected novel TTS speaker analysis result.',
             }),
             timeout: normalizeTimeoutMs(analysisOptions?.timeoutMs),
             abortSignal: createTimeoutSignal(analysisOptions?.timeoutMs),
-            system: buildSpeakerAnalysisRepairPrompt(system),
-            prompt: JSON.stringify(repairRequest),
+            system: repairSystem,
+            prompt: JSON.stringify(modelRequest),
         })
         output = result.output
         await analysisOptions?.onLog?.({
             phase: 'repair',
             sectionIndex: request.sectionIndex,
-            request: repairRequest,
+            request: modelRequest,
             response: output,
             durationMs: Math.round((nowMs() - startedAt) * 10) / 10,
         })
@@ -1580,7 +1863,7 @@ async function repairCompactAnalysisWithModelIfNeeded(
         await analysisOptions?.onLog?.({
             phase: 'repair',
             sectionIndex: request.sectionIndex,
-            request: repairRequest,
+            request: modelRequest,
             response: null,
             durationMs: Math.round((nowMs() - startedAt) * 10) / 10,
             error: getErrorMessage(error),
@@ -1592,7 +1875,7 @@ async function repairCompactAnalysisWithModelIfNeeded(
     const repairedBlockIds = new Set(repair.segments.map(segment => segment.b))
 
     return {
-        speakers: mergeCompactSpeakerInfos(analysis.speakers, repair.speakers),
+        speakers: mergeCompactSpeakerInfos(analysis.speakers ?? [], repair.speakers ?? []),
         segments: [
             ...analysis.segments.filter(segment => !repairedBlockIds.has(segment.b)),
             ...repair.segments,
@@ -1630,6 +1913,7 @@ function findSpeakerAnalysisRepairBlocks(
             speakers.size <= 1
             || hasInvalidRange
             || hasSuspiciousTinyCompactSegment(block, validSegments)
+            || hasSuspiciousQuoteBoundarySegment(block, validSegments)
             || hasSuspiciousMiddleCompactCoverageGap(block, validSegments)
         ) {
             blockIds.add(block.b)
@@ -1671,6 +1955,31 @@ function isLikelyShortNarrationLeadIn(text: string): boolean {
     return /[：:]$/.test(text.trim())
 }
 
+function hasSuspiciousQuoteBoundarySegment(
+    block: TTSCompactSpeakerAnalysisBlock,
+    segments: readonly TTSCompactSpeakerAnalysisSegment[],
+): boolean {
+    return segments.some(segment => hasSegmentCrossingReadableQuoteBoundary(block.x, segment))
+}
+
+function hasSegmentCrossingReadableQuoteBoundary(
+    text: string,
+    segment: TTSCompactSpeakerAnalysisSegment,
+): boolean {
+    for (let index = segment.s; index < segment.e; index++) {
+        const char = text[index] ?? ''
+        if (isCloseQuote(char)) {
+            const after = text.slice(index + 1, segment.e)
+            if (hasSpeakableText(after)) return true
+        }
+        if (isOpenQuote(char)) {
+            const before = text.slice(segment.s, index)
+            if (hasSpeakableText(before)) return true
+        }
+    }
+    return false
+}
+
 function hasSuspiciousMiddleCompactCoverageGap(
     block: TTSCompactSpeakerAnalysisBlock,
     segments: readonly TTSCompactSpeakerAnalysisSegment[],
@@ -1704,17 +2013,6 @@ function isCloseQuote(value: string): boolean {
     return value === '”' || value === '」' || value === '』' || value === '"'
 }
 
-function buildSpeakerAnalysisRepairPrompt(system: string): string {
-    return [
-        system,
-        'Correction pass: every supplied block failed validation because it was mixed narration/dialogue but had a one-speaker, tiny-range, out-of-range, or short middle-gap problem.',
-        'Return corrected segments only for the supplied blocks. Split narration and dialogue into adjacent ranges and preserve speaker ids from knownSpeakers whenever possible.',
-        'A speech attribution clause after a quote, such as asked/said/replied or 问道/说道/回答, usually identifies the speaker of the quoted dialogue; keep the attribution clause itself as narration.',
-        'Example correction: “小明，你在看什么？”小红问道。 => quote content speaker 小红; 小红问道 narration.',
-        'Avoid tiny semantic fragments. Do not split names, attribution phrases, or sentence prefixes away from their natural narration/dialogue span.',
-    ].join('\n')
-}
-
 function buildCompactOffsetGuide(text: string): string | undefined {
     if (text.length > 180) return undefined
     const items: string[] = []
@@ -1732,7 +2030,7 @@ function getNextCompactSpeakerId(
         NARRATOR_SPEAKER_ID,
         request.nextSpeakerId - 1,
         ...request.knownSpeakers.map(speaker => speaker.i),
-        ...analysis.speakers.map(speaker => speaker.i),
+        ...(analysis.speakers ?? []).map(speaker => speaker.i),
         ...analysis.segments.map(segment => segment.i),
     )
     return Math.max(request.nextSpeakerId, maxSpeakerId + 1)
@@ -1761,6 +2059,7 @@ function mergeCompactSpeakerInfo(
         o: next.o ?? existing?.o,
         p: next.p ?? existing?.p,
         q: next.q ?? existing?.q,
+        h: next.h ?? existing?.h,
     }
 }
 
@@ -1809,6 +2108,7 @@ function normalizeCompactAnalysisSegments(
             gender,
             voice: speakerInfo?.v,
             confidence: segment.c,
+            speakerHint: speakerInfo?.h ?? knownProfile?.speakerHint,
             voicePrompt: normalizeVoicePrompt((speakerInfo && buildCompactSpeakerRoleCard(speakerInfo)) ?? knownProfile?.voicePrompt),
             stylePrompt: normalizeVoicePrompt(knownProfile?.stylePrompt),
         })
@@ -2099,6 +2399,11 @@ function normalizeVoicePrompt(prompt: string | undefined): string | undefined {
     return trimmed || undefined
 }
 
+function normalizeSpeakerHint(hint: string | undefined): string | undefined {
+    const trimmed = hint?.replace(/\s+/g, ' ').trim()
+    return trimmed || undefined
+}
+
 function buildCompactSpeakerRoleCard(speaker: TTSCompactSpeakerInfo): string | undefined {
     const role = expandCompactSpeakerRole(speaker.r)
     if (role === 'narrator') return undefined
@@ -2134,11 +2439,12 @@ function resolveSpeakerVoiceProfile(part: TTSSpeechPart, options: ResolvedTTSSec
         role: existing?.role ?? part.role,
         gender: existing?.gender ?? part.gender,
     }
-    const explicitPartVoice = part.voice || part.voicePrompt || part.stylePrompt
+    const explicitPartVoice = part.voice || part.voicePrompt || part.stylePrompt || part.speakerHint
         ? {
             voice: part.voice,
             role: profilePart.role,
             gender: profilePart.gender,
+            speakerHint: part.speakerHint,
             voicePrompt: part.voicePrompt,
             stylePrompt: part.stylePrompt,
         }
@@ -2295,6 +2601,7 @@ function applyCompactSpeakerInfos(
                 speaker: name,
                 role,
                 gender,
+                speakerHint: speaker.h ?? existing?.speakerHint,
                 voice: speaker.v ?? existing?.voice,
                 voicePrompt: voicePrompt ?? existing?.voicePrompt,
             })
@@ -2313,6 +2620,7 @@ function getKnownSpeakerAssignments(state: TTSSpeakerVoiceState): TTSSpeakerVoic
                 role: profile?.role,
                 gender: profile?.gender,
                 voice: profile?.voice,
+                speakerHint: profile?.speakerHint,
                 voicePrompt: profile?.voicePrompt,
                 stylePrompt: profile?.stylePrompt,
             }
@@ -2327,8 +2635,7 @@ function getCompactKnownSpeakerAssignments(state: TTSSpeakerVoiceState): TTSComp
             n: assignment.speaker,
             r: compactSpeakerRole(assignment.role),
             g: compactSpeakerGender(assignment.gender),
-            v: assignment.voice,
-            d: assignment.voicePrompt,
+            h: assignment.speakerHint,
         })),
     ]
 }

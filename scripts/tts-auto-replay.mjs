@@ -403,7 +403,6 @@ function hasSegmentResponse(response) {
 
 function analyzeSpeakerPlan(request, response) {
     const knownSpeakers = Array.isArray(request?.knownSpeakers) ? request.knownSpeakers : []
-    const requestVoiceDesign = request?.voiceDesign === 1
     const requestVoiceCount = Array.isArray(request?.voices) ? request.voices.length : 0
     const speakers = Array.isArray(response?.speakers) ? response.speakers : []
     const invalidSpeakers = []
@@ -426,12 +425,11 @@ function analyzeSpeakerPlan(request, response) {
         seenIds.add(speaker.i)
         if (typeof speaker?.v === 'string' && speaker.v.trim()) presetVoiceSpeakers.push({ index, id: speaker.i, name: speaker.n, voice: speaker.v })
     }
-    const unexpectedVoiceCatalog = requestVoiceDesign && requestVoiceCount > 0
-    const unexpectedPresetVoices = requestVoiceDesign && presetVoiceSpeakers.length > 0
+    const unexpectedVoiceCatalog = requestVoiceCount > 0
+    const unexpectedPresetVoices = presetVoiceSpeakers.length > 0
     return {
         summary: {
             kind: 'plan',
-            requestVoiceDesign,
             requestVoiceCount,
             knownSpeakers: knownSpeakers.length,
             speakers: speakers.length,
@@ -459,7 +457,6 @@ function formatLLMEventReport(replay) {
             '',
             `Known speakers: ${replay.summary.knownSpeakers}`,
             `Planned speakers: ${replay.summary.speakers}`,
-            `Request voiceDesign: ${replay.summary.requestVoiceDesign ? 'yes' : 'no'}`,
             `Request voices: ${replay.summary.requestVoiceCount}`,
             `Voice design prompts: ${replay.summary.voiceDesignCount}`,
             `Preset voices: ${replay.summary.presetVoiceCount}`,
@@ -825,7 +822,6 @@ function formatLLMSummary(event, index) {
             '',
             `- Duration: ${event.durationMs}ms`,
             `- Planned speakers: ${event.summary.speakers}`,
-            `- Request voiceDesign: ${event.summary.requestVoiceDesign ? 'yes' : 'no'}`,
             `- Request voices: ${event.summary.requestVoiceCount}`,
             `- Voice design prompts: ${event.summary.voiceDesignCount}`,
             `- Preset voices: ${event.summary.presetVoiceCount}`,

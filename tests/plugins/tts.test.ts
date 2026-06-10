@@ -236,9 +236,10 @@ describe('TTS Plugin', () => {
     })
 
     it('uses AI speaker analysis by default and keeps character voices consistent', async () => {
+        let analysisCall = 0
         generateTextMock.mockImplementation(async (options: any) => {
-            const body = JSON.parse(options.prompt)
-            if (body.sectionIndex === 0) {
+            analysisCall += 1
+            if (analysisCall === 1) {
                 return {
                     output: {
                         speakers: [
@@ -352,7 +353,8 @@ describe('TTS Plugin', () => {
             r: 'n',
             g: 0,
         }])
-        expect(JSON.parse(generateTextMock.mock.calls[0][0].prompt).voiceLanguage).toBe('zh-CN')
+        expect(JSON.parse(generateTextMock.mock.calls[0][0].prompt).voiceLanguage).toBeUndefined()
+        expect(generateTextMock.mock.calls[0][0].system).toContain('语言提示：zh-CN')
         expect(JSON.parse(generateTextMock.mock.calls[0][0].prompt).voices).toEqual(expect.arrayContaining([
             { v: 'voice-lin', n: 'Lin voice', l: 'zh-CN', g: 1, p: 'edge' },
             { v: 'voice-si', n: 'Si voice', l: 'zh-CN', g: 2, p: 'edge' },
@@ -368,10 +370,10 @@ describe('TTS Plugin', () => {
         expect(JSON.parse(generateTextMock.mock.calls[1][0].prompt).nextSpeakerId).toBe(3)
         expect(JSON.parse(generateTextMock.mock.calls[1][0].prompt).knownSpeakers).toEqual(expect.arrayContaining([
             expect.objectContaining({ i: 0, n: '旁白', g: 0 }),
-            expect.objectContaining({ i: 1, n: '林七夜', g: 1, v: 'voice-lin' }),
-            expect.objectContaining({ i: 2, n: '司小南', g: 2, v: 'voice-si' }),
+            expect.objectContaining({ i: 1, n: '林七夜', g: 1 }),
+            expect.objectContaining({ i: 2, n: '司小南', g: 2 }),
         ]))
-        expect(JSON.parse(generateTextMock.mock.calls[1][0].prompt).knownSpeakers[0].voice).toBeUndefined()
+        expect(JSON.parse(generateTextMock.mock.calls[1][0].prompt).knownSpeakers.some((speaker: any) => speaker.v || speaker.d)).toBe(false)
         expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['speakers', 'segments'])
         expect(outputObjectMock.mock.calls[0][0].schema.properties.segments.items.required).toEqual(['b', 's', 'e', 'i'])
         expect(outputObjectMock.mock.calls[0][0].schema.properties.speakers.items.properties.g.enum).toEqual([0, 1, 2])
@@ -460,6 +462,7 @@ describe('TTS Plugin', () => {
             ],
         }
         const expectedRoleCard = '角色：林七夜；性别：男；年龄：少年；身份/职业：盲眼学生；性格/气质：冷静克制，敏锐；声线/表演：清亮低沉，语速略慢'
+        const expectedSpeakerHint = '林七夜=盲眼少年；林七夜说道/问道时引用内容归他；别人谈论林七夜不代表他说话'
         generateTextMock
             .mockResolvedValueOnce({
                 output: {
@@ -472,12 +475,12 @@ describe('TTS Plugin', () => {
                         o: '盲眼学生',
                         p: '冷静克制，敏锐',
                         q: '清亮低沉，语速略慢',
+                        h: expectedSpeakerHint,
                     }],
                 },
             })
             .mockResolvedValueOnce({
                 output: {
-                    speakers: [],
                     segments: [
                         { b: 0, s: 0, e: 3, i: 0 },
                         { b: 0, s: 4, e: 7, i: 1, c: 0.93 },
@@ -492,7 +495,6 @@ describe('TTS Plugin', () => {
             })
             .mockResolvedValueOnce({
                 output: {
-                    speakers: [],
                     segments: [
                         { b: 0, s: 0, e: 6, i: 0 },
                         { b: 0, s: 7, e: 11, i: 1, c: 0.94 },
@@ -526,18 +528,29 @@ describe('TTS Plugin', () => {
         const firstSegmentPrompt = JSON.parse(generateTextMock.mock.calls[1][0].prompt)
         const secondPlanPrompt = JSON.parse(generateTextMock.mock.calls[2][0].prompt)
         const secondSegmentPrompt = JSON.parse(generateTextMock.mock.calls[3][0].prompt)
-        expect(firstPlanPrompt.voiceDesign).toBe(1)
+        expect(firstPlanPrompt.voiceDesign).toBeUndefined()
         expect(firstPlanPrompt.voices).toBeUndefined()
+        expect(firstPlanPrompt.nextSpeakerId).toBe(1)
+        expect(generateTextMock.mock.calls[0][0].system).toContain('角色规划和语音规划引擎')
+        expect(generateTextMock.mock.calls[1][0].system).toContain('当前是角色设计后的文本分段阶段')
+        expect(firstSegmentPrompt.nextSpeakerId).toBeUndefined()
         expect(firstSegmentPrompt.voices).toBeUndefined()
+        expect(outputObjectMock.mock.calls[1][0].schema.required).toEqual(['segments'])
+        expect(outputObjectMock.mock.calls[1][0].schema.properties.speakers).toBeUndefined()
         expect(firstSegmentPrompt.knownSpeakers).toEqual(expect.arrayContaining([
-            expect.objectContaining({ i: 1, n: '林七夜', d: expectedRoleCard }),
+            expect.objectContaining({ i: 1, n: '林七夜', h: expectedSpeakerHint }),
         ]))
         expect(secondPlanPrompt.knownSpeakers).toEqual(expect.arrayContaining([
-            expect.objectContaining({ i: 1, n: '林七夜', d: expectedRoleCard }),
+            expect.objectContaining({ i: 1, n: '林七夜', h: expectedSpeakerHint }),
         ]))
+        expect(secondPlanPrompt.nextSpeakerId).toBe(2)
+        expect(secondSegmentPrompt.nextSpeakerId).toBeUndefined()
         expect(secondSegmentPrompt.knownSpeakers).toEqual(expect.arrayContaining([
-            expect.objectContaining({ i: 1, n: '林七夜', d: expectedRoleCard }),
+            expect.objectContaining({ i: 1, n: '林七夜', h: expectedSpeakerHint }),
         ]))
+        expect(firstSegmentPrompt.knownSpeakers.some((speaker: any) => speaker.d || speaker.v)).toBe(false)
+        expect(secondPlanPrompt.knownSpeakers.some((speaker: any) => speaker.d || speaker.v)).toBe(false)
+        expect(secondSegmentPrompt.knownSpeakers.some((speaker: any) => speaker.d || speaker.v)).toBe(false)
         expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/v1/tts/voices'))).toBe(false)
         expect(first.find(segment => segment.speakerId === 1)).toMatchObject({
             speaker: '林七夜',
@@ -585,7 +598,6 @@ describe('TTS Plugin', () => {
             })
             .mockResolvedValueOnce({
                 output: {
-                    speakers: [],
                     segments: [
                         { b: 0, s: 0, e: 7, i: 0 },
                         { b: 0, s: 8, e: 11, i: 1 },
@@ -623,12 +635,17 @@ describe('TTS Plugin', () => {
         expect(generateTextMock).toHaveBeenCalledTimes(2)
         const planPrompt = JSON.parse(generateTextMock.mock.calls[0][0].prompt)
         const segmentPrompt = JSON.parse(generateTextMock.mock.calls[1][0].prompt)
-        expect(planPrompt.voiceDesign).toBe(1)
+        expect(planPrompt.voiceDesign).toBeUndefined()
         expect(planPrompt.voices).toBeUndefined()
+        expect(generateTextMock.mock.calls[0][0].system).toContain('角色规划和语音规划引擎')
+        expect(generateTextMock.mock.calls[1][0].system).toContain('当前是角色设计后的文本分段阶段')
         expect(segmentPrompt.voices).toBeUndefined()
+        expect(outputObjectMock.mock.calls[1][0].schema.required).toEqual(['segments'])
+        expect(outputObjectMock.mock.calls[1][0].schema.properties.speakers).toBeUndefined()
         expect(segmentPrompt.knownSpeakers).toEqual(expect.arrayContaining([
-            expect.objectContaining({ i: 1, n: '林七夜', d: expectedRoleCard }),
+            expect.objectContaining({ i: 1, n: '林七夜', r: 'c', g: 1 }),
         ]))
+        expect(segmentPrompt.knownSpeakers.some((speaker: any) => speaker.d || speaker.v)).toBe(false)
         expect(segments.find(segment => segment.speakerId === 1)).toMatchObject({
             speaker: '林七夜',
             voicePrompt: expectedRoleCard,
@@ -807,6 +824,93 @@ describe('TTS Plugin', () => {
         ])
     })
 
+    it('repairs mixed AI blocks with quote boundary crossing segments', async () => {
+        const mixedText = '“他不是盲人。”阿诺笃定地说道，“他一定看得见。”'
+        const mixedBook: Book = {
+            sections: [{
+                id: 'quote-boundary',
+                size: 100,
+                load: () => '',
+                getBlocks: async () => [{
+                    id: 'quote-boundary-p1',
+                    type: 'paragraph',
+                    segments: [{ text: mixedText }],
+                }],
+            }],
+        }
+        generateTextMock
+            .mockResolvedValueOnce({
+                output: {
+                    speakers: [{ i: 1, n: '阿诺', r: 'c', g: 1 }],
+                    segments: [
+                        { b: 0, s: 0, e: 14, i: 0, c: 0.9 },
+                        { b: 0, s: 14, e: mixedText.length, i: 1, c: 0.9 },
+                    ],
+                },
+            })
+            .mockImplementationOnce(async (options: any) => {
+                const body = JSON.parse(options.prompt)
+                expect(body.blocks).toEqual([{
+                    b: 0,
+                    t: 'paragraph',
+                    l: mixedText.length,
+                    x: mixedText,
+                    m: 1,
+                    k: expect.any(String),
+                }])
+                expect(options.system).toContain('同时跨过引号内对白和引号外叙述/归属文本')
+                return {
+                    output: {
+                        speakers: [],
+                        segments: [
+                            { b: 0, s: 1, e: 7, i: 1, c: 0.96 },
+                            { b: 0, s: 8, e: mixedText.length - 1, i: 1, c: 0.96 },
+                        ],
+                    },
+                }
+            })
+        const wrapped = withTTS({
+            fetch: vi.fn(async () => new Response(JSON.stringify({ voices: [] }))) as any,
+            model: mockModel as any,
+            voiceProfile: {
+                narrator: 'narrator-voice',
+                male: 'male-voice',
+            },
+        })(mixedBook) as TTSBook
+
+        const segments = await wrapped.tts.prepareSection(0, {
+            multiSpeaker: true,
+            maxSegmentChars: 80,
+        })
+
+        expect(generateTextMock).toHaveBeenCalledTimes(2)
+        expect(segments.map(segment => ({
+            text: segment.text,
+            speakerId: segment.speakerId,
+            speaker: segment.speaker,
+            role: segment.speakerRole,
+        }))).toEqual([
+            {
+                text: '他不是盲人。',
+                speakerId: 1,
+                speaker: '阿诺',
+                role: 'character',
+            },
+            {
+                text: '阿诺笃定地说道，',
+                speakerId: 0,
+                speaker: '旁白',
+                role: 'narrator',
+            },
+            {
+                text: '他一定看得见。',
+                speakerId: 1,
+                speaker: '阿诺',
+                role: 'character',
+            },
+        ])
+    })
+
     it('trims leading speech boundary punctuation from compact AI segments', async () => {
         const text = '，“不过……听说是比那更离谱的事情。”'
         const punctuationBook: Book = {
@@ -841,8 +945,9 @@ describe('TTS Plugin', () => {
 
         expect(generateTextMock).toHaveBeenCalledTimes(1)
         const systemPrompt = generateTextMock.mock.calls[0][0].system
-        expect(systemPrompt).toContain('omit c when confidence is > 0.8')
-        expect(systemPrompt).toContain('Any readable unquoted narration or attribution text outside quotes must be i=0')
+        expect(systemPrompt).toContain('任何引号外可读的旁白、动作或发言归属文本都必须是 i=0')
+        expect(outputObjectMock.mock.calls[0][0].schema.properties.segments.items.properties.c.description)
+            .toContain('仅当置信度 <= 0.8')
         expect(generateTextMock.mock.calls[0][0].timeout).toEqual({ totalMs: 12345 })
         expect(generateTextMock.mock.calls[0][0].abortSignal).toBeInstanceOf(AbortSignal)
         expect(segments).toHaveLength(1)
@@ -1041,7 +1146,8 @@ describe('TTS Plugin', () => {
         await wrapped.tts.prepareSection(0, { multiSpeaker: true })
 
         const prompt = JSON.parse(generateTextMock.mock.calls.at(-1)![0].prompt)
-        expect(prompt.voiceLanguage).toBe('en-US')
+        expect(prompt.voiceLanguage).toBeUndefined()
+        expect(generateTextMock.mock.calls.at(-1)![0].system).toContain('语言提示：en-US')
         expect(prompt.voices.length).toBeLessThanOrEqual(24)
         expect(prompt.voices.some((voice: any) => voice.l === 'en-US')).toBe(true)
         expect(prompt.voices.some((voice: any) => voice.l === 'ja-JP')).toBe(false)

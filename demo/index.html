@@ -986,8 +986,14 @@
         }
 
         const updateTTSFields = () => {
+            const isMimo = isMimoTTSProvider()
             ttsFields.style.display = ttsCheck.checked ? 'block' : 'none'
             ttsMultiSpeakerFields.style.display = ttsMultiSpeakerCheck.checked ? 'block' : 'none'
+            ttsVoiceInput.placeholder = isMimo ? 'Voice (Default: mimo_default)' : 'Voice (Default: zh-CN-XiaoyiNeural)'
+            ttsNarratorVoiceInput.placeholder = isMimo ? 'Narrator voice (Default: mimo_default)' : 'Narrator voice'
+            ttsMaleVoicesInput.style.display = isMimo ? 'none' : ''
+            ttsFemaleVoicesInput.style.display = isMimo ? 'none' : ''
+            ttsOtherVoiceInput.style.display = isMimo ? 'none' : ''
             updateTTSStatus()
         }
 
@@ -1005,7 +1011,9 @@
                 return
             }
             ttsStatus.textContent = currentBook?.tts
-                ? (ttsMultiSpeakerCheck.checked ? 'TTS ready with AI multi voice.' : 'TTS ready.')
+                ? (ttsMultiSpeakerCheck.checked
+                    ? (isMimoTTSProvider() ? 'TTS ready with AI role cards and MiMo voice clone.' : 'TTS ready with AI multi voice.')
+                    : 'TTS ready.')
                 : 'TTS plugin will apply after opening or reloading a book.'
         }
 
@@ -1062,7 +1070,7 @@
                 const ttsOptions = {
                     endpoint: ttsEndpointInput.value.trim() || defaultConfig.ttsEndpoint,
                     provider: ttsProviderInput.value.trim() || undefined,
-                    voice: ttsVoiceInput.value.trim() || undefined,
+                    voice: getTTSVoiceValue(),
                     rate: ttsRateInput.value.trim() || undefined,
                     maxSegmentChars: Number(ttsSegmentCharsInput.value) || Number(defaultConfig.ttsSegmentChars),
                     player: ttsPlayer,
@@ -1116,6 +1124,14 @@
         }
 
         function createTTSVoiceProfile() {
+            if (isMimoTTSProvider()) {
+                const narrator = normalizeMimoVoice(ttsNarratorVoiceInput.value || ttsVoiceInput.value)
+                return {
+                    narrator,
+                    unknown: narrator,
+                    other: narrator,
+                }
+            }
             return {
                 narrator: ttsNarratorVoiceInput.value.trim() || undefined,
                 male: splitVoiceList(ttsMaleVoicesInput.value),
@@ -1123,6 +1139,22 @@
                 other: ttsOtherVoiceInput.value.trim() || undefined,
                 unknown: ttsOtherVoiceInput.value.trim() || ttsNarratorVoiceInput.value.trim() || undefined,
             }
+        }
+
+        function isMimoTTSProvider() {
+            return (ttsProviderInput.value.trim() || defaultConfig.ttsProvider).toLowerCase() === 'mimo'
+        }
+
+        function getTTSVoiceValue() {
+            return isMimoTTSProvider()
+                ? normalizeMimoVoice(ttsVoiceInput.value)
+                : (ttsVoiceInput.value.trim() || undefined)
+        }
+
+        function normalizeMimoVoice(value, fallback = 'mimo_default') {
+            const voice = value.trim()
+            if (!voice || /Neural$/i.test(voice) || /^(?:zh|en)-[A-Z]{2}-/i.test(voice)) return fallback
+            return voice
         }
 
         function splitVoiceList(value) {
@@ -1609,7 +1641,7 @@
             const abortController = new AbortController()
             ttsAbortController = abortController
             const prefetchOptions = {
-                voice: ttsVoiceInput.value.trim() || undefined,
+                voice: getTTSVoiceValue(),
                 maxSegmentChars: Number(ttsSegmentCharsInput.value) || Number(defaultConfig.ttsSegmentChars),
                 provider: ttsProviderInput.value.trim() || undefined,
                 rate: ttsRateInput.value.trim() || undefined,
