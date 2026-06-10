@@ -497,6 +497,9 @@ await book.tts.playPrefetchedSection(prefetch, {
       className: 'tts-current',
     })
   },
+  onSegmentError: ({ segment, error }) => {
+    console.warn('Skipped TTS segment', segment.id, error)
+  },
 })
 ```
 
@@ -504,7 +507,48 @@ await book.tts.playPrefetchedSection(prefetch, {
 next segments can be generated while the current audio is playing.
 `createBrowserTTSAudioPlayer()` uses `AudioContext` scheduling when available
 and falls back to `HTMLAudioElement` playback. You can pass any object matching
-`TTSAudioPlayer` to `withTTS({ player })` for other runtimes.
+`TTSAudioPlayer` to `withTTS({ player })` for other runtimes. If one generated
+segment is missing or contains invalid audio, browser playback reports it through
+`onSegmentError` and continues with the next segment.
+
+For web-novel style multi-voice narration, pass the same AI SDK model shape used
+by `withTranslation()` and enable `multiSpeaker`. The AI analysis runs in the
+plugin with a compact offset-only output schema; the TTS backend still only needs
+to synthesize prepared segments. Speaker to voice assignments are remembered by
+the plugin, so the same character keeps the same voice across prepared sections.
+Narration uses `speakerId = 0`; inferred characters receive stable positive
+speaker ids that are sent back into later AI analysis requests. For providers
+without designed voices, the plugin caches the backend voice catalog and lets the
+model choose a voice for newly identified speakers; known speaker voice ids are
+reused in later requests.
+When the selected provider supports designed voices, such as `rebook-tts` with
+`provider: 'mimo'`, the plugin first plans recurring speakers as compact role
+cards, including gender, apparent age, occupation or identity, personality, and
+voice style, then runs compact text segmentation. The role card is sent as the
+voice design prompt for character segments; the backend can turn that role card
+into a reusable voice sample and synthesize dialogue with voice clone. Narration
+uses the provider's normal default voice. The frontend API stays the same: pass the provider, model, and
+`multiSpeaker: true`. Long-running models can be bounded with
+`speakerAnalysis: { timeoutMs }`; failures are surfaced through the analysis log
+hook and the replay scripts.
+
+```typescript
+import { openai } from '@ai-sdk/openai'
+
+withTTS({
+  endpoint: 'http://127.0.0.1:4177',
+  provider: 'edge',
+  model: openai('gpt-4o-mini'),
+  multiSpeaker: true,
+  voiceProfile: {
+    narrator: 'zh-CN-YunxiNeural',
+    male: ['zh-CN-YunjianNeural', 'zh-CN-YunxiNeural'],
+    female: ['zh-CN-XiaoyiNeural', 'zh-CN-XiaoxiaoNeural'],
+    other: 'zh-CN-XiaoxiaoNeural',
+  },
+  player: ttsPlayer,
+})
+```
 
 For advanced job management, use the lower-level job APIs directly:
 

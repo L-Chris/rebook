@@ -507,7 +507,7 @@
         </div>
         <div class="setting-row">
             <label>Debug</label>
-            <input type="checkbox" id="debug-check" checked>
+            <input type="checkbox" id="debug-check">
         </div>
         <div class="setting-row">
             <label>Trial</label>
@@ -578,6 +578,16 @@
                 <input type="text" id="tts-rate-input" value="+0%" placeholder="+0%" title="Speech rate, for example -10%, +20%">
             </div>
             <div class="setting-row">
+                <label>Multi voice</label>
+                <input type="checkbox" id="tts-multi-speaker-check" title="Use AI to split narration and character dialogue">
+            </div>
+            <div class="setting-stack" id="tts-multi-speaker-fields">
+                <input type="text" id="tts-narrator-voice-input" placeholder="Narrator voice">
+                <input type="text" id="tts-male-voices-input" placeholder="Male character voices, comma separated">
+                <input type="text" id="tts-female-voices-input" placeholder="Female character voices, comma separated">
+                <input type="text" id="tts-other-voice-input" placeholder="Other/unknown voice">
+            </div>
+            <div class="setting-row">
                 <label>Playback</label>
                 <div class="export-controls">
                     <button id="btn-tts-play" title="Speak current section">Speak</button>
@@ -609,7 +619,7 @@
             </div>
         </div>
 
-        <aside class="debug-panel" id="debug-panel">
+        <aside class="debug-panel hidden" id="debug-panel">
             <div class="debug-panel-inner">
                 <div class="debug-panel-header">
                     <span class="debug-panel-title">Debug</span>
@@ -709,6 +719,12 @@
         const ttsVoiceInput = document.getElementById('tts-voice-input')
         const ttsSegmentCharsInput = document.getElementById('tts-segment-chars-input')
         const ttsRateInput = document.getElementById('tts-rate-input')
+        const ttsMultiSpeakerCheck = document.getElementById('tts-multi-speaker-check')
+        const ttsMultiSpeakerFields = document.getElementById('tts-multi-speaker-fields')
+        const ttsNarratorVoiceInput = document.getElementById('tts-narrator-voice-input')
+        const ttsMaleVoicesInput = document.getElementById('tts-male-voices-input')
+        const ttsFemaleVoicesInput = document.getElementById('tts-female-voices-input')
+        const ttsOtherVoiceInput = document.getElementById('tts-other-voice-input')
         const btnTTSPlay = document.getElementById('btn-tts-play')
         const btnTTSStop = document.getElementById('btn-tts-stop')
         const ttsStatus = document.getElementById('tts-status')
@@ -721,7 +737,7 @@
         const btnDebugClose = document.getElementById('btn-debug-close')
         const debugLog = document.getElementById('debug-log')
 
-        setRebookDebug(true)
+        setRebookDebug(false)
 
         const CONFIG_KEY = 'rebook-demo-config'
         const MAX_DEBUG_ENTRIES = 160
@@ -731,7 +747,7 @@
             fontSize: '16px',
             theme: 'light',
             hyphenate: true,
-            debug: true,
+            debug: false,
             trial: false,
             trialPages: '20',
             exportSectionCount: '3',
@@ -749,6 +765,11 @@
             ttsVoice: 'zh-CN-XiaoyiNeural',
             ttsSegmentChars: '500',
             ttsRate: '+0%',
+            ttsMultiSpeaker: false,
+            ttsNarratorVoice: 'zh-CN-YunxiNeural',
+            ttsMaleVoices: 'zh-CN-YunjianNeural, zh-CN-YunxiNeural',
+            ttsFemaleVoices: 'zh-CN-XiaoyiNeural, zh-CN-XiaoxiaoNeural',
+            ttsOtherVoice: 'zh-CN-XiaoxiaoNeural',
         }
 
         let currentFile = null
@@ -778,6 +799,7 @@
                 fontSize: fontSizeSelect.value,
                 theme: themeSelect.value,
                 hyphenate: hyphenateCheck.checked,
+                debug: debugCheck.checked,
                 trial: trialCheck.checked,
                 trialPages: trialPagesInput.value,
                 exportSectionCount: exportSectionCount.value,
@@ -795,6 +817,11 @@
                 ttsVoice: ttsVoiceInput.value,
                 ttsSegmentChars: ttsSegmentCharsInput.value,
                 ttsRate: ttsRateInput.value,
+                ttsMultiSpeaker: ttsMultiSpeakerCheck.checked,
+                ttsNarratorVoice: ttsNarratorVoiceInput.value,
+                ttsMaleVoices: ttsMaleVoicesInput.value,
+                ttsFemaleVoices: ttsFemaleVoicesInput.value,
+                ttsOtherVoice: ttsOtherVoiceInput.value,
             }))
         }
 
@@ -804,7 +831,7 @@
             fontSizeSelect.value = config.fontSize
             themeSelect.value = config.theme
             hyphenateCheck.checked = config.hyphenate
-            debugCheck.checked = true
+            debugCheck.checked = !!config.debug
             setDebugEnabled(debugCheck.checked)
             trialCheck.checked = !!config.trial
             trialPagesInput.value = config.trialPages ?? defaultConfig.trialPages
@@ -823,6 +850,11 @@
             ttsVoiceInput.value = config.ttsVoice ?? defaultConfig.ttsVoice
             ttsSegmentCharsInput.value = config.ttsSegmentChars ?? defaultConfig.ttsSegmentChars
             ttsRateInput.value = config.ttsRate ?? defaultConfig.ttsRate
+            ttsMultiSpeakerCheck.checked = !!config.ttsMultiSpeaker
+            ttsNarratorVoiceInput.value = config.ttsNarratorVoice ?? defaultConfig.ttsNarratorVoice
+            ttsMaleVoicesInput.value = config.ttsMaleVoices ?? defaultConfig.ttsMaleVoices
+            ttsFemaleVoicesInput.value = config.ttsFemaleVoices ?? defaultConfig.ttsFemaleVoices
+            ttsOtherVoiceInput.value = config.ttsOtherVoice ?? defaultConfig.ttsOtherVoice
             updateTranslationFields()
             updateTTSFields()
             updateTrialFields()
@@ -894,14 +926,17 @@
 
         debugCheck.addEventListener('change', () => {
             setDebugEnabled(debugCheck.checked)
+            saveConfig()
         })
         btnDebugSidebar.addEventListener('click', () => {
             debugCheck.checked = !debugCheck.checked
             setDebugEnabled(debugCheck.checked)
+            saveConfig()
         })
         btnDebugClose.addEventListener('click', () => {
             debugCheck.checked = false
             setDebugEnabled(false)
+            saveConfig()
         })
         btnDebugCopy.addEventListener('click', () => {
             void copyDebugEntries()
@@ -952,6 +987,7 @@
 
         const updateTTSFields = () => {
             ttsFields.style.display = ttsCheck.checked ? 'block' : 'none'
+            ttsMultiSpeakerFields.style.display = ttsMultiSpeakerCheck.checked ? 'block' : 'none'
             updateTTSStatus()
         }
 
@@ -964,8 +1000,12 @@
                 ttsStatus.textContent = 'TTS plugin disabled.'
                 return
             }
+            if (ttsMultiSpeakerCheck.checked && (!apiKeyInput.value.trim() || !modelInput.value.trim())) {
+                ttsStatus.textContent = 'Multi voice TTS needs AI API key and model in the Translation panel.'
+                return
+            }
             ttsStatus.textContent = currentBook?.tts
-                ? 'TTS ready.'
+                ? (ttsMultiSpeakerCheck.checked ? 'TTS ready with AI multi voice.' : 'TTS ready.')
                 : 'TTS plugin will apply after opening or reloading a book.'
         }
 
@@ -992,16 +1032,9 @@
             }
             
             if (translateCheck.checked && apiKeyInput.value.trim()) {
-                const openaiOptions = { apiKey: apiKeyInput.value.trim() }
-                const baseUrl = baseUrlInput.value.trim()
-                if (baseUrl) {
-                    openaiOptions.baseURL = baseUrl
-                }
-                
-                const openai = createOpenAI(openaiOptions)
-                const modelName = modelInput.value.trim() || 'gpt-4o-mini'
+                const model = createAIModel()
                 const translationOptions = {
-                    model: openai.chat(modelName),
+                    model,
                     targetLanguage: 'zh-CN',
                     mode: () => translateModeSelect.value,
                     translateTOC: () => translateTocCheck.checked,
@@ -1026,13 +1059,24 @@
             }
 
             if (ttsCheck.checked) {
-                plugins.push(withTTS({
+                const ttsOptions = {
                     endpoint: ttsEndpointInput.value.trim() || defaultConfig.ttsEndpoint,
                     provider: ttsProviderInput.value.trim() || undefined,
                     voice: ttsVoiceInput.value.trim() || undefined,
                     rate: ttsRateInput.value.trim() || undefined,
                     maxSegmentChars: Number(ttsSegmentCharsInput.value) || Number(defaultConfig.ttsSegmentChars),
                     player: ttsPlayer,
+                }
+                if (ttsMultiSpeakerCheck.checked) {
+                    const model = createAIModel()
+                    if (model) {
+                        ttsOptions.model = model
+                        ttsOptions.multiSpeaker = true
+                        ttsOptions.voiceProfile = createTTSVoiceProfile()
+                    }
+                }
+                plugins.push(withTTS({
+                    ...ttsOptions,
                 }))
             }
 
@@ -1059,6 +1103,30 @@
                     margin: '32px',
                 },
             })
+        }
+
+        function createAIModel() {
+            const apiKey = apiKeyInput.value.trim()
+            if (!apiKey) return null
+            const openaiOptions = { apiKey }
+            const baseUrl = baseUrlInput.value.trim()
+            if (baseUrl) openaiOptions.baseURL = baseUrl
+            const openai = createOpenAI(openaiOptions)
+            return openai.chat(modelInput.value.trim() || 'gpt-4o-mini')
+        }
+
+        function createTTSVoiceProfile() {
+            return {
+                narrator: ttsNarratorVoiceInput.value.trim() || undefined,
+                male: splitVoiceList(ttsMaleVoicesInput.value),
+                female: splitVoiceList(ttsFemaleVoicesInput.value),
+                other: ttsOtherVoiceInput.value.trim() || undefined,
+                unknown: ttsOtherVoiceInput.value.trim() || ttsNarratorVoiceInput.value.trim() || undefined,
+            }
+        }
+
+        function splitVoiceList(value) {
+            return value.split(',').map(item => item.trim()).filter(Boolean)
         }
 
         reader = createDemoReader()
@@ -1485,8 +1553,20 @@
             recreateReader()
         })
 
-        ;[ttsEndpointInput, ttsProviderInput, ttsVoiceInput, ttsSegmentCharsInput, ttsRateInput].forEach(input => {
+        ;[
+            ttsEndpointInput,
+            ttsProviderInput,
+            ttsVoiceInput,
+            ttsSegmentCharsInput,
+            ttsRateInput,
+            ttsMultiSpeakerCheck,
+            ttsNarratorVoiceInput,
+            ttsMaleVoicesInput,
+            ttsFemaleVoicesInput,
+            ttsOtherVoiceInput,
+        ].forEach(input => {
             input.addEventListener('change', () => {
+                updateTTSFields()
                 saveConfig()
                 if (ttsCheck.checked) {
                     stopTTS()
@@ -1535,6 +1615,15 @@
                 rate: ttsRateInput.value.trim() || undefined,
                 concurrency: 2,
             }
+            if (ttsMultiSpeakerCheck.checked) {
+                const model = createAIModel()
+                if (!model) {
+                    throw new Error('Multi voice TTS needs AI API key and model in the Translation panel.')
+                }
+                prefetchOptions.model = model
+                prefetchOptions.multiSpeaker = true
+                prefetchOptions.voiceProfile = createTTSVoiceProfile()
+            }
             const prefetchCache = new Map()
             const playedSegmentIds = new Set()
             const getPrefetch = async (sectionIndex) => {
@@ -1563,6 +1652,10 @@
                         onSegmentStart: ({ segment, index, total }) => {
                             setTTSSegmentMark(segment)
                             updateTTSStatus(`Playing page audio ${index + 1}/${total}: ${segment.text.slice(0, 48)}`)
+                        },
+                        onSegmentError: ({ segment, index, total, error }) => {
+                            console.warn('TTS segment skipped:', segment.id, error)
+                            updateTTSStatus(`Skipped failed page audio ${index + 1}/${total}: ${segment.text.slice(0, 48)}`)
                         },
                     })
                     for (const segment of pagePrefetch.segments) playedSegmentIds.add(segment.id)
