@@ -20,6 +20,7 @@ export function getReadableBlocks(blocks: readonly TextBlock[], options: Readabl
     for (const block of blocks) {
         const readable = getReadableBlockText(block, options)
         if (!readable?.text) continue
+        if (!hasSpeakableText(readable.text)) continue
         readableBlocks.push({ block, readable })
     }
     return readableBlocks

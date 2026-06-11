@@ -26,6 +26,7 @@ const slayFixture = 'data/我在精神病院学斩神.epub'
 const itWithLolita = existsSync(lolitaFixture) ? it : it.skip
 const itWithSlayFixture = existsSync(slayFixture) ? it : it.skip
 const mockModel = {}
+const emptyScenePlanOutput = () => ({ output: { scenes: [] } })
 
 const blocks: TextBlock[] = [
     {
@@ -154,6 +155,45 @@ describe('TTS Plugin', () => {
         expect(segments[2].text).toBe('This is a section for speech synthesis.')
         expect(segments[2].startOffset).toBe(13)
         expect(segments[3].text).toBe('Term Meaning')
+    })
+
+    it('batches adjacent paragraph narrator segments with ranges while leaving headings separate', async () => {
+        const p1 = `${'甲'.repeat(45)}。`
+        const p2 = `${'乙'.repeat(45)}。`
+        const p3 = `${'丙'.repeat(12)}。`
+        const batchBook: Book = {
+            sections: [{
+                id: 'narrator-batch',
+                size: 100,
+                load: () => '',
+                getBlocks: async () => [
+                    { id: 'title', type: 'heading', segments: [{ text: '标题' }] },
+                    { id: 'p1', type: 'paragraph', segments: [{ text: p1 }] },
+                    { id: 'p2', type: 'paragraph', segments: [{ text: p2 }] },
+                    { id: 'p3', type: 'paragraph', segments: [{ text: p3 }] },
+                    { id: 'subtitle', type: 'heading', segments: [{ text: '小标题' }] },
+                    { id: 'p4', type: 'paragraph', segments: [{ text: '标题后的旁白。' }] },
+                ],
+            }],
+        }
+        const wrapped = withTTS({ fetch: vi.fn() as any })(batchBook) as TTSBook
+
+        const segments = await wrapped.tts.prepareSection(0, { maxSegmentChars: 500 })
+
+        expect(segments.map(segment => segment.blockId)).toEqual(['title', 'p1', 'p3', 'subtitle', 'p4'])
+        expect(segments[1]).toMatchObject({
+            blockId: 'p1',
+            blockType: 'paragraph',
+            text: p1 + p2,
+            ranges: [
+                { blockId: 'p1', blockType: 'paragraph', startOffset: 0, endOffset: p1.length },
+                { blockId: 'p2', blockType: 'paragraph', startOffset: 0, endOffset: p2.length },
+            ],
+        })
+        expect(segments[1].text.length).toBeLessThanOrEqual(100)
+        expect(segments[1].text.length + segments[2].text.length).toBeGreaterThan(100)
+        expect(segments[3]).toMatchObject({ blockId: 'subtitle', blockType: 'heading', text: '小标题' })
+        expect(segments[4].ranges).toBeUndefined()
     })
 
     it('sends synthesize requests to the configured backend', async () => {
@@ -441,6 +481,442 @@ describe('TTS Plugin', () => {
         expect(second.find(segment => segment.speaker === '赵空城')?.speakerId).toBe(3)
     })
 
+    it('filters punctuation-only blocks before multi-speaker analysis', async () => {
+        const punctBook: Book = {
+            sections: [{
+                id: 'punct-filter',
+                size: 100,
+                load: () => '',
+                getBlocks: async () => [
+                    {
+                        id: 'punct-only',
+                        type: 'paragraph',
+                        segments: [{ text: '......' }],
+                    },
+                    {
+                        id: 'speech',
+                        type: 'paragraph',
+                        segments: [{ text: '林七夜说道：“走。”' }],
+                    },
+                ],
+            }],
+        }
+        generateTextMock.mockResolvedValueOnce({
+            output: {
+                speakers: [{ i: 1, n: '林七夜', r: 'c', g: 1, v: 'male-voice' }],
+                assignments: [
+                    { b: 0, a: 0, i: 0 },
+                    { b: 0, a: 1, i: 1 },
+                ],
+            },
+        })
+        const wrapped = withTTS({
+            endpoint: 'http://tts.test',
+            provider: 'edge',
+            fetch: vi.fn(async () => new Response(JSON.stringify({ voices: [] }))) as any,
+            model: mockModel as any,
+        })(punctBook) as TTSBook
+
+        const segments = await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 80 })
+
+        expect(generateTextMock).toHaveBeenCalledTimes(1)
+        const prompt = JSON.parse(generateTextMock.mock.calls[0][0].prompt)
+        expect(prompt.blocks).toHaveLength(1)
+        expect(prompt.blocks[0].x).toBe('林七夜说道：“走。”')
+        expect(segments.map(segment => segment.blockId)).not.toContain('punct-only')
+        expect(segments.map(segment => segment.text)).toEqual(['林七夜说道：', '走。'])
+    })
+
+    it('skips sound-effect atoms marked by speaker analysis', async () => {
+        const soundBook: Book = {
+            sections: [{
+                id: 'sound-effect',
+                size: 100,
+                load: () => '',
+                getBlocks: async () => [{
+                    id: 'sound-effect-p1',
+                    type: 'paragraph',
+                    segments: [{ text: '滴滴滴——！' }],
+                }],
+            }],
+        }
+        generateTextMock.mockResolvedValueOnce({
+            output: {
+                speakers: [],
+                assignments: [{ b: 0, a: 0, i: 0, k: 's' }],
+            },
+        })
+        const wrapped = withTTS({
+            endpoint: 'http://tts.test',
+            provider: 'edge',
+            fetch: vi.fn(async () => new Response(JSON.stringify({ voices: [] }))) as any,
+            model: mockModel as any,
+        })(soundBook) as TTSBook
+
+        const segments = await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 80 })
+
+        expect(generateTextMock).toHaveBeenCalledTimes(1)
+        expect(outputObjectMock.mock.calls[0][0].schema.properties.assignments.items.properties.k.description)
+            .toContain('动物叫声')
+        expect(segments).toEqual([])
+    })
+
+    it('absorbs short speech cue narration into MiMo audio tags', async () => {
+        const text = '“姨妈，政府给残疾人的补贴就是用来生活的。”林七夜笑道。'
+        const cueBook: Book = {
+            sections: [{
+                id: 'speech-cue',
+                size: 100,
+                load: () => '',
+                getBlocks: async () => [{
+                    id: 'speech-cue-p1',
+                    type: 'paragraph',
+                    segments: [{ text }],
+                }],
+            }],
+        }
+        generateTextMock
+            .mockResolvedValueOnce(emptyScenePlanOutput())
+            .mockResolvedValueOnce({
+                output: [{
+                    i: 1,
+                    n: '林七夜',
+                    r: 'c',
+                    g: 1,
+                    a: '少年',
+                    o: '学生',
+                    p: '冷静克制',
+                    q: '清亮低沉，语速略慢',
+                    h: '林七夜笑道/说道时引用内容归他',
+                }],
+            })
+            .mockResolvedValueOnce({
+                output: {
+                    assignments: [
+                        { b: 0, a: 0, i: 1 },
+                        { b: 0, a: 1, i: 0, k: 'm', p: '轻笑' },
+                    ],
+                },
+            })
+        const wrapped = withTTS({
+            endpoint: 'http://tts.test',
+            provider: 'mimo',
+            fetch: vi.fn(async (url: string) => {
+                if (url.includes('/v1/tts/providers')) {
+                    return new Response(JSON.stringify({
+                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voiceDesign: true } }],
+                    }))
+                }
+                return new Response(JSON.stringify({ voices: [] }))
+            }) as any,
+            model: mockModel as any,
+        })(cueBook) as TTSBook
+
+        const segments = await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 80 })
+
+        expect(generateTextMock).toHaveBeenCalledTimes(3)
+        expect(generateTextMock.mock.calls[2][0].system).toContain('优先使用 MiMo 推荐音频标签')
+        expect(segments).toHaveLength(1)
+        expect(segments[0]).toMatchObject({
+            speakerId: 1,
+            speaker: '林七夜',
+            text: '（轻笑）姨妈，政府给残疾人的补贴就是用来生活的。',
+            stylePrompt: '轻笑',
+        })
+        expect(segments[0].voicePrompt).toContain('音色设计：清亮低沉，语速略慢')
+        expect(segments[0].voicePrompt).toContain('可听辨差异')
+        expect(segments[0].voicePrompt).toContain('同一角色必须一致')
+    })
+
+    it('keeps ordinary action narration even if the model marks it as a muted cue', async () => {
+        const text = '“怎么了？”阿诺注意到他的目光。'
+        const actionBook: Book = {
+            sections: [{
+                id: 'action-cue',
+                size: 100,
+                load: () => '',
+                getBlocks: async () => [{
+                    id: 'action-cue-p1',
+                    type: 'paragraph',
+                    segments: [{ text }],
+                }],
+            }],
+        }
+        generateTextMock.mockResolvedValueOnce({
+            output: {
+                speakers: [{ i: 1, n: '阿诺', r: 'c', g: 1, v: 'male-voice' }],
+                assignments: [
+                    { b: 0, a: 0, i: 1 },
+                    { b: 0, a: 1, i: 0, k: 'm' },
+                ],
+            },
+        })
+        const wrapped = withTTS({
+            endpoint: 'http://tts.test',
+            provider: 'edge',
+            fetch: vi.fn(async () => new Response(JSON.stringify({ voices: [] }))) as any,
+            model: mockModel as any,
+        })(actionBook) as TTSBook
+
+        const segments = await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 80 })
+
+        expect(segments.map(segment => ({
+            speaker: segment.speaker,
+            role: segment.speakerRole,
+            text: segment.text,
+        }))).toEqual([
+            { speaker: '阿诺', role: 'character', text: '怎么了？' },
+            { speaker: '旁白', role: 'narrator', text: '阿诺注意到他的目光。' },
+        ])
+    })
+
+    it('merges same-speaker dialogue separated only by a muted speech attribution', async () => {
+        const text = '“他不是盲人。”阿诺说道，“他一定看得见。”'
+        const mergeBook: Book = {
+            sections: [{
+                id: 'merge-cue',
+                size: 100,
+                load: () => '',
+                getBlocks: async () => [{
+                    id: 'merge-cue-p1',
+                    type: 'paragraph',
+                    segments: [{ text }],
+                }],
+            }],
+        }
+        generateTextMock.mockResolvedValueOnce({
+            output: {
+                speakers: [{ i: 1, n: '阿诺', r: 'c', g: 1, v: 'male-voice' }],
+                assignments: [
+                    { b: 0, a: 0, i: 1 },
+                    { b: 0, a: 1, i: 0, k: 'm' },
+                    { b: 0, a: 2, i: 1 },
+                ],
+            },
+        })
+        const wrapped = withTTS({
+            endpoint: 'http://tts.test',
+            provider: 'edge',
+            fetch: vi.fn(async () => new Response(JSON.stringify({ voices: [] }))) as any,
+            model: mockModel as any,
+        })(mergeBook) as TTSBook
+
+        const segments = await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 80 })
+
+        expect(segments).toHaveLength(1)
+        expect(segments[0]).toMatchObject({
+            speaker: '阿诺',
+            speakerId: 1,
+            speakerRole: 'character',
+            text: '他不是盲人。他一定看得见。',
+            voice: 'male-voice',
+        })
+    })
+
+    it('uses model-provided MiMo tags for pause and attribution cues', async () => {
+        const cueBook: Book = {
+            sections: [{
+                id: 'mimo-cue-tags',
+                size: 100,
+                load: () => '',
+                getBlocks: async () => [
+                    {
+                        id: 'pause-between',
+                        type: 'paragraph',
+                        segments: [{ text: '“不知道。”他顿了顿，“不过……听说是比那更离谱的事情。”' }],
+                    },
+                    {
+                        id: 'sigh-between',
+                        type: 'paragraph',
+                        segments: [{ text: '“是个苦命人。”阿诺叹了口气，“他叫什么名字？”' }],
+                    },
+                    {
+                        id: 'pause-before',
+                        type: 'paragraph',
+                        segments: [{ text: '李医生沉吟半晌，“你是不是改过名字？”' }],
+                    },
+                    {
+                        id: 'joking-before',
+                        type: 'paragraph',
+                        segments: [{ text: '李医生半开玩笑的说道，“就算你跟我说你是被太上老君拉进了炼丹炉里，我也会信的。”' }],
+                    },
+                    {
+                        id: 'apology-after',
+                        type: 'paragraph',
+                        segments: [{ text: '“不好意思。”李医生有些抱歉的开口。' }],
+                    },
+                ],
+            }],
+        }
+        generateTextMock
+            .mockResolvedValueOnce(emptyScenePlanOutput())
+            .mockResolvedValueOnce({
+                output: [{
+                    i: 1,
+                    n: '李医生',
+                    r: 'c',
+                    g: 1,
+                    a: '年轻',
+                    o: '医生',
+                    p: '温和礼貌',
+                    q: '斯文温和',
+                }],
+            })
+            .mockResolvedValueOnce({
+                output: {
+                    assignments: [
+                        { b: 0, a: 0, i: 1 },
+                        { b: 0, a: 1, i: 0, k: 'm', p: '沉默片刻' },
+                        { b: 0, a: 2, i: 1 },
+                        { b: 1, a: 0, i: 1 },
+                        { b: 1, a: 1, i: 0, k: 'm', p: '叹气' },
+                        { b: 1, a: 2, i: 1 },
+                        { b: 2, a: 0, i: 0, k: 'm', p: '沉默片刻' },
+                        { b: 2, a: 1, i: 1 },
+                        { b: 3, a: 0, i: 0, k: 'm', p: '俏皮' },
+                        { b: 3, a: 1, i: 1 },
+                        { b: 4, a: 0, i: 1 },
+                        { b: 4, a: 1, i: 0, k: 'm', p: '愧疚' },
+                    ],
+                },
+            })
+        const wrapped = withTTS({
+            endpoint: 'http://tts.test',
+            provider: 'mimo',
+            fetch: vi.fn(async (url: string) => {
+                if (url.includes('/v1/tts/providers')) {
+                    return new Response(JSON.stringify({
+                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voiceDesign: true } }],
+                    }))
+                }
+                return new Response(JSON.stringify({ voices: [] }))
+            }) as any,
+            model: mockModel as any,
+        })(cueBook) as TTSBook
+
+        const segments = await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 120 })
+
+        expect(segments.map(segment => ({
+            blockId: segment.blockId,
+            text: segment.text,
+            stylePrompt: segment.stylePrompt,
+        }))).toEqual([
+            {
+                blockId: 'pause-between',
+                text: '不知道。（沉默片刻）不过……听说是比那更离谱的事情。',
+                stylePrompt: '沉默片刻',
+            },
+            {
+                blockId: 'sigh-between',
+                text: '是个苦命人。（叹气）他叫什么名字？',
+                stylePrompt: '叹气',
+            },
+            {
+                blockId: 'pause-before',
+                text: '（沉默片刻）你是不是改过名字？',
+                stylePrompt: '沉默片刻',
+            },
+            {
+                blockId: 'joking-before',
+                text: '（俏皮）就算你跟我说你是被太上老君拉进了炼丹炉里，我也会信的。',
+                stylePrompt: '俏皮',
+            },
+            {
+                blockId: 'apology-after',
+                text: '（愧疚）不好意思。',
+                stylePrompt: '愧疚',
+            },
+        ])
+    })
+
+    it('repairs styled dialogue when an adjacent attribution cue was left spoken', async () => {
+        const text = '“是个苦命人。”阿诺叹了口气，“他叫什么名字？”'
+        const cueBook: Book = {
+            sections: [{
+                id: 'styled-cue-repair',
+                size: 100,
+                load: () => '',
+                getBlocks: async () => [{
+                    id: 'styled-cue-repair-p1',
+                    type: 'paragraph',
+                    segments: [{ text }],
+                }],
+            }],
+        }
+        generateTextMock
+            .mockResolvedValueOnce(emptyScenePlanOutput())
+            .mockResolvedValueOnce({
+                output: [{
+                    i: 1,
+                    n: '阿诺',
+                    r: 'c',
+                    g: 1,
+                    a: '青年',
+                    p: '随性好奇',
+                    q: '清亮偏年轻，语速中等略快',
+                }],
+            })
+            .mockResolvedValueOnce({
+                output: {
+                    assignments: [
+                        { b: 0, a: 0, i: 1, p: '叹气' },
+                        { b: 0, a: 1, i: 0 },
+                        { b: 0, a: 2, i: 1 },
+                    ],
+                },
+            })
+            .mockImplementationOnce(async (options: any) => {
+                const body = JSON.parse(options.prompt)
+                expect(body.blocks).toEqual([expect.objectContaining({
+                    b: 0,
+                    x: text,
+                    u: [
+                        expect.objectContaining({ a: 0, q: 1 }),
+                        expect.objectContaining({ a: 1, x: '阿诺叹了口气，' }),
+                        expect.objectContaining({ a: 2, q: 1 }),
+                    ],
+                })])
+                expect(options.system).toContain('p 不能替代 k=m')
+                return {
+                    output: {
+                        assignments: [
+                            { b: 0, a: 0, i: 1 },
+                            { b: 0, a: 1, i: 0, k: 'm', p: '叹气' },
+                            { b: 0, a: 2, i: 1 },
+                        ],
+                    },
+                }
+            })
+        const wrapped = withTTS({
+            endpoint: 'http://tts.test',
+            provider: 'mimo',
+            fetch: vi.fn(async (url: string) => {
+                if (url.includes('/v1/tts/providers')) {
+                    return new Response(JSON.stringify({
+                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voiceDesign: true } }],
+                    }))
+                }
+                return new Response(JSON.stringify({ voices: [] }))
+            }) as any,
+            model: mockModel as any,
+        })(cueBook) as TTSBook
+
+        const segments = await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 120 })
+
+        expect(generateTextMock).toHaveBeenCalledTimes(4)
+        expect(segments.map(segment => ({
+            blockId: segment.blockId,
+            speaker: segment.speaker,
+            text: segment.text,
+            stylePrompt: segment.stylePrompt,
+        }))).toEqual([{
+            blockId: 'styled-cue-repair-p1',
+            speaker: '阿诺',
+            text: '是个苦命人。（叹气）他叫什么名字？',
+            stylePrompt: '叹气',
+        }])
+    })
+
     it('keeps MiMo voice design role cards consistent by speaker id', async () => {
         const firstText = '他说：“别动。”夜色很深。'
         const secondText = '林七夜说道：“跟上我。”'
@@ -468,9 +944,10 @@ describe('TTS Plugin', () => {
                 },
             ],
         }
-        const expectedRoleCard = '角色：林七夜；性别：男；年龄：少年；身份/职业：盲眼学生；性格/气质：冷静克制，敏锐；声线/表演：清亮低沉，语速略慢'
         const expectedSpeakerHint = '林七夜=盲眼少年；林七夜说道/问道时引用内容归他；别人谈论林七夜不代表他说话'
+        const expectedRoleCard = `角色：林七夜，男性；年龄感：少年；身份：盲眼学生；性格底色：冷静克制，敏锐 场景：小说多人对白配音；识别上下文：${expectedSpeakerHint} 音色：音色设计：清亮低沉，语速略慢；如果原文声音信息不足，可基于角色年龄、身份和性格合理补足音色质感；必须和同篇章其他核心角色保持可听辨差异 指导：保持男性声线，不要贴近旁白默认音色；语速、停顿、能量和口吻要稳定，后续同一角色必须一致`
         generateTextMock
+            .mockResolvedValueOnce(emptyScenePlanOutput())
             .mockResolvedValueOnce({
                 output: [{
                     i: 1,
@@ -493,6 +970,7 @@ describe('TTS Plugin', () => {
                     ],
                 },
             })
+            .mockResolvedValueOnce(emptyScenePlanOutput())
             .mockResolvedValueOnce({
                 output: [],
             })
@@ -526,21 +1004,31 @@ describe('TTS Plugin', () => {
         const first = await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 80 })
         const second = await wrapped.tts.prepareSection(1, { multiSpeaker: true, maxSegmentChars: 80 })
 
-        expect(generateTextMock).toHaveBeenCalledTimes(4)
-        const firstPlanPrompt = JSON.parse(generateTextMock.mock.calls[0][0].prompt)
-        const firstSegmentPrompt = JSON.parse(generateTextMock.mock.calls[1][0].prompt)
-        const secondPlanPrompt = JSON.parse(generateTextMock.mock.calls[2][0].prompt)
-        const secondSegmentPrompt = JSON.parse(generateTextMock.mock.calls[3][0].prompt)
+        expect(generateTextMock).toHaveBeenCalledTimes(6)
+        const firstScenePrompt = JSON.parse(generateTextMock.mock.calls[0][0].prompt)
+        const firstPlanPrompt = JSON.parse(generateTextMock.mock.calls[1][0].prompt)
+        const firstSegmentPrompt = JSON.parse(generateTextMock.mock.calls[2][0].prompt)
+        const secondScenePrompt = JSON.parse(generateTextMock.mock.calls[3][0].prompt)
+        const secondPlanPrompt = JSON.parse(generateTextMock.mock.calls[4][0].prompt)
+        const secondSegmentPrompt = JSON.parse(generateTextMock.mock.calls[5][0].prompt)
+        expect(generateTextMock.mock.calls[0][0].system).toContain('场景规划阶段')
+        expect(firstScenePrompt.blocks[0].u).toBeUndefined()
         expect(firstPlanPrompt.voiceDesign).toBeUndefined()
         expect(firstPlanPrompt.voices).toBeUndefined()
         expect(firstPlanPrompt.nextSpeakerId).toBe(1)
-        expect(generateTextMock.mock.calls[0][0].system).toContain('角色规划和语音规划引擎')
-        expect(generateTextMock.mock.calls[1][0].system).toContain('当前是角色设计后的文本解析阶段')
+        expect(generateTextMock.mock.calls[1][0].system).toContain('角色规划和语音规划引擎')
+        expect(generateTextMock.mock.calls[1][0].system).toContain('音色/质感、语速/节奏、音高/能量、口吻/表演')
+        expect(generateTextMock.mock.calls[1][0].system).toContain('原文描述不多')
+        expect(generateTextMock.mock.calls[1][0].system).toContain('核心角色的 g 必须稳定')
+        expect(generateTextMock.mock.calls[1][0].system).toContain('避免互相冲突')
+        expect(generateTextMock.mock.calls[2][0].system).toContain('当前是角色设计后的文本解析阶段')
+        expect(secondScenePrompt.blocks[0].u).toBeUndefined()
         expect(firstSegmentPrompt.nextSpeakerId).toBeUndefined()
         expect(firstSegmentPrompt.voices).toBeUndefined()
         expect(outputArrayMock.mock.calls[0][0].element.required).toEqual(['i', 'n', 'r', 'g'])
-        expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['assignments'])
-        expect(outputObjectMock.mock.calls[0][0].schema.properties.speakers).toBeUndefined()
+        expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['scenes'])
+        expect(outputObjectMock.mock.calls[1][0].schema.required).toEqual(['assignments'])
+        expect(outputObjectMock.mock.calls[1][0].schema.properties.speakers).toBeUndefined()
         expect(firstSegmentPrompt.knownSpeakers).toEqual(expect.arrayContaining([
             expect.objectContaining({ i: 1, n: '林七夜', h: expectedSpeakerHint }),
         ]))
@@ -584,8 +1072,9 @@ describe('TTS Plugin', () => {
                 }],
             }],
         }
-        const expectedRoleCard = '角色：林七夜；性别：男；年龄：青年；身份/职业：学生；性格/气质：冷静克制；声线/表演：嗓音清亮'
+        const expectedRoleCard = '角色：林七夜，男性；年龄感：青年；身份：学生；性格底色：冷静克制 场景：小说多人对白配音；需要和旁白及其他角色形成清晰区分。 音色：音色设计：嗓音清亮；如果原文声音信息不足，可基于角色年龄、身份和性格合理补足音色质感；必须和同篇章其他核心角色保持可听辨差异 指导：保持男性声线，不要贴近旁白默认音色；语速、停顿、能量和口吻要稳定，后续同一角色必须一致'
         generateTextMock
+            .mockResolvedValueOnce(emptyScenePlanOutput())
             .mockResolvedValueOnce({
                 output: [{
                     i: 1,
@@ -634,22 +1123,27 @@ describe('TTS Plugin', () => {
 
         const segments = await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 80 })
 
-        expect(generateTextMock).toHaveBeenCalledTimes(2)
-        const planPrompt = JSON.parse(generateTextMock.mock.calls[0][0].prompt)
-        const segmentPrompt = JSON.parse(generateTextMock.mock.calls[1][0].prompt)
+        expect(generateTextMock).toHaveBeenCalledTimes(3)
+        const scenePrompt = JSON.parse(generateTextMock.mock.calls[0][0].prompt)
+        const planPrompt = JSON.parse(generateTextMock.mock.calls[1][0].prompt)
+        const segmentPrompt = JSON.parse(generateTextMock.mock.calls[2][0].prompt)
+        expect(scenePrompt.blocks[0].u).toBeUndefined()
         expect(planPrompt.voiceDesign).toBeUndefined()
         expect(planPrompt.voices).toBeUndefined()
         expect(planPrompt.blocks[0].u).toBeUndefined()
-        expect(generateTextMock.mock.calls[0][0].system).toContain('角色规划和语音规划引擎')
-        expect(generateTextMock.mock.calls[1][0].system).toContain('当前是角色设计后的文本解析阶段')
+        expect(generateTextMock.mock.calls[0][0].system).toContain('场景规划阶段')
+        expect(generateTextMock.mock.calls[1][0].system).toContain('角色规划和语音规划引擎')
+        expect(generateTextMock.mock.calls[2][0].system).toContain('当前是角色设计后的文本解析阶段')
         expect(segmentPrompt.voices).toBeUndefined()
         expect(segmentPrompt.blocks[0].u).toEqual([
             expect.objectContaining({ a: 0 }),
             expect.objectContaining({ a: 1, q: 1 }),
         ])
         expect(outputArrayMock.mock.calls[0][0].element.required).toEqual(['i', 'n', 'r', 'g'])
-        expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['assignments'])
-        expect(outputObjectMock.mock.calls[0][0].schema.properties.speakers).toBeUndefined()
+        expect(outputArrayMock.mock.calls[0][0].element.properties.q.description).toContain('音色/质感')
+        expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['scenes'])
+        expect(outputObjectMock.mock.calls[1][0].schema.required).toEqual(['assignments'])
+        expect(outputObjectMock.mock.calls[1][0].schema.properties.speakers).toBeUndefined()
         expect(segmentPrompt.knownSpeakers).toEqual(expect.arrayContaining([
             expect.objectContaining({ i: 1, n: '林七夜', r: 'c', g: 1 }),
         ]))
@@ -659,6 +1153,95 @@ describe('TTS Plugin', () => {
             voicePrompt: expectedRoleCard,
         })
         expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/v1/tts/voices'))).toBe(false)
+    })
+
+    it('uses scene planning to guide speaker planning and voice design cards', async () => {
+        const text = '教室里一片吵闹。“老师来了！”一个同学喊道。'
+        const sceneBook: Book = {
+            sections: [{
+                id: 'scene-context',
+                size: 100,
+                load: () => '',
+                getBlocks: async () => [{
+                    id: 'scene-context-p1',
+                    type: 'paragraph',
+                    segments: [{ text }],
+                }],
+            }],
+        }
+        generateTextMock
+            .mockResolvedValueOnce({
+                output: {
+                    scenes: [{
+                        i: 1,
+                        n: '高中教室',
+                        b: [0],
+                        loc: '教室',
+                        a: '课前嘈杂',
+                        c: '高中学生为主',
+                        q: '匿名同学多为少年/少女音，语速自然偏快，口吻带课堂里的随意和紧张',
+                        h: '教室里吵闹，同学提醒老师来了',
+                        fx: ['教室嘈杂'],
+                    }],
+                },
+            })
+            .mockResolvedValueOnce({
+                output: [{
+                    i: 1,
+                    n: '喊话同学',
+                    r: 'c',
+                    g: 0,
+                    a: '高中生',
+                    o: '学生',
+                    p: '提醒众人，语气急促',
+                    q: '偏亮的学生声线，语速快，声音清晰但带一点紧张',
+                    h: '高中教室场景中喊“老师来了”的同学',
+                    s: [1],
+                }],
+            })
+            .mockResolvedValueOnce({
+                output: {
+                    assignments: [
+                        { b: 0, a: 0, i: 0 },
+                        { b: 0, a: 1, i: 1 },
+                        { b: 0, a: 2, i: 0, k: 'm', p: '紧张' },
+                    ],
+                },
+            })
+        const wrapped = withTTS({
+            endpoint: 'http://tts.test',
+            provider: 'mimo',
+            fetch: vi.fn(async (url: string) => {
+                if (url.includes('/v1/tts/providers')) {
+                    return new Response(JSON.stringify({
+                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voiceDesign: true } }],
+                    }))
+                }
+                return new Response(JSON.stringify({}))
+            }) as any,
+            model: mockModel as any,
+        })(sceneBook) as TTSBook
+
+        const segments = await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 120 })
+
+        const scenePrompt = JSON.parse(generateTextMock.mock.calls[0][0].prompt)
+        const speakerPrompt = JSON.parse(generateTextMock.mock.calls[1][0].prompt)
+        const analysisPrompt = JSON.parse(generateTextMock.mock.calls[2][0].prompt)
+        expect(generateTextMock.mock.calls[0][0].system).toContain('场景规划阶段')
+        expect(scenePrompt.blocks[0].u).toBeUndefined()
+        expect(speakerPrompt.knownScenes).toEqual([expect.objectContaining({ i: 1, n: '高中教室', c: '高中学生为主' })])
+        expect(speakerPrompt.blocks[0].s).toBe(1)
+        expect(analysisPrompt.knownScenes).toEqual([expect.objectContaining({ i: 1, n: '高中教室' })])
+        expect(analysisPrompt.blocks[0].s).toBe(1)
+        expect(segments.find(segment => segment.speakerId === 1)).toMatchObject({
+            speaker: '喊话同学',
+            text: '（紧张）老师来了！',
+            stylePrompt: '紧张',
+        })
+        expect(segments.find(segment => segment.speakerId === 1)?.voicePrompt).toContain('相关场景：高中教室')
+        expect(segments.find(segment => segment.speakerId === 1)?.voicePrompt).toContain('默认人群=高中学生为主')
+        expect(segments.find(segment => segment.speakerId === 1)?.voicePrompt).toContain('场景声音约束(高中教室)')
+        expect(segments.find(segment => segment.speakerId === 1)?.voicePrompt).toContain('匿名同学多为少年/少女音')
     })
 
     it('uses phase-specific models for voice design speaker analysis', async () => {
@@ -679,6 +1262,7 @@ describe('TTS Plugin', () => {
         const initialModel = { phase: 'initial' }
         const repairModel = { phase: 'repair' }
         generateTextMock
+            .mockResolvedValueOnce(emptyScenePlanOutput())
             .mockResolvedValueOnce({
                 output: [{ i: 1, n: '林七夜', r: 'c', g: 1 }],
             })
@@ -722,10 +1306,11 @@ describe('TTS Plugin', () => {
 
         await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 80 })
 
-        expect(generateTextMock).toHaveBeenCalledTimes(3)
+        expect(generateTextMock).toHaveBeenCalledTimes(4)
         expect(generateTextMock.mock.calls[0][0].model).toBe(planModel)
-        expect(generateTextMock.mock.calls[1][0].model).toBe(initialModel)
-        expect(generateTextMock.mock.calls[2][0].model).toBe(repairModel)
+        expect(generateTextMock.mock.calls[1][0].model).toBe(planModel)
+        expect(generateTextMock.mock.calls[2][0].model).toBe(initialModel)
+        expect(generateTextMock.mock.calls[3][0].model).toBe(repairModel)
     })
 
     it('repairs mixed AI blocks that were assigned to one speaker', async () => {
@@ -1030,6 +1615,7 @@ describe('TTS Plugin', () => {
         expect(generateTextMock).toHaveBeenCalledTimes(1)
         const systemPrompt = generateTextMock.mock.calls[0][0].system
         expect(systemPrompt).toContain('任何引号外可读的旁白、动作或发言归属文本都必须是 i=0')
+        expect(systemPrompt).toContain('引号内不一定是对白')
         expect(outputObjectMock.mock.calls[0][0].schema.properties.assignments.items.properties.c.description)
             .toContain('仅当置信度 <= 0.8')
         expect(generateTextMock.mock.calls[0][0].timeout).toEqual({ totalMs: 12345 })

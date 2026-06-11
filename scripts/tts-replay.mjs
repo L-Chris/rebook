@@ -143,6 +143,7 @@ export function analyzeReplay(request, response, options = {}) {
             e: atom.e,
             i: block?.m === 1 && atom.q !== 1 ? 0 : segment.i,
             c: isFiniteNumber(segment.c) ? segment.c : undefined,
+            k: segment.k === 's' || segment.k === 'm' ? segment.k : undefined,
         })
     })
 
@@ -193,7 +194,7 @@ export function analyzeReplay(request, response, options = {}) {
         }
         const start = clamp(segment.s, 0, block.x.length)
         const end = clamp(Math.max(segment.e, start), 0, block.x.length)
-        if (hasSpeakableText(block.x.slice(start, end)) && end - start <= options.tinyChars) {
+        if (!isMutedSegment(segment) && hasSpeakableText(block.x.slice(start, end)) && end - start <= options.tinyChars) {
             counters.tinySegmentCount += 1
             pushExample(examples.tinySegments, options, {
                 b: segment.b,
@@ -215,7 +216,7 @@ export function analyzeReplay(request, response, options = {}) {
             const segment = list[index]
             const start = clamp(segment.s, 0, block.x.length)
             const end = clamp(Math.max(segment.e, start), 0, block.x.length)
-            if (hasSpeakableText(block.x.slice(start, end))) speakerIds.add(normalizeSpeakerId(segment.i))
+            if (!isMutedSegment(segment) && hasSpeakableText(block.x.slice(start, end))) speakerIds.add(normalizeSpeakerId(segment.i))
             if (start < cursor) {
                 counters.overlapCount += 1
                 pushExample(examples.overlaps, options, {
@@ -241,7 +242,7 @@ export function analyzeReplay(request, response, options = {}) {
                 }
             }
             const next = list[index + 1]
-            if (next) addAdjacentSameSpeakerFinding(block, segment, next, counters, examples, options)
+            if (next && !isMutedSegment(segment) && !isMutedSegment(next)) addAdjacentSameSpeakerFinding(block, segment, next, counters, examples, options)
             cursor = Math.max(cursor, end)
         }
         if (cursor < block.x.length) {
@@ -258,7 +259,7 @@ export function analyzeReplay(request, response, options = {}) {
                 })
             }
         }
-        if (isLikelyMixedNarrationDialogue(block.x) && speakerIds.size <= 1) {
+        if (isLikelyMixedNarrationDialogue(block.x) && speakerIds.size <= 1 && hasRequiredSpokenNarration(block, list)) {
             counters.mixedSingleSpeakerCount += 1
             pushExample(examples.mixedSingleSpeaker, options, {
                 b: block.b,
@@ -354,6 +355,22 @@ function isFiniteNumber(value) {
 
 function normalizeSpeakerId(value) {
     return isFiniteNumber(value) ? Math.max(0, Math.floor(value)) : undefined
+}
+
+function isMutedSegment(segment) {
+    return segment?.k === 's' || segment?.k === 'm'
+}
+
+function hasRequiredSpokenNarration(block, segments) {
+    const muted = segments.filter(isMutedSegment)
+    for (const atom of block.u ?? []) {
+        if (atom?.q === 1) continue
+        const text = block.x.slice(atom.s, atom.e)
+        if (!hasSpeakableText(text)) continue
+        if (muted.some(segment => segment.s <= atom.s && segment.e >= atom.e)) continue
+        return true
+    }
+    return false
 }
 
 function clamp(value, min, max) {

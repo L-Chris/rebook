@@ -6,6 +6,8 @@ export interface TTSCompactSpeakerAttribution {
     a: number
     i: number
     c?: number
+    k?: 's' | 'm'
+    p?: string
 }
 
 export interface TTSCompactSpeakerAnalysisSegment {
@@ -14,6 +16,8 @@ export interface TTSCompactSpeakerAnalysisSegment {
     e: number
     i: number
     c?: number
+    k?: 's' | 'm'
+    p?: string
 }
 
 export interface TTSCompactSpeakerAnalysisOutput {
@@ -30,11 +34,28 @@ export interface TTSCompactSpeakerPlan {
     speakers: readonly TTSCompactSpeakerInfo[]
 }
 
+export interface TTSCompactScenePlan {
+    scenes: readonly TTSCompactSceneInfo[]
+}
+
+export interface TTSCompactSceneInfo {
+    i: number
+    n: string
+    b?: readonly number[]
+    loc?: string
+    a?: string
+    c?: string
+    q?: string
+    h?: string
+    fx?: readonly string[]
+}
+
 export interface TTSCompactSpeakerAnalysisBlock {
     b: number
     t: TextBlock['type']
     l: number
     x: string
+    s?: number
     m?: 1
     u?: readonly TTSCompactSpeakerAtom[]
 }
@@ -59,6 +80,7 @@ export interface TTSCompactSpeakerInfo {
     p?: string
     q?: string
     h?: string
+    s?: readonly number[]
 }
 
 export interface TTSCompactVoice {
@@ -78,6 +100,7 @@ export interface TTSCompactSpeakerAnalysisRequest {
     voices?: readonly TTSCompactVoice[]
     blocks: readonly TTSCompactSpeakerAnalysisBlock[]
     knownSpeakers: readonly TTSCompactKnownSpeaker[]
+    knownScenes?: readonly TTSCompactSceneInfo[]
     voiceDesign?: 1
 }
 
@@ -86,9 +109,47 @@ export interface TTSCompactSpeakerModelRequest {
     voices?: readonly TTSCompactVoice[]
     blocks: readonly TTSCompactSpeakerAnalysisBlock[]
     knownSpeakers: readonly TTSCompactKnownSpeaker[]
+    knownScenes?: readonly TTSCompactSceneInfo[]
 }
 
-export type TTSCompactSpeakerModelRequestKind = 'plan' | 'initial' | 'repair'
+export type TTSCompactSpeakerModelRequestKind = 'scene' | 'plan' | 'initial' | 'repair'
+
+export const scenePlanSchema = {
+    type: 'object',
+    description: '小说 TTS 场景规划；输出 scenes，每个 scene 内用 b 数组列出所属 block id，暂不生成实际音效。',
+    properties: {
+        scenes: {
+            type: 'array',
+            description: '稳定场景列表；用于角色规划、说话人归属和声音设计上下文。',
+            items: {
+                type: 'object',
+                properties: {
+                    i: { type: 'number', description: 'scene id；从 1 开始递增。' },
+                    n: { type: 'string', description: '短场景名，如 高中教室、医院诊室、街道路口。' },
+                    b: {
+                        type: 'array',
+                        description: '属于该场景的 block id 数组；元素来自输入 blocks[].b，只输出能判断场景的 block。',
+                        items: { type: 'number' },
+                    },
+                    loc: { type: 'string', maxLength: 80, description: '地点或空间。' },
+                    a: { type: 'string', maxLength: 120, description: '场景氛围，如 嘈杂、安静、紧张。' },
+                    c: { type: 'string', maxLength: 160, description: '默认人群画像，如 高中学生、医生和病人、路边小年轻。' },
+                    q: { type: 'string', maxLength: 220, description: '场景内默认声音设计约束，特别是匿名/路人角色的年龄、身份、语速和辨识度。' },
+                    h: { type: 'string', maxLength: 220, description: '场景识别线索和边界。' },
+                    fx: {
+                        type: 'array',
+                        description: '可选效果音意图，暂不播放，仅为后续预留。',
+                        items: { type: 'string', maxLength: 40 },
+                    },
+                },
+                required: ['i', 'n', 'b'],
+                additionalProperties: false,
+            },
+        },
+    },
+    required: ['scenes'],
+    additionalProperties: false,
+} as const
 
 export const speakerAnalysisSchema = {
     type: 'object',
@@ -104,6 +165,8 @@ export const speakerAnalysisSchema = {
                     a: { type: 'number', description: 'atom id，对应该 block 的 u[].a。' },
                     i: { type: 'number', description: 'speaker id；旁白使用 0。' },
                     c: { type: 'number', description: 'confidence；仅当置信度 <= 0.8 或分配不确定时输出。' },
+                    k: { type: 'string', enum: ['s', 'm'], description: '可选静音类型：s=拟声词/动物叫声/环境音/效果音；m=只用于表演提示的发言归属短语，不朗读。如果 p 来自该归属原子，必须输出 k=m。' },
+                    p: { type: 'string', maxLength: 24, description: '可选短表演标签，如 轻笑、低声、叹气；仅在文本有明确证据时输出。' },
                 },
                 required: ['b', 'a', 'i'],
                 additionalProperties: false,
@@ -145,6 +208,8 @@ export const voiceDesignSpeakerAnalysisSchema = {
                     a: { type: 'number', description: 'atom id，对应该 block 的 u[].a。' },
                     i: { type: 'number', description: 'speaker id；必须来自 knownSpeakers，旁白使用 0。' },
                     c: { type: 'number', description: 'confidence；仅当置信度 <= 0.8 或分配不确定时输出。' },
+                    k: { type: 'string', enum: ['s', 'm'], description: '可选静音类型：s=拟声词/动物叫声/环境音/效果音；m=只用于表演提示的发言归属短语，不朗读。如果 p 来自该归属原子，必须输出 k=m。' },
+                    p: { type: 'string', maxLength: 24, description: '可选短表演标签，如 轻笑、低声、叹气；仅在文本有明确证据时输出。' },
                 },
                 required: ['b', 'a', 'i'],
                 additionalProperties: false,
@@ -166,8 +231,13 @@ export const speakerPlanItemSchema = {
         a: { type: 'string', maxLength: 80, description: '年龄或年龄感。' },
         o: { type: 'string', maxLength: 120, description: '职业、身份或社会角色。' },
         p: { type: 'string', maxLength: 160, description: '性格、气质和行为特征。' },
-        q: { type: 'string', maxLength: 160, description: '声音与表演风格，用于生成角色卡。' },
+        q: { type: 'string', maxLength: 220, description: '声音设计短语；覆盖音色/质感、语速/节奏、音高/能量、口吻/表演，核心角色要有清晰辨识度。' },
         h: { type: 'string', maxLength: 260, description: '说话人识别线索/上下文，不是声音风格。' },
+        s: {
+            type: 'array',
+            description: '角色主要出现或用于推断身份的 scene id；来自 knownScenes。',
+            items: { type: 'number' },
+        },
     },
     required: ['i', 'n', 'r', 'g'],
     additionalProperties: false,

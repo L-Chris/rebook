@@ -45,6 +45,16 @@ describe('tts replay script', () => {
                                 x: '他继续向前走。',
                                 u: [{ a: 0, s: 0, e: 7, x: '他继续向前走。' }],
                             },
+                            {
+                                b: 3,
+                                t: 'paragraph',
+                                x: '“走。”林七夜笑道。',
+                                m: 1,
+                                u: [
+                                    { a: 0, s: 1, e: 3, x: '走。', q: 1 },
+                                    { a: 1, s: 4, e: 10, x: '林七夜笑道。' },
+                                ],
+                            },
                         ],
                     }),
                 }],
@@ -55,6 +65,8 @@ describe('tts replay script', () => {
                     { b: 0, a: 0, i: 1 },
                     { b: 1, a: 0, i: 0 },
                     { b: 2, a: 0, i: 0 },
+                    { b: 3, a: 0, i: 1, p: '轻笑' },
+                    { b: 3, a: 1, i: 0, k: 'm' },
                     { b: 99, a: 0, i: 0 },
                 ],
             }))
@@ -67,12 +79,13 @@ describe('tts replay script', () => {
             ])
             const report = JSON.parse(stdout)
 
-            expect(report.summary.blocks).toBe(3)
+            expect(report.summary.blocks).toBe(4)
             expect(report.summary.gapCount).toBe(1)
             expect(report.summary.tailGapCount).toBe(1)
             expect(report.summary.invalidSegmentCount).toBe(1)
             expect(report.summary.mixedSingleSpeakerCount).toBe(1)
             expect(report.examples.gaps[0]).toMatchObject({ b: 0, kind: 'tail' })
+            expect(report.examples.gaps.some((gap) => gap.b === 3)).toBe(false)
         } finally {
             await rm(dir, { recursive: true, force: true })
         }

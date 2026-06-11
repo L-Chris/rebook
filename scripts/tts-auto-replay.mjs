@@ -166,13 +166,14 @@ function parseArgs(argv) {
         endpoint: process.env.REBOOK_TTS_ENDPOINT || DEFAULT_ENDPOINT,
         provider: process.env.REBOOK_TTS_PROVIDER || DEFAULT_PROVIDER,
         model: process.env.REBOOK_TTS_MODEL || process.env.OPENAI_MODEL || DEFAULT_MODEL,
+        sceneModel: process.env.REBOOK_TTS_SCENE_MODEL || undefined,
         planModel: process.env.REBOOK_TTS_PLAN_MODEL || undefined,
         initialModel: process.env.REBOOK_TTS_INITIAL_MODEL || undefined,
         repairModel: process.env.REBOOK_TTS_REPAIR_MODEL || undefined,
         apiMode: process.env.OPENAI_API_MODE || DEFAULT_API_MODE,
         outputDir: undefined,
         maxSegmentChars: 500,
-        concurrency: 2,
+        concurrency: parseOptionalNumber(process.env.REBOOK_TTS_CONCURRENCY),
         pollIntervalMs: 1000,
         waitSeconds: 240,
         llmTimeoutMs: parseOptionalMs(process.env.REBOOK_TTS_LLM_TIMEOUT_MS),
@@ -187,6 +188,7 @@ function parseArgs(argv) {
         else if (arg === '--endpoint') options.endpoint = argv[++index] ?? options.endpoint
         else if (arg === '--provider') options.provider = argv[++index] ?? options.provider
         else if (arg === '--model') options.model = argv[++index] ?? options.model
+        else if (arg === '--scene-model') options.sceneModel = argv[++index] ?? options.sceneModel
         else if (arg === '--plan-model') options.planModel = argv[++index] ?? options.planModel
         else if (arg === '--initial-model') options.initialModel = argv[++index] ?? options.initialModel
         else if (arg === '--repair-model') options.repairModel = argv[++index] ?? options.repairModel
@@ -201,7 +203,17 @@ function parseArgs(argv) {
         else if (arg === '--help' || arg === '-h') options.help = true
         else throw new Error(`Unknown argument: ${arg}`)
     }
+    if (!Number.isFinite(options.concurrency) || options.concurrency <= 0) {
+        options.concurrency = String(options.provider).toLowerCase() === 'mimo' ? 1 : 2
+    }
+
     return options
+}
+
+function parseOptionalNumber(value) {
+    if (value == null || String(value).trim() === '') return undefined
+    const number = Number(value)
+    return Number.isFinite(number) ? number : undefined
 }
 
 function parseOptionalMs(value) {
@@ -225,13 +237,14 @@ Options:
   --endpoint URL              TTS service endpoint. Default: ${DEFAULT_ENDPOINT}
   --provider NAME             TTS provider. Default: ${DEFAULT_PROVIDER}
   --model NAME                OpenAI model. Default: ${DEFAULT_MODEL}
+  --scene-model NAME          Model for scene planning. Default: role planning model.
   --plan-model NAME           Model for role planning. Default: text analysis model.
   --initial-model NAME        Model for text analysis. Default: --model.
   --repair-model NAME         Model for repair. Default: text analysis model.
   --api-mode MODE             chat or responses. Default: ${DEFAULT_API_MODE}
   --out DIR                   Output run directory.
   --max-segment-chars N       Max chars per TTS segment. Default: 500.
-  --concurrency N             TTS job concurrency. Default: 2.
+  --concurrency N             TTS job concurrency. Default: 1 for mimo, otherwise 2.
   --poll-ms N                 Audio job poll interval. Default: 1000.
   --wait-seconds N            Audio job timeout. Default: 240.
   --llm-timeout-seconds N     Per LLM phase timeout. Use 0 to disable.
@@ -242,10 +255,11 @@ Environment:
   OPENAI_BASE_URL             Optional OpenAI-compatible base URL.
   OPENAI_MODEL                Optional fallback model name.
   OPENAI_API_MODE             chat or responses. Default: chat.
-  REBOOK_TTS_MODEL            Fallback model for all TTS LLM phases.
+  REBOOK_TTS_SCENE_MODEL      Optional scene planning model.
   REBOOK_TTS_PLAN_MODEL       Optional role planning model.
   REBOOK_TTS_INITIAL_MODEL    Optional text analysis model.
   REBOOK_TTS_REPAIR_MODEL     Optional repair model.
+  REBOOK_TTS_CONCURRENCY      Optional TTS job concurrency.
   REBOOK_TTS_LLM_TIMEOUT_MS   Optional per LLM phase timeout.
   REBOOK_TTS_ENDPOINT         Optional TTS endpoint.
   .env and .env.local         Loaded automatically without overriding existing env vars.
@@ -298,8 +312,10 @@ function parseDotEnvLine(line) {
 
 function getPhaseModelNames(options) {
     const initial = options.initialModel || options.model || options.planModel
+    const plan = options.planModel || initial
     return {
-        plan: options.planModel || initial,
+        scene: options.sceneModel || plan,
+        plan,
         initial,
         repair: options.repairModel || initial,
     }
@@ -307,6 +323,7 @@ function getPhaseModelNames(options) {
 
 function createPhaseLanguageModels(options, modelNames) {
     return {
+        scene: createLanguageModel(options, modelNames.scene),
         plan: createLanguageModel(options, modelNames.plan),
         initial: createLanguageModel(options, modelNames.initial),
         repair: createLanguageModel(options, modelNames.repair),
@@ -426,11 +443,55 @@ function analyzeLLMError(event) {
 
 function analyzeLLMEvent(request, response) {
     if (hasSegmentResponse(response)) return analyzeReplay(request, response)
+    if (hasScenePlanResponse(response)) return analyzeScenePlan(request, response)
     return analyzeSpeakerPlan(request, response)
 }
 
 function hasSegmentResponse(response) {
     return response && typeof response === 'object' && Array.isArray(response.assignments)
+}
+
+function hasScenePlanResponse(response) {
+    return response && typeof response === 'object' && Array.isArray(response.scenes)
+}
+
+function analyzeScenePlan(request, response) {
+    const scenes = Array.isArray(response?.scenes) ? response.scenes : []
+    const requestBlocks = Array.isArray(request?.blocks) ? request.blocks : []
+    const blockIds = new Set(requestBlocks.map(block => block?.b).filter(Number.isFinite))
+    const invalidScenes = []
+    const invalidBlocks = []
+    let mappedBlocks = 0
+    for (const [index, scene] of scenes.entries()) {
+        if (!scene || typeof scene !== 'object' || !Number.isFinite(scene.i) || typeof scene.n !== 'string') {
+            invalidScenes.push({ index, scene })
+            continue
+        }
+        const mapped = Array.isArray(scene.b) ? scene.b : []
+        mappedBlocks += mapped.length
+        for (const [blockIndex, blockId] of mapped.entries()) {
+            if (!Number.isFinite(blockId) || !blockIds.has(blockId)) {
+                invalidBlocks.push({ sceneIndex: index, sceneId: scene.i, blockIndex, blockId })
+            }
+        }
+    }
+    return {
+        summary: {
+            kind: 'scene',
+            requestBlocks: requestBlocks.length,
+            scenes: scenes.length,
+            mappedBlocks,
+            invalidSceneCount: invalidScenes.length,
+            invalidBlockCount: invalidBlocks.length,
+            errorCount: invalidScenes.length + invalidBlocks.length,
+            warningCount: 0,
+        },
+        examples: {
+            scenes: scenes.slice(0, 8),
+            invalidScenes: invalidScenes.slice(0, 8),
+            invalidBlocks: invalidBlocks.slice(0, 8),
+        },
+    }
 }
 
 function analyzeSpeakerPlan(request, response) {
@@ -487,6 +548,17 @@ function analyzeSpeakerPlan(request, response) {
 }
 
 function formatLLMEventReport(replay) {
+    if (replay.summary?.kind === 'scene') {
+        return [
+            'TTS scene plan report',
+            '',
+            `Request blocks: ${replay.summary.requestBlocks}`,
+            `Scenes: ${replay.summary.scenes}`,
+            `Mapped blocks: ${replay.summary.mappedBlocks}`,
+            `Invalid scenes: ${replay.summary.invalidSceneCount}`,
+            `Invalid block mappings: ${replay.summary.invalidBlockCount}`,
+        ].join('\n')
+    }
     if (replay.summary?.kind === 'plan') {
         return [
             'TTS speaker plan report',
@@ -773,7 +845,7 @@ function formatAutoReport(report) {
         `- Book: ${basename(report.meta.bookPath)}`,
         `- Chapter: ${report.chapter.title} (section ${report.chapter.sectionIndex})`,
         `- Model: ${report.meta.model}`,
-        `- Phase models: plan=${report.meta.models?.plan ?? report.meta.model}, initial=${report.meta.models?.initial ?? report.meta.model}, repair=${report.meta.models?.repair ?? report.meta.model}`,
+        `- Phase models: scene=${report.meta.models?.scene ?? report.meta.models?.plan ?? report.meta.model}, plan=${report.meta.models?.plan ?? report.meta.model}, initial=${report.meta.models?.initial ?? report.meta.model}, repair=${report.meta.models?.repair ?? report.meta.model}`,
         `- Endpoint: ${report.meta.endpoint}`,
         `- LLM timeout: ${formatNullableMs(report.meta.llmTimeoutMs)}`,
         `- Total time: ${report.timings.totalMs}ms`,
@@ -866,6 +938,18 @@ function formatLLMSummary(event, index) {
             `- Unexpected preset voices in design plan: ${event.summary.unexpectedPresetVoices ? 'yes' : 'no'}`,
             `- Invalid speakers: ${event.summary.invalidSpeakerCount}`,
             `- Duplicate speaker ids: ${event.summary.duplicateSpeakerIdCount}`,
+            `- Replay: ${event.replayPath}`,
+        ].join('\n')
+    }
+    if (event.summary?.kind === 'scene') {
+        return [
+            `### ${index + 1}. ${event.phase}`,
+            '',
+            `- Duration: ${event.durationMs}ms`,
+            `- Scenes: ${event.summary.scenes}`,
+            `- Mapped blocks: ${event.summary.mappedBlocks}`,
+            `- Invalid scenes: ${event.summary.invalidSceneCount}`,
+            `- Invalid block mappings: ${event.summary.invalidBlockCount}`,
             `- Replay: ${event.replayPath}`,
         ].join('\n')
     }

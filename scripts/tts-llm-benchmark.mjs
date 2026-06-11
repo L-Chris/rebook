@@ -177,6 +177,7 @@ function parseArgs(argv) {
         endpoint: process.env.REBOOK_TTS_ENDPOINT || DEFAULT_ENDPOINT,
         provider: process.env.REBOOK_TTS_PROVIDER || DEFAULT_PROVIDER,
         models: parseModelList(process.env.REBOOK_LLM_BENCHMARK_MODELS) ?? DEFAULT_MODELS,
+        sceneModel: process.env.REBOOK_TTS_SCENE_MODEL || undefined,
         planModel: process.env.REBOOK_TTS_PLAN_MODEL || undefined,
         initialModel: process.env.REBOOK_TTS_INITIAL_MODEL || undefined,
         repairModel: process.env.REBOOK_TTS_REPAIR_MODEL || undefined,
@@ -194,6 +195,7 @@ function parseArgs(argv) {
         else if (arg === '--endpoint') options.endpoint = argv[++index] ?? options.endpoint
         else if (arg === '--provider') options.provider = argv[++index] ?? options.provider
         else if (arg === '--models') options.models = parseModelList(argv[++index]) ?? options.models
+        else if (arg === '--scene-model') options.sceneModel = argv[++index] ?? options.sceneModel
         else if (arg === '--plan-model') options.planModel = argv[++index] ?? options.planModel
         else if (arg === '--initial-model') options.initialModel = argv[++index] ?? options.initialModel
         else if (arg === '--repair-model') options.repairModel = argv[++index] ?? options.repairModel
@@ -248,6 +250,7 @@ Environment:
   OPENAI_API_KEY              Required.
   OPENAI_BASE_URL             Optional OpenAI-compatible base URL.
   REBOOK_LLM_BENCHMARK_MODELS Optional comma-separated model override.
+  REBOOK_TTS_SCENE_MODEL      Optional fixed scene planning model.
   REBOOK_TTS_PLAN_MODEL       Optional fixed role planning model.
   REBOOK_TTS_INITIAL_MODEL    Optional fixed text analysis model.
   REBOOK_TTS_REPAIR_MODEL     Optional fixed repair model.
@@ -382,6 +385,7 @@ function hasVoiceDesignSpeakerInfo(speaker) {
 
 function getPhaseModelOverrides(options) {
     return {
+        scene: options.sceneModel,
         plan: options.planModel,
         initial: options.initialModel,
         repair: options.repairModel,
@@ -390,8 +394,10 @@ function getPhaseModelOverrides(options) {
 
 function getPhaseModelNames(options, modelName) {
     const initial = options.initialModel || modelName
+    const plan = options.planModel || initial
     return {
-        plan: options.planModel || initial,
+        scene: options.sceneModel || plan,
+        plan,
         initial,
         repair: options.repairModel || initial,
     }
@@ -399,6 +405,7 @@ function getPhaseModelNames(options, modelName) {
 
 function createPhaseLanguageModels(options, modelNames) {
     return {
+        scene: createLanguageModel(options, modelNames.scene),
         plan: createLanguageModel(options, modelNames.plan),
         initial: createLanguageModel(options, modelNames.initial),
         repair: createLanguageModel(options, modelNames.repair),
@@ -641,7 +648,7 @@ function formatModelReport(result) {
     const lines = [
         `# ${result.model}`,
         '',
-        `- Phase models: plan=${result.phaseModels?.plan ?? result.model}, initial=${result.phaseModels?.initial ?? result.model}, repair=${result.phaseModels?.repair ?? result.model}`,
+        `- Phase models: scene=${result.phaseModels?.scene ?? result.phaseModels?.plan ?? result.model}, plan=${result.phaseModels?.plan ?? result.model}, initial=${result.phaseModels?.initial ?? result.model}, repair=${result.phaseModels?.repair ?? result.model}`,
         `- Status: ${result.status}`,
         `- Total time: ${result.timings?.totalMs ?? 0}ms`,
         `- LLM time: ${Math.round(result.timings?.llmMs ?? 0)}ms`,
