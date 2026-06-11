@@ -527,7 +527,7 @@ describe('TTS Plugin', () => {
         expect(segments.map(segment => segment.text)).toEqual(['林七夜说道：', '走。'])
     })
 
-    it('skips sound-effect atoms marked by speaker analysis', async () => {
+    it('routes sound-effect atoms to the configured sound effect provider', async () => {
         const soundBook: Book = {
             sections: [{
                 id: 'sound-effect',
@@ -543,7 +543,14 @@ describe('TTS Plugin', () => {
         generateTextMock.mockResolvedValueOnce({
             output: {
                 speakers: [],
-                assignments: [{ b: 0, a: 0, i: 0, k: 's' }],
+                assignments: [{
+                    b: 0,
+                    a: 0,
+                    i: 0,
+                    k: 's',
+                    fx: 'rapid electronic beeping alarm, short alert',
+                    dur: 1.2,
+                }],
             },
         })
         const wrapped = withTTS({
@@ -558,7 +565,18 @@ describe('TTS Plugin', () => {
         expect(generateTextMock).toHaveBeenCalledTimes(1)
         expect(outputObjectMock.mock.calls[0][0].schema.properties.assignments.items.properties.k.description)
             .toContain('动物叫声')
-        expect(segments).toEqual([])
+        expect(outputObjectMock.mock.calls[0][0].schema.properties.assignments.items.properties.fx.description)
+            .toContain('ElevenLabs')
+        expect(segments).toHaveLength(1)
+        expect(segments[0]).toMatchObject({
+            blockId: 'sound-effect-p1',
+            provider: 'elevenlabs',
+            soundEffectPrompt: 'rapid electronic beeping alarm, short alert',
+            soundEffectDurationSeconds: 1.2,
+            speaker: 'sound-effect',
+            speakerRole: 'other',
+            text: '滴滴滴——！',
+        })
     })
 
     it('absorbs short speech cue narration into MiMo audio tags', async () => {
@@ -1244,7 +1262,7 @@ describe('TTS Plugin', () => {
         expect(segments.find(segment => segment.speakerId === 1)?.voicePrompt).toContain('匿名同学多为少年/少女音')
     })
 
-    it('uses phase-specific models for voice design speaker analysis', async () => {
+    it('uses one configured model for all voice design speaker analysis phases', async () => {
         const text = '“别动。”林七夜说道。'
         const phaseBook: Book = {
             sections: [{
@@ -1258,9 +1276,7 @@ describe('TTS Plugin', () => {
                 }],
             }],
         }
-        const planModel = { phase: 'plan' }
-        const initialModel = { phase: 'initial' }
-        const repairModel = { phase: 'repair' }
+        const analysisModel = { phase: 'all' }
         generateTextMock
             .mockResolvedValueOnce(emptyScenePlanOutput())
             .mockResolvedValueOnce({
@@ -1295,22 +1311,82 @@ describe('TTS Plugin', () => {
             endpoint: 'http://tts.test',
             provider: 'design-lab',
             fetch: fetchMock as any,
-            speakerAnalysis: {
-                models: {
-                    plan: planModel as any,
-                    initial: initialModel as any,
-                    repair: repairModel as any,
-                },
-            },
+            speakerAnalysis: { model: analysisModel as any },
         })(phaseBook) as TTSBook
 
         await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 80 })
 
         expect(generateTextMock).toHaveBeenCalledTimes(4)
-        expect(generateTextMock.mock.calls[0][0].model).toBe(planModel)
-        expect(generateTextMock.mock.calls[1][0].model).toBe(planModel)
-        expect(generateTextMock.mock.calls[2][0].model).toBe(initialModel)
-        expect(generateTextMock.mock.calls[3][0].model).toBe(repairModel)
+        expect(generateTextMock.mock.calls.map(call => call[0].model)).toEqual([
+            analysisModel,
+            analysisModel,
+            analysisModel,
+            analysisModel,
+        ])
+    })
+
+    it('keeps simultaneous dialogue as one group speaker segment', async () => {
+        const text = '“跑！！”林七夜和李毅飞同时大吼！'
+        const groupBook: Book = {
+            sections: [{
+                id: 'simultaneous',
+                size: 100,
+                load: () => '',
+                getBlocks: async () => [{
+                    id: 'simultaneous-p1',
+                    type: 'paragraph',
+                    segments: [{ text }],
+                }],
+            }],
+        }
+        generateTextMock
+            .mockResolvedValueOnce(emptyScenePlanOutput())
+            .mockResolvedValueOnce({
+                output: [
+                    { i: 1, n: '林七夜', r: 'c', g: 1, q: '清亮偏低的少年音，冷静克制。' },
+                    { i: 2, n: '李毅飞', r: 'c', g: 1, q: '更外放的青年男声，语速偏快。' },
+                ],
+            })
+            .mockResolvedValueOnce({
+                output: {
+                    assignments: [
+                        { b: 0, a: 0, i: 1, is: [1, 2], p: '大吼' },
+                        { b: 0, a: 1, i: 0, k: 'm', p: '大吼' },
+                    ],
+                },
+            })
+        const wrapped = withTTS({
+            endpoint: 'http://tts.test',
+            provider: 'mimo',
+            fetch: vi.fn(async (url: string) => {
+                if (url.includes('/v1/tts/providers')) {
+                    return new Response(JSON.stringify({
+                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voiceDesign: true } }],
+                    }))
+                }
+                return new Response(JSON.stringify({ voices: [] }))
+            }) as any,
+            model: mockModel as any,
+        })(groupBook) as TTSBook
+
+        const segments = await wrapped.tts.prepareSection(0, { multiSpeaker: true, maxSegmentChars: 80 })
+
+        const assignmentSchemaCall = outputObjectMock.mock.calls.find(call => call[0].schema?.properties?.assignments)
+        expect(assignmentSchemaCall?.[0].schema.properties.assignments.items.properties.is.description)
+            .toContain('simultaneous')
+        expect(segments).toHaveLength(1)
+        expect(segments[0]).toMatchObject({
+            speakerIds: [1, 2],
+            speaker: '林七夜、李毅飞',
+            speakerRole: 'character',
+            speakerGender: 'male',
+            text: '（大吼）跑！',
+            stylePrompt: '大吼',
+        })
+        expect(segments[0].speakerId).toBeUndefined()
+        expect(segments[0].voicePrompt).toContain('多人同声/齐声对白')
+        expect(segments[0].voicePrompt).toContain('林七夜')
+        expect(segments[0].voicePrompt).toContain('李毅飞')
     })
 
     it('repairs mixed AI blocks that were assigned to one speaker', async () => {

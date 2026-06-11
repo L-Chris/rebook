@@ -51,7 +51,6 @@ async function main() {
         provider: options.provider,
         endpoint: options.endpoint,
         models: options.models,
-        phaseModelOverrides: getPhaseModelOverrides(options),
         apiMode: options.apiMode,
         llmTimeoutMs: options.llmTimeoutMs,
         maxSegmentChars: options.maxSegmentChars,
@@ -92,7 +91,6 @@ async function writeBenchmarkSummary(runDir, options, chapter, results, startedA
         chapter: chapter.title,
         sectionIndex: chapter.sectionIndex,
         provider: options.provider,
-        phaseModelOverrides: getPhaseModelOverrides(options),
         models: results,
     }
     await writeJson(join(runDir, 'summary.json'), summary)
@@ -109,16 +107,14 @@ async function runModelBenchmark({ book, chapter, options, modelName, runDir }) 
     const fetchLog = []
     const startedAt = Date.now()
     try {
-        const phaseModelNames = getPhaseModelNames(options, modelName)
-        const phaseModels = createPhaseLanguageModels(options, phaseModelNames)
+        const model = createLanguageModel(options, modelName)
         const wrapped = withTTS({
             endpoint: options.endpoint,
             provider: options.provider,
             lang: 'zh-CN',
             fetch: createBenchmarkFetch(globalThis.fetch.bind(globalThis), fetchLog, options.provider),
-            model: phaseModels.initial,
+            model,
             speakerAnalysis: {
-                models: phaseModels,
                 timeoutMs: options.llmTimeoutMs,
                 onLog: async event => {
                     const record = await persistLLMEvent(llmDir, events.length + 1, event)
@@ -136,7 +132,6 @@ async function runModelBenchmark({ book, chapter, options, modelName, runDir }) 
         const prepared = analyzePreparedSegments(chapter.blocks, segments)
         const result = {
             model: modelName,
-            phaseModels: phaseModelNames,
             status: 'ok',
             timings: {
                 totalMs: Date.now() - startedAt,
@@ -154,7 +149,6 @@ async function runModelBenchmark({ book, chapter, options, modelName, runDir }) 
     } catch (error) {
         const result = {
             model: modelName,
-            phaseModels: getPhaseModelNames(options, modelName),
             status: 'error',
             timings: {
                 totalMs: Date.now() - startedAt,
@@ -177,10 +171,6 @@ function parseArgs(argv) {
         endpoint: process.env.REBOOK_TTS_ENDPOINT || DEFAULT_ENDPOINT,
         provider: process.env.REBOOK_TTS_PROVIDER || DEFAULT_PROVIDER,
         models: parseModelList(process.env.REBOOK_LLM_BENCHMARK_MODELS) ?? DEFAULT_MODELS,
-        sceneModel: process.env.REBOOK_TTS_SCENE_MODEL || undefined,
-        planModel: process.env.REBOOK_TTS_PLAN_MODEL || undefined,
-        initialModel: process.env.REBOOK_TTS_INITIAL_MODEL || undefined,
-        repairModel: process.env.REBOOK_TTS_REPAIR_MODEL || undefined,
         apiMode: process.env.OPENAI_API_MODE || DEFAULT_API_MODE,
         llmTimeoutMs: parseOptionalMs(process.env.REBOOK_TTS_LLM_TIMEOUT_MS) ?? DEFAULT_LLM_TIMEOUT_MS,
         outputDir: undefined,
@@ -195,10 +185,6 @@ function parseArgs(argv) {
         else if (arg === '--endpoint') options.endpoint = argv[++index] ?? options.endpoint
         else if (arg === '--provider') options.provider = argv[++index] ?? options.provider
         else if (arg === '--models') options.models = parseModelList(argv[++index]) ?? options.models
-        else if (arg === '--scene-model') options.sceneModel = argv[++index] ?? options.sceneModel
-        else if (arg === '--plan-model') options.planModel = argv[++index] ?? options.planModel
-        else if (arg === '--initial-model') options.initialModel = argv[++index] ?? options.initialModel
-        else if (arg === '--repair-model') options.repairModel = argv[++index] ?? options.repairModel
         else if (arg === '--api-mode') options.apiMode = argv[++index] ?? options.apiMode
         else if (arg === '--out') options.outputDir = argv[++index]
         else if (arg === '--max-segment-chars') options.maxSegmentChars = Number(argv[++index] ?? options.maxSegmentChars)
@@ -237,10 +223,7 @@ Options:
   --chapter TEXT              Chapter title. Default: ${DEFAULT_CHAPTER}
   --endpoint URL              TTS service endpoint. Provider capability is mocked for mimo. Default: ${DEFAULT_ENDPOINT}
   --provider NAME             Provider used by withTTS. Default: ${DEFAULT_PROVIDER}
-  --models A,B,C              Comma-separated model list. Default: ${DEFAULT_MODELS.join(',')}
-  --plan-model NAME           Model for role planning. Default: benchmark model.
-  --initial-model NAME        Model for text analysis. Default: benchmark model.
-  --repair-model NAME         Model for repair. Default: text analysis model.
+  --models A,B,C              Comma-separated model list; each model is used for all TTS LLM phases. Default: ${DEFAULT_MODELS.join(',')}
   --api-mode MODE             chat or responses. Default: ${DEFAULT_API_MODE}
   --out DIR                   Output run directory.
   --max-segment-chars N       Max chars per final TTS segment. Default: 500.
@@ -250,10 +233,6 @@ Environment:
   OPENAI_API_KEY              Required.
   OPENAI_BASE_URL             Optional OpenAI-compatible base URL.
   REBOOK_LLM_BENCHMARK_MODELS Optional comma-separated model override.
-  REBOOK_TTS_SCENE_MODEL      Optional fixed scene planning model.
-  REBOOK_TTS_PLAN_MODEL       Optional fixed role planning model.
-  REBOOK_TTS_INITIAL_MODEL    Optional fixed text analysis model.
-  REBOOK_TTS_REPAIR_MODEL     Optional fixed repair model.
   REBOOK_TTS_LLM_TIMEOUT_MS   Optional per LLM phase timeout.
   .env and .env.local         Loaded automatically without overriding existing env vars.
 `)
@@ -381,35 +360,6 @@ function formatLLMEventReport(replay) {
 
 function hasVoiceDesignSpeakerInfo(speaker) {
     return ['d', 'a', 'o', 'p', 'q'].some(key => typeof speaker?.[key] === 'string' && speaker[key].trim())
-}
-
-function getPhaseModelOverrides(options) {
-    return {
-        scene: options.sceneModel,
-        plan: options.planModel,
-        initial: options.initialModel,
-        repair: options.repairModel,
-    }
-}
-
-function getPhaseModelNames(options, modelName) {
-    const initial = options.initialModel || modelName
-    const plan = options.planModel || initial
-    return {
-        scene: options.sceneModel || plan,
-        plan,
-        initial,
-        repair: options.repairModel || initial,
-    }
-}
-
-function createPhaseLanguageModels(options, modelNames) {
-    return {
-        scene: createLanguageModel(options, modelNames.scene),
-        plan: createLanguageModel(options, modelNames.plan),
-        initial: createLanguageModel(options, modelNames.initial),
-        repair: createLanguageModel(options, modelNames.repair),
-    }
 }
 
 function createLanguageModel(options, modelName) {
@@ -616,7 +566,6 @@ function formatBenchmarkSummary(summary) {
         `- Book: ${summary.book}`,
         `- Chapter: ${summary.chapter} (section ${summary.sectionIndex})`,
         `- Provider: ${summary.provider}`,
-        `- Phase model overrides: plan=${summary.phaseModelOverrides?.plan ?? '(benchmark model)'}, initial=${summary.phaseModelOverrides?.initial ?? '(benchmark model)'}, repair=${summary.phaseModelOverrides?.repair ?? '(text analysis model)'}`,
         `- Total time: ${summary.totalMs}ms`,
         '',
         '| Model | Status | Total | LLM | Plan Speakers | Initial Gaps | Initial Mixed | Repair Calls | Errors | Segments | Tiny |',
@@ -648,7 +597,6 @@ function formatModelReport(result) {
     const lines = [
         `# ${result.model}`,
         '',
-        `- Phase models: scene=${result.phaseModels?.scene ?? result.phaseModels?.plan ?? result.model}, plan=${result.phaseModels?.plan ?? result.model}, initial=${result.phaseModels?.initial ?? result.model}, repair=${result.phaseModels?.repair ?? result.model}`,
         `- Status: ${result.status}`,
         `- Total time: ${result.timings?.totalMs ?? 0}ms`,
         `- LLM time: ${Math.round(result.timings?.llmMs ?? 0)}ms`,

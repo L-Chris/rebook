@@ -5,9 +5,12 @@ export interface TTSCompactSpeakerAttribution {
     b: number
     a: number
     i: number
+    is?: readonly number[]
     c?: number
     k?: 's' | 'm'
     p?: string
+    fx?: string
+    dur?: number
 }
 
 export interface TTSCompactSpeakerAnalysisSegment {
@@ -15,9 +18,12 @@ export interface TTSCompactSpeakerAnalysisSegment {
     s: number
     e: number
     i: number
+    is?: readonly number[]
     c?: number
     k?: 's' | 'm'
     p?: string
+    fx?: string
+    dur?: number
 }
 
 export interface TTSCompactSpeakerAnalysisOutput {
@@ -164,9 +170,16 @@ export const speakerAnalysisSchema = {
                     b: { type: 'number', description: 'block index，对应输入 blocks[].b。' },
                     a: { type: 'number', description: 'atom id，对应该 block 的 u[].a。' },
                     i: { type: 'number', description: 'speaker id；旁白使用 0。' },
+                    is: {
+                        type: 'array',
+                        description: 'simultaneous speaker ids；仅多人同时说同一句对白时输出，包含所有共同发声角色 id，也必须包含 i。',
+                        items: { type: 'number' },
+                    },
                     c: { type: 'number', description: 'confidence；仅当置信度 <= 0.8 或分配不确定时输出。' },
                     k: { type: 'string', enum: ['s', 'm'], description: '可选静音类型：s=拟声词/动物叫声/环境音/效果音；m=只用于表演提示的发言归属短语，不朗读。如果 p 来自该归属原子，必须输出 k=m。' },
                     p: { type: 'string', maxLength: 24, description: '可选短表演标签，如 轻笑、低声、叹气；仅在文本有明确证据时输出。' },
+                    fx: { type: 'string', maxLength: 220, description: 'ElevenLabs sound effect prompt；仅 k=s 时输出。用简洁英文描述声音来源、强度、环境和质感，不写对白或旁白。' },
+                    dur: { type: 'number', description: 'sound effect duration seconds；仅 k=s 时输出。根据声音持续时间给 0.5-30 秒，拿不准可省略。' },
                 },
                 required: ['b', 'a', 'i'],
                 additionalProperties: false,
@@ -207,9 +220,16 @@ export const voiceDesignSpeakerAnalysisSchema = {
                     b: { type: 'number', description: 'block index，对应输入 blocks[].b。' },
                     a: { type: 'number', description: 'atom id，对应该 block 的 u[].a。' },
                     i: { type: 'number', description: 'speaker id；必须来自 knownSpeakers，旁白使用 0。' },
+                    is: {
+                        type: 'array',
+                        description: 'simultaneous speaker ids；仅多人同时说同一句对白时输出，包含所有共同发声角色 id，也必须包含 i。',
+                        items: { type: 'number' },
+                    },
                     c: { type: 'number', description: 'confidence；仅当置信度 <= 0.8 或分配不确定时输出。' },
                     k: { type: 'string', enum: ['s', 'm'], description: '可选静音类型：s=拟声词/动物叫声/环境音/效果音；m=只用于表演提示的发言归属短语，不朗读。如果 p 来自该归属原子，必须输出 k=m。' },
                     p: { type: 'string', maxLength: 24, description: '可选短表演标签，如 轻笑、低声、叹气；仅在文本有明确证据时输出。' },
+                    fx: { type: 'string', maxLength: 220, description: 'ElevenLabs sound effect prompt；仅 k=s 时输出。用简洁英文描述声音来源、强度、环境和质感，不写对白或旁白。' },
+                    dur: { type: 'number', description: 'sound effect duration seconds；仅 k=s 时输出。根据声音持续时间给 0.5-30 秒，拿不准可省略。' },
                 },
                 required: ['b', 'a', 'i'],
                 additionalProperties: false,

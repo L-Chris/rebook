@@ -207,7 +207,6 @@ export type {
     TTSSpeakerAnalysisRequest,
     TTSSpeakerAnalysisSegment,
     TTSSpeakerAnalyzer,
-    TTSSpeakerAnalysisModels,
     TTSSpeakerAnalysisOptions,
     TTSSpeakerAnalysisPhase,
     TTSSpeakerGender,
