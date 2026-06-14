@@ -1,3 +1,13 @@
+export {
+    BrowserAdaptiveRenderer,
+    createBrowserAdaptiveRenderer,
+    matchesBrowserFixedContent,
+    matchesBrowserReflowableContent,
+    selectBrowserContentEngine,
+    type BrowserAdaptiveRendererConfig,
+    type BrowserContentEngineMatch,
+    type BrowserContentEngineRoute,
+} from './adaptive'
 export { BrowserRenderer, createBrowserRenderer, type BrowserRendererConfig } from './renderer'
 export { BrowserFixedRenderer, createBrowserFixedRenderer, type BrowserFixedRendererConfig } from './fixed'
 export {

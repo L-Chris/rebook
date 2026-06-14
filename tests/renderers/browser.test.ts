@@ -11,7 +11,19 @@ import { mobi } from '../../src/parsers/mobi'
 import { CBZParser } from '../../src/parsers/cbz'
 import { PDFParser } from '../../src/parsers/pdf'
 import { withTrialLimit } from '../../src/plugins/trial-limit'
-import { createReader, BrowserFixedContentRenderer, BrowserPageCompositor, BrowserRenderer, BrowserReflowableContentRenderer, BrowserSurfaceHost, BrowserViewportHost } from '../../src/renderers/browser'
+import {
+    createReader,
+    BrowserAdaptiveRenderer,
+    BrowserFixedContentRenderer,
+    BrowserPageCompositor,
+    BrowserRenderer,
+    BrowserReflowableContentRenderer,
+    BrowserSurfaceHost,
+    BrowserViewportHost,
+    ReaderView,
+    matchesBrowserFixedContent,
+    matchesBrowserReflowableContent,
+} from '../../src/renderers/browser'
 import { makeSimplePdf } from '../fixtures/pdf-fixture'
 import { createTestCBZ } from '../fixtures/cbz-fixture'
 
@@ -571,6 +583,85 @@ describe('BrowserRenderer', () => {
         expect(container.children.length).toBe(0)
 
         reader.destroy()
+    })
+
+    it('uses one adaptive browser renderer for default ReaderView content engines', () => {
+        class InspectableReaderView extends ReaderView {
+            getRendererForTest(): Renderer {
+                return this.getRenderer()
+            }
+        }
+
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '72')
+        document.body.appendChild(container)
+
+        const reader = new InspectableReaderView({ container })
+
+        expect(reader.getRendererForTest()).toBeInstanceOf(BrowserAdaptiveRenderer)
+
+        reader.destroy()
+    })
+
+    it('selects browser content engines and replays reader state', async () => {
+        const fixed = new FakeFixedRenderer()
+        const reflowable = new FakeFixedRenderer()
+        const adaptive = new BrowserAdaptiveRenderer({
+            routes: [
+                { id: 'fixed', match: matchesBrowserFixedContent, createRenderer: () => fixed },
+                { id: 'reflowable', match: matchesBrowserReflowableContent, createRenderer: () => reflowable },
+            ],
+        })
+        const listener: EventListener = () => {}
+        const mark: ReaderMark = {
+            id: 'current',
+            kind: 'highlight',
+            location: { type: 'reflowable', sectionIndex: 0 },
+        }
+        const fixedBook: Book = {
+            sections: [],
+            fixedDocument: {
+                kind: 'fixed-document',
+                format: 'pdf',
+                pageCount: 1,
+                getPage: () => ({ index: 0, width: 320, height: 480 }),
+            },
+        }
+        const reflowableBook: Book = {
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 12,
+                load: () => '<p>Flow</p>',
+            }],
+        }
+
+        adaptive.on('relocate', listener)
+        adaptive.setStyles({ fontSize: '18px' })
+        adaptive.setLayout('scrolled')
+        adaptive.setSpread(1)
+        adaptive.setMark(mark)
+
+        await adaptive.open(fixedBook)
+        expect(adaptive.getActiveEngineId()).toBe('fixed')
+        expect(fixed.opened).toBe(1)
+        expect(fixed.book).toBe(fixedBook)
+        expect(fixed.styles).toEqual({ fontSize: '18px' })
+        expect(fixed.layout).toBe('scrolled')
+        expect(fixed.spread).toBe(1)
+        expect(fixed.getMarks()).toEqual([mark])
+        expect(fixed.listeners.get('relocate')?.has(listener)).toBe(true)
+
+        await adaptive.open(reflowableBook)
+        expect(adaptive.getActiveEngineId()).toBe('reflowable')
+        expect(fixed.destroyed).toBe(1)
+        expect(reflowable.opened).toBe(1)
+        expect(reflowable.book).toBe(reflowableBook)
+        expect(reflowable.styles).toEqual({ fontSize: '18px' })
+        expect(reflowable.getMarks()).toEqual([mark])
+        expect(reflowable.listeners.get('relocate')?.has(listener)).toBe(true)
+
+        adaptive.destroy()
     })
 
     it('renders fixed-document books with the built-in browser fixed renderer', async () => {
@@ -2098,7 +2189,12 @@ describe('BrowserRenderer', () => {
 
 class FakeFixedRenderer implements Renderer {
     opened = 0
+    destroyed = 0
     book: Book | null = null
+    styles: RendererStyles | null = null
+    layout: LayoutMode | null = null
+    spread: number | null = null
+    listeners = new Map<string, Set<EventListener>>()
     private marks = new Map<string, ReaderMark>()
 
     async open(book: Book): Promise<void> {
@@ -2110,9 +2206,9 @@ class FakeFixedRenderer implements Renderer {
     async next(): Promise<void> {}
     async prev(): Promise<void> {}
     async goToFraction(): Promise<void> {}
-    setStyles(_styles: RendererStyles): void {}
-    setLayout(_mode: LayoutMode): void {}
-    setSpread(_maxColumns: number): void {}
+    setStyles(styles: RendererStyles): void { this.styles = styles }
+    setLayout(mode: LayoutMode): void { this.layout = mode }
+    setSpread(maxColumns: number): void { this.spread = maxColumns }
     setMark(mark: ReaderMark): void { this.marks.set(mark.id, mark) }
     removeMark(id: string): void { this.marks.delete(id) }
     clearMarks(kind?: string): void {
@@ -2128,9 +2224,18 @@ class FakeFixedRenderer implements Renderer {
     getLocation(): RelocateEvent | null { return null }
     getSectionFractions(): number[] { return [] }
     async refresh(): Promise<void> {}
-    on(_event: string, _listener: EventListener): void {}
-    off(_event: string, _listener: EventListener): void {}
-    destroy(): void {}
+    on(event: string, listener: EventListener): void {
+        let listeners = this.listeners.get(event)
+        if (!listeners) {
+            listeners = new Set()
+            this.listeners.set(event, listeners)
+        }
+        listeners.add(listener)
+    }
+    off(event: string, listener: EventListener): void {
+        this.listeners.get(event)?.delete(listener)
+    }
+    destroy(): void { this.destroyed += 1 }
 }
 
 function flattenTestTOC(items: NonNullable<Book['toc']>): NonNullable<Book['toc']>[number][] {

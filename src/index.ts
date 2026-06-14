@@ -392,17 +392,25 @@ export type {
 
 // Browser renderer
 export {
+    BrowserAdaptiveRenderer,
+    createBrowserAdaptiveRenderer,
     BrowserFixedCanvasVisualRenderer,
     BrowserFixedContentRenderer,
     BrowserFixedImageVisualRenderer,
     BrowserRenderer,
     createBrowserRenderer,
     createBrowserFixedContentRenderer,
+    matchesBrowserFixedContent,
+    matchesBrowserReflowableContent,
     ReaderView,
     createReader,
+    selectBrowserContentEngine,
     selectFixedVisualRenderer,
 } from './renderers/browser'
 export type {
+    BrowserAdaptiveRendererConfig,
+    BrowserContentEngineMatch,
+    BrowserContentEngineRoute,
     BrowserFixedCanvasVisualRendererConfig,
     BrowserFixedContentRenderContext,
     BrowserFixedContentRendererConfig,
