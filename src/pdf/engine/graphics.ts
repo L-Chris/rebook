@@ -3,6 +3,7 @@ import { ContentInlineImageToken, ContentTokenizer, ContentToken, isContentStrin
 import { decodeAscii85, decodeAsciiHex, decodeRunLength } from './filters'
 import { PdfFontDecoder, PdfFontMap } from './fonts'
 import { colorizeImageMask, imageMaskSamplesToRgba, imageSamplesToRgba, readImageColorSpace, readImageDecode, readOptionalDeviceColorSpace, supportsImageBits } from './images'
+import { identityMatrix, isIdentityMatrix, multiplyMatrix, transformPoint, translateMatrix } from './matrix'
 import { advancePdfText, contentTextValue, currentPdfFont, isContentName, pdfFontRunStyle, PdfTextState } from './text-state'
 import { isDict, isName, isStream, PdfBlendMode, PdfColor, PdfDeviceColorSpace, PdfDisplayOp, PdfError, PdfImageColorSpace, PdfImageData, PdfLineCap, PdfLineJoin, PdfMatrix, PdfPageDisplayList, PdfPathPaint, PdfPathSegment, PdfPrimitive, PdfRect, PdfShading, PdfShadingColorStop, PdfShadingPattern, PdfTextRenderingMode, PdfTextRun } from '../types'
 
@@ -1211,11 +1212,6 @@ const transformShading = (shading: PdfShading, matrix: PdfMatrix): PdfShading =>
   }
 }
 
-const transformPoint = (x: number, y: number, matrix: PdfMatrix): { x: number; y: number } => ({
-  x: matrix[0] * x + matrix[2] * y + matrix[4],
-  y: matrix[1] * x + matrix[3] * y + matrix[5],
-})
-
 const transformRadius = (radius: number, matrix: PdfMatrix): number => radius * Math.sqrt(Math.abs(matrix[0] * matrix[3] - matrix[1] * matrix[2]))
 
 const toMatrix = (value: PdfPrimitive | undefined): PdfMatrix | undefined => {
@@ -1224,9 +1220,6 @@ const toMatrix = (value: PdfPrimitive | undefined): PdfMatrix | undefined => {
   return [numbers[0], numbers[1], numbers[2], numbers[3], numbers[4], numbers[5]]
 }
 
-const isIdentityMatrix = (matrix: PdfMatrix): boolean =>
-  matrix[0] === 1 && matrix[1] === 0 && matrix[2] === 0 && matrix[3] === 1 && matrix[4] === 0 && matrix[5] === 0
-
 const rectToPath = (box: PdfRect): PdfPathSegment => ({
   type: 'rect',
   x: box[0],
@@ -1234,20 +1227,6 @@ const rectToPath = (box: PdfRect): PdfPathSegment => ({
   width: box[2] - box[0],
   height: box[3] - box[1],
 })
-
-const identityMatrix = (): PdfMatrix => [1, 0, 0, 1, 0, 0]
-
-const translateMatrix = (matrix: PdfMatrix, x: number, y: number): PdfMatrix =>
-  multiplyMatrix(matrix, [1, 0, 0, 1, x, y])
-
-const multiplyMatrix = (left: PdfMatrix, right: PdfMatrix): PdfMatrix => [
-  left[0] * right[0] + left[2] * right[1],
-  left[1] * right[0] + left[3] * right[1],
-  left[0] * right[2] + left[2] * right[3],
-  left[1] * right[2] + left[3] * right[3],
-  left[0] * right[4] + left[2] * right[5] + left[4],
-  left[1] * right[4] + left[3] * right[5] + left[5],
-]
 
 const isSimpleTextMatrix = (matrix: PdfMatrix): boolean =>
   matrix[0] === 1 && matrix[1] === 0 && matrix[2] === 0 && matrix[3] === 1

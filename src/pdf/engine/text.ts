@@ -1,6 +1,7 @@
 import { bytesToLatin1 } from './bytes'
 import { ContentTokenizer, ContentToken, isContentString } from './content'
 import { PdfFontDecoder, PdfFontMap } from './fonts'
+import { copyMatrix, identityMatrix, multiplyMatrix, translateMatrix } from './matrix'
 import { decodePdfTextString } from './strings'
 import { advancePdfText, contentTextValue, currentPdfFont, isContentDict, isContentName, pdfFontRunStyle, PdfTextState } from './text-state'
 import { PdfFontSource, PdfMatrix, PdfPageText, PdfTextRun } from '../types'
@@ -443,22 +444,6 @@ interface TextStateSnapshot {
   ctmStack: PdfMatrix[]
   markedContent: MarkedContentState[]
 }
-
-const identityMatrix = (): PdfMatrix => [1, 0, 0, 1, 0, 0]
-
-const copyMatrix = (matrix: PdfMatrix): PdfMatrix => [...matrix]
-
-const translateMatrix = (matrix: PdfMatrix, x: number, y: number): PdfMatrix =>
-  multiplyMatrix(matrix, [1, 0, 0, 1, x, y])
-
-const multiplyMatrix = (left: PdfMatrix, right: PdfMatrix): PdfMatrix => [
-  left[0] * right[0] + left[2] * right[1],
-  left[1] * right[0] + left[3] * right[1],
-  left[0] * right[2] + left[2] * right[3],
-  left[1] * right[2] + left[3] * right[3],
-  left[0] * right[4] + left[2] * right[5] + left[4],
-  left[1] * right[4] + left[3] * right[5] + left[5],
-]
 
 const canAppendTextRun = (previous: PdfTextRun, next: PdfTextRun): boolean => {
   if (previous.fontName !== next.fontName) return false

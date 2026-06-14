@@ -4,6 +4,7 @@ import { createIdentityCidFontDecoder, createPdfFontSource, createSimpleFontDeco
 import { buildPageDisplayList, collectResourceNames, PdfContentResourceNames, PdfFormResource, PdfGraphicsColorSpace, PdfGraphicsResources, PdfGraphicsState, readOptionalGraphicsColorSpace, readOptionalShading, readOptionalShadingPattern } from './graphics'
 import { applyColorKeyMaskToRgba, applySoftMaskToRgba, applyStencilMaskToRgba, imageMaskSamplesToRgba, imageSamplesToRgba, readImageColorKeyMask, readImageColorSpace, readImageDecode, readOptionalDeviceColorSpace, supportsImageBits } from './images'
 import { PdfLexer } from './lexer'
+import { identityMatrix, isIdentityMatrix, multiplyMatrix, transformPoint } from './matrix'
 import { decodePdfTextString } from './strings'
 import {
   isDict,
@@ -1092,23 +1093,6 @@ const transformRect = (rect: PdfRect, matrix: PdfMatrix): PdfRect => {
   ]
 }
 
-const transformPoint = (x: number, y: number, matrix: PdfMatrix): { x: number; y: number } => ({
-  x: matrix[0] * x + matrix[2] * y + matrix[4],
-  y: matrix[1] * x + matrix[3] * y + matrix[5],
-})
-
-const multiplyMatrix = (left: PdfMatrix, right: PdfMatrix): PdfMatrix => [
-  left[0] * right[0] + left[2] * right[1],
-  left[1] * right[0] + left[3] * right[1],
-  left[0] * right[2] + left[2] * right[3],
-  left[1] * right[2] + left[3] * right[3],
-  left[0] * right[4] + left[2] * right[5] + left[4],
-  left[1] * right[4] + left[3] * right[5] + left[5],
-]
-
-const isIdentityMatrix = (matrix: PdfMatrix): boolean =>
-  matrix[0] === 1 && matrix[1] === 0 && matrix[2] === 0 && matrix[3] === 1 && matrix[4] === 0 && matrix[5] === 0
-
 interface PageGeometry {
   width: number
   height: number
@@ -1322,8 +1306,6 @@ const toMatrix = (value: PdfPrimitive | undefined): PdfMatrix | undefined => {
   if (numbers.length < 6) return undefined
   return [numbers[0], numbers[1], numbers[2], numbers[3], numbers[4], numbers[5]]
 }
-
-const identityMatrix = (): PdfMatrix => [1, 0, 0, 1, 0, 0]
 
 const maxFormResourceDepth = 16
 const maxOutlineDepth = 64
