@@ -379,6 +379,23 @@
             margin: -4px 0 12px 104px;
         }
 
+        .benchmark-result {
+            margin-left: 104px;
+            padding: 8px 10px;
+            border: 1px solid #eee;
+            border-radius: 6px;
+            background: #fafafa;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 11px;
+            line-height: 1.45;
+            color: #333;
+            white-space: pre-wrap;
+        }
+
+        .benchmark-result:empty {
+            display: none;
+        }
+
         .debug-panel {
             flex: 0 0 380px;
             width: 380px;
@@ -477,6 +494,27 @@
                 <option value="1">Single Page</option>
             </select>
         </div>
+        <div class="setting-row">
+            <label>Fixed Painter</label>
+            <select id="fixed-painter-select">
+                <option value="auto" selected>Auto</option>
+                <option value="canvas">Canvas 2D</option>
+                <option value="webgpu">WebGPU</option>
+            </select>
+        </div>
+        <div class="setting-row">
+            <label>PDF Perf</label>
+            <input type="checkbox" id="pdf-benchmark-check">
+        </div>
+        <div class="setting-row" id="pdf-benchmark-pages-row">
+            <label>Perf Pages</label>
+            <div class="export-controls">
+                <input type="number" id="pdf-benchmark-pages-input" min="1" max="80" value="8" title="PDF pages to benchmark">
+                <button id="btn-pdf-benchmark" type="button" title="Compare Canvas and WebGPU fixed painters">Run</button>
+            </div>
+        </div>
+        <div class="setting-note" id="pdf-benchmark-status">Open a PDF to compare fixed painter performance.</div>
+        <div class="benchmark-result" id="pdf-benchmark-result"></div>
         <div class="setting-row">
             <label>Font Size</label>
             <select id="font-size-select">
@@ -656,6 +694,7 @@
             UnsupportedFormatError,
             AdapterRequiredError,
             exportFirstSections,
+            isBrowserWebGpuSupported,
             registerBuiltInParsers,
             setRebookDebug,
         } from '../src/index.ts'
@@ -688,6 +727,13 @@
         const bookTitle = document.getElementById('book-title')
         const layoutSelect = document.getElementById('layout-select')
         const spreadSelect = document.getElementById('spread-select')
+        const fixedPainterSelect = document.getElementById('fixed-painter-select')
+        const pdfBenchmarkCheck = document.getElementById('pdf-benchmark-check')
+        const pdfBenchmarkPagesRow = document.getElementById('pdf-benchmark-pages-row')
+        const pdfBenchmarkPagesInput = document.getElementById('pdf-benchmark-pages-input')
+        const btnPdfBenchmark = document.getElementById('btn-pdf-benchmark')
+        const pdfBenchmarkStatus = document.getElementById('pdf-benchmark-status')
+        const pdfBenchmarkResult = document.getElementById('pdf-benchmark-result')
         const fontSizeSelect = document.getElementById('font-size-select')
         const settingsPanel = document.getElementById('settings-panel')
         const translationPanel = document.getElementById('translation-panel')
@@ -745,6 +791,9 @@
         const defaultConfig = {
             layout: 'paginated',
             spread: '2',
+            fixedPainter: 'auto',
+            pdfBenchmark: false,
+            pdfBenchmarkPages: '8',
             fontSize: '16px',
             theme: 'light',
             hyphenate: true,
@@ -788,6 +837,8 @@
         const ttsPlayer = createBrowserTTSAudioPlayer()
         let ttsStopRequested = false
         let ttsAbortController = null
+        let fixedBenchmarkToken = 0
+        let fixedBenchmarkRunning = false
 
         const loadConfig = () => {
             try {
@@ -801,6 +852,9 @@
             localStorage.setItem(CONFIG_KEY, JSON.stringify({
                 layout: layoutSelect.value,
                 spread: spreadSelect.value,
+                fixedPainter: fixedPainterSelect.value,
+                pdfBenchmark: pdfBenchmarkCheck.checked,
+                pdfBenchmarkPages: pdfBenchmarkPagesInput.value,
                 fontSize: fontSizeSelect.value,
                 theme: themeSelect.value,
                 hyphenate: hyphenateCheck.checked,
@@ -837,6 +891,9 @@
         const applyConfig = (config) => {
             layoutSelect.value = config.layout
             spreadSelect.value = config.spread
+            fixedPainterSelect.value = config.fixedPainter ?? defaultConfig.fixedPainter
+            pdfBenchmarkCheck.checked = !!config.pdfBenchmark
+            pdfBenchmarkPagesInput.value = config.pdfBenchmarkPages ?? defaultConfig.pdfBenchmarkPages
             fontSizeSelect.value = config.fontSize
             themeSelect.value = config.theme
             hyphenateCheck.checked = config.hyphenate
@@ -871,6 +928,7 @@
             updateTranslationFields()
             updateTTSFields()
             updateTrialFields()
+            updateFixedPerformanceFields()
         }
 
         const setDebugEnabled = (enabled) => {
@@ -1010,6 +1068,35 @@
             updateTrialStatus()
         }
 
+        const updateFixedPerformanceFields = () => {
+            const isPdf = currentBook?.fixedDocument?.format === 'pdf'
+            pdfBenchmarkPagesRow.style.display = pdfBenchmarkCheck.checked ? 'flex' : 'none'
+            btnPdfBenchmark.disabled = !isPdf || fixedBenchmarkRunning
+            if (!pdfBenchmarkCheck.checked) {
+                pdfBenchmarkStatus.textContent = isPdf
+                    ? formatCurrentPainterStatus()
+                    : 'Open a PDF to compare fixed painter performance.'
+                pdfBenchmarkResult.textContent = ''
+                return
+            }
+            if (!isPdf) {
+                pdfBenchmarkStatus.textContent = 'PDF performance compare is enabled. Open a PDF to run it.'
+                pdfBenchmarkResult.textContent = ''
+                return
+            }
+            pdfBenchmarkStatus.textContent = isBrowserWebGpuSupported()
+                ? `${formatCurrentPainterStatus()} WebGPU available.`
+                : `${formatCurrentPainterStatus()} WebGPU unavailable in this browser/context; only Canvas2D baseline can be measured.`
+        }
+
+        const formatCurrentPainterStatus = () => {
+            const paints = collectSurfacePaints(reader?.getCurrentSurface?.())
+            if (!paints.length) return `Current fixed painter preference: ${fixedPainterSelect.value}.`
+            const backends = [...new Set(paints.map(item => item.backend))]
+            const paintMs = paints.reduce((sum, item) => sum + item.ms, 0)
+            return `Current page backend: ${backends.join('+')} (${formatMs(paintMs)} paint).`
+        }
+
         const updateTTSFields = () => {
             const isMimo = isMimoTTSProvider()
             ttsFields.style.display = ttsCheck.checked ? 'block' : 'none'
@@ -1055,6 +1142,16 @@
             dark: { color: '#ddd', background: '#1a1a1a' },
             sepia: { color: '#5b4636', background: '#f4ecd8' },
         })[themeSelect.value]
+
+        const getReaderStyles = () => ({
+            ...getThemeStyles(),
+            fontSize: fontSizeSelect.value,
+            hyphenate: hyphenateCheck.checked,
+            lineHeight: 1.7,
+            minColumnWidth: '320px',
+            maxColumnWidth: '720px',
+            margin: '32px',
+        })
 
         function createDemoReader() {
             const plugins = []
@@ -1122,6 +1219,7 @@
                 maxColumnCount: Number(spreadSelect.value),
                 parserOptions,
                 plugins,
+                fixedPainter: fixedPainterSelect.value,
                 beforeNavigate: direction => {
                     if (direction === 'next' && trialCheck.checked && reader && !reader.canGoNext()) {
                         showTrialBlocked()
@@ -1129,15 +1227,7 @@
                     }
                     return true
                 },
-                styles: {
-                    ...getThemeStyles(),
-                    fontSize: fontSizeSelect.value,
-                    hyphenate: hyphenateCheck.checked,
-                    lineHeight: 1.7,
-                    minColumnWidth: '320px',
-                    maxColumnWidth: '720px',
-                    margin: '32px',
-                },
+                styles: getReaderStyles(),
             })
         }
 
@@ -1246,6 +1336,173 @@
                 refreshTimer = null
                 reader.refresh()
             }, 150)
+        }
+
+        async function runFixedPainterBenchmark(options = {}) {
+            if (options.auto && !pdfBenchmarkCheck.checked) return
+            if (!currentFile || currentBook?.fixedDocument?.format !== 'pdf') {
+                updateFixedPerformanceFields()
+                return
+            }
+
+            const token = ++fixedBenchmarkToken
+            fixedBenchmarkRunning = true
+            btnPdfBenchmark.disabled = true
+            const pageLimit = clampInteger(Number(pdfBenchmarkPagesInput.value), 1, 80, Number(defaultConfig.pdfBenchmarkPages))
+            pdfBenchmarkStatus.textContent = `Running PDF painter comparison on ${pageLimit} page${pageLimit === 1 ? '' : 's'}...`
+            pdfBenchmarkResult.textContent = ''
+
+            try {
+                const results = []
+                const painters = getFixedBenchmarkPainters()
+                for (const fixedPainter of painters) {
+                    if (token !== fixedBenchmarkToken) return
+                    pdfBenchmarkStatus.textContent = `Benchmarking ${fixedPainter} painter...`
+                    const result = await runFixedPainterBenchmarkPass(fixedPainter, pageLimit)
+                    results.push(result)
+                    pdfBenchmarkResult.textContent = formatFixedPainterBenchmarkResults(results)
+                }
+                if (token !== fixedBenchmarkToken) return
+                pdfBenchmarkStatus.textContent = isBrowserWebGpuSupported()
+                    ? 'PDF painter comparison finished.'
+                    : 'PDF painter baseline finished. WebGPU is unavailable in this browser/context, so the WebGPU pass was skipped.'
+                debugDemo('pdf painter benchmark', {
+                    pages: pageLimit,
+                    webgpuSupported: isBrowserWebGpuSupported(),
+                    results,
+                })
+            } catch (error) {
+                if (token !== fixedBenchmarkToken) return
+                const detail = formatErrorDetail(error)
+                pdfBenchmarkStatus.textContent = `PDF painter comparison failed: ${detail}`
+                debugDemo('pdf painter benchmark failed', { detail })
+            } finally {
+                if (token === fixedBenchmarkToken) {
+                    fixedBenchmarkRunning = false
+                    btnPdfBenchmark.disabled = currentBook?.fixedDocument?.format !== 'pdf'
+                }
+            }
+        }
+
+        async function runFixedPainterBenchmarkPass(fixedPainter, pageLimit) {
+            const container = createBenchmarkContainer()
+            document.body.appendChild(container)
+            const benchmarkReader = createReader({
+                container,
+                layout: 'paginated',
+                maxColumnCount: 1,
+                parserOptions,
+                fixedPainter,
+                styles: getReaderStyles(),
+            })
+
+            try {
+                const openStarted = performance.now()
+                const book = await benchmarkReader.open(currentFile)
+                const openMs = performance.now() - openStarted
+                const pageCount = Math.min(pageLimit, book.fixedDocument?.pageCount ?? pageLimit)
+                const pages = [readBenchmarkSurface(benchmarkReader, 0, 0)]
+
+                for (let pageIndex = 1; pageIndex < pageCount; pageIndex++) {
+                    const started = performance.now()
+                    await benchmarkReader.goTo(pageIndex)
+                    pages.push(readBenchmarkSurface(benchmarkReader, pageIndex, performance.now() - started))
+                }
+
+                const paintMs = pages.reduce((sum, page) => sum + page.paintMs, 0)
+                const navigationMs = pages.reduce((sum, page) => sum + page.navigationMs, 0)
+                const backends = [...new Set(pages.flatMap(page => page.backends))]
+                const actual = backends.join('+') || 'none'
+                return {
+                    requested: fixedPainter,
+                    actual,
+                    fallback: fixedPainter === 'webgpu' && !actual.includes('webgpu'),
+                    pages: pageCount,
+                    openMs: roundDebugNumber(openMs),
+                    paintMs: roundDebugNumber(paintMs),
+                    navigationMs: roundDebugNumber(navigationMs),
+                    paintMsPerPage: roundDebugNumber(paintMs / Math.max(1, pageCount)),
+                    navigationMsPerPage: roundDebugNumber(navigationMs / Math.max(1, pageCount - 1)),
+                    pageSamples: pages.slice(0, 6),
+                }
+            } finally {
+                benchmarkReader.destroy()
+                container.remove()
+            }
+        }
+
+        function getFixedBenchmarkPainters() {
+            return isBrowserWebGpuSupported()
+                ? ['canvas', 'webgpu']
+                : ['canvas']
+        }
+
+        function createBenchmarkContainer() {
+            const rect = viewer.getBoundingClientRect()
+            const width = Math.max(360, Math.round(rect.width || 720))
+            const height = Math.max(480, Math.round(rect.height || 900))
+            const container = document.createElement('div')
+            container.style.cssText = `
+                position: fixed;
+                left: -10000px;
+                top: 0;
+                width: ${width}px;
+                height: ${height}px;
+                overflow: hidden;
+                opacity: 0;
+                pointer-events: none;
+            `
+            return container
+        }
+
+        function readBenchmarkSurface(benchmarkReader, expectedPageIndex, navigationMs) {
+            const surface = benchmarkReader.getCurrentSurface()
+            const paints = collectSurfacePaints(surface)
+            return {
+                pageIndex: surface?.pageIndex ?? expectedPageIndex,
+                backends: [...new Set(paints.map(item => item.backend))],
+                paintMs: roundDebugNumber(paints.reduce((sum, item) => sum + item.ms, 0)),
+                navigationMs: roundDebugNumber(navigationMs),
+            }
+        }
+
+        function collectSurfacePaints(surface) {
+            if (!surface) return []
+            const paints = []
+            if (surface.metadata?.paint) paints.push(surface.metadata.paint)
+            const pages = surface.metadata?.pages
+            if (Array.isArray(pages)) {
+                for (const page of pages) paints.push(...collectSurfacePaints(page.surface))
+            }
+            return paints.filter(item =>
+                item &&
+                typeof item.backend === 'string' &&
+                typeof item.ms === 'number' &&
+                Number.isFinite(item.ms)
+            )
+        }
+
+        function formatFixedPainterBenchmarkResults(results) {
+            return results.map(result => [
+                `${result.requested} -> ${result.actual}${result.fallback ? ' (fallback)' : ''}`,
+                `pages: ${result.pages}`,
+                `paint: ${formatMs(result.paintMs)} total, ${formatMs(result.paintMsPerPage)}/page`,
+                `nav: ${formatMs(result.navigationMs)} total, ${formatMs(result.navigationMsPerPage)}/page`,
+                `open: ${formatMs(result.openMs)} (parse + first render, shown for context)`,
+            ].join('\n')).join('\n\n')
+        }
+
+        function formatMs(value) {
+            const number = Number(value)
+            if (!Number.isFinite(number)) return 'n/a'
+            if (number < 10) return `${number.toFixed(2)}ms`
+            if (number < 100) return `${number.toFixed(1)}ms`
+            return `${Math.round(number)}ms`
+        }
+
+        function clampInteger(value, min, max, fallback) {
+            if (!Number.isFinite(value)) return fallback
+            return Math.max(min, Math.min(max, Math.trunc(value)))
         }
 
         // Format helpers
@@ -1466,6 +1723,10 @@
                 // Start reading
                 await reader.goTo(0)
                 updateTrialStatus()
+                updateFixedPerformanceFields()
+                if (pdfBenchmarkCheck.checked && book.fixedDocument?.format === 'pdf') {
+                    void runFixedPainterBenchmark({ auto: true })
+                }
             } catch (e) {
                 console.error('Failed to open file:', e)
                 let message = e.message
@@ -1476,6 +1737,7 @@
                 }
                 alert(`Failed to open file: ${message}`)
                 currentBook = null
+                updateFixedPerformanceFields()
                 dropTarget.classList.remove('hidden')
             }
         }
@@ -1570,6 +1832,30 @@
         spreadSelect.addEventListener('change', (e) => {
             saveConfig()
             reader.setSpread(Number(e.target.value))
+        })
+
+        fixedPainterSelect.addEventListener('change', () => {
+            saveConfig()
+            recreateReader()
+        })
+
+        pdfBenchmarkCheck.addEventListener('change', () => {
+            if (!pdfBenchmarkCheck.checked) {
+                fixedBenchmarkToken++
+                fixedBenchmarkRunning = false
+            }
+            updateFixedPerformanceFields()
+            saveConfig()
+            if (pdfBenchmarkCheck.checked) void runFixedPainterBenchmark()
+        })
+
+        pdfBenchmarkPagesInput.addEventListener('change', () => {
+            saveConfig()
+            updateFixedPerformanceFields()
+        })
+
+        btnPdfBenchmark.addEventListener('click', () => {
+            void runFixedPainterBenchmark()
         })
 
         fontSizeSelect.addEventListener('change', (e) => {
@@ -1888,6 +2174,7 @@
                 progressFill.style.width = `${percent}%`
                 progressText.textContent = formatProgressPercent(percent)
                 updateTrialStatus()
+                if (!fixedBenchmarkRunning) updateFixedPerformanceFields()
 
                 // Highlight current TOC item
                 const tocViewItems = reader.getTOCViewItems({ location: e })
