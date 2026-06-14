@@ -26,10 +26,13 @@ import {
     type LineRange,
     type PreparedText,
     type TextBlock,
-    type TextImage,
-    type TextTable,
     type TextStyle,
 } from '../../core/pretext'
+import { BrowserPageCompositor } from './compositor'
+import {
+    BrowserReflowableContentRenderer,
+    type ReflowableColumnLayout,
+} from './reflowable-content'
 
 interface RendererEventMap {
     load: LoadEvent
@@ -43,23 +46,13 @@ type Listener<T> = (event: T) => void
 export interface BrowserRendererConfig extends RendererConfig {
     /** The browser element to render into. */
     container: HTMLElement
+    reflowableContentRenderer?: BrowserReflowableContentRenderer
+    pageCompositor?: BrowserPageCompositor
 }
 
 const RESIZE_DEBOUNCE_MS = 100
 const DEFAULT_MARGIN = 32
 const DEFAULT_GAP = 48
-
-interface ColumnLayout {
-    margin: number
-    gap: number
-    columnWidth: number
-    columns: number
-    pageHeight: number
-    columnHeight: number
-    pagePaddingBlock: number
-    totalHeight: number
-    pageCount: number
-}
 
 interface TOCPosition {
     index: number
@@ -86,9 +79,11 @@ export class BrowserRenderer implements Renderer {
     private currentIndex = -1
     private prepared: PreparedText | null = null
     private lines: LineRange[] = []
+    private readonly contentRenderer: BrowserReflowableContentRenderer
+    private readonly compositor: BrowserPageCompositor
     private styles: RendererStyles
     private maxColumnCount: number
-    private columnLayout: ColumnLayout = {
+    private columnLayout: ReflowableColumnLayout = {
         margin: DEFAULT_MARGIN,
         gap: DEFAULT_GAP,
         columnWidth: 0,
@@ -140,6 +135,12 @@ export class BrowserRenderer implements Renderer {
         this.spacer.appendChild(this.content)
         this.scroller.appendChild(this.spacer)
         this.container.appendChild(this.scroller)
+        this.compositor = config.pageCompositor ?? new BrowserPageCompositor({
+            host: this.content,
+            pageBackground: 'transparent',
+            pageShadow: 'none',
+        })
+        this.contentRenderer = config.reflowableContentRenderer ?? new BrowserReflowableContentRenderer()
 
         this.scroller.addEventListener('scroll', () => {
             this.renderVisibleLines()
@@ -178,7 +179,7 @@ export class BrowserRenderer implements Renderer {
         this.lastLocation = null
         this.prepared = null
         this.lines = []
-        this.content.innerHTML = ''
+        this.compositor.clear()
         this.spacer.style.height = '100%'
         this.scroller.scrollTop = 0
         this.prefetchPageCount = getPluginPrefetchPageCount(book)
@@ -360,6 +361,8 @@ export class BrowserRenderer implements Renderer {
     destroy(): void {
         this.activeLoadId++
         this.resizeObserver.disconnect()
+        this.compositor.destroy()
+        void this.contentRenderer.destroy?.()
         this.scroller.remove()
         this.listeners.clear()
         this.book = null
@@ -483,287 +486,29 @@ export class BrowserRenderer implements Renderer {
 
     private renderVisibleLines(): void {
         const layout = this.columnLayout
-        const sourceScrollTop = this.getSourceScrollTop()
-        const sourceViewportHeight = this.getSourceViewportHeight()
-        const window = getVisibleLines(this.lines, sourceScrollTop, sourceViewportHeight, 4)
-        this.content.textContent = ''
-
-        for (const line of window.lines) {
-            const position = this.getRenderedLinePosition(line)
-            if (line.kind === 'image' && line.image) {
-                this.content.appendChild(this.createImageLine(line, position))
-                continue
-            }
-            if (line.kind === 'table' && line.table) {
-                this.content.appendChild(this.createTableLine(line, position))
-                continue
-            }
-            if (line.kind === 'separator') {
-                this.content.appendChild(this.createSeparatorLine(line, position))
-                continue
-            }
-            if (line.kind === 'pre') {
-                this.content.appendChild(this.createPreBlock(line, position))
-                continue
-            }
-            const lineEl = document.createElement('div')
-            const inlineOffset = line.inlineOffset ?? 0
-            lineEl.style.cssText = `
-                position: absolute;
-                top: ${position.top}px;
-                left: ${position.left + inlineOffset}px;
-                width: ${Math.max(1, layout.columnWidth - inlineOffset)}px;
-                height: ${line.height}px;
-                line-height: ${line.height}px;
-                white-space: pre;
-            `
-            const block = line.block ?? this.prepared?.blocks.find(item => item.itemSegmentIndexes.includes(line.start?.segmentIndex ?? -1))?.block
-            if (block) {
-                lineEl.dataset.blockId = block.id
-                lineEl.dataset.blockType = block.type
-            }
-            this.applyLineMarks(lineEl, line)
-
-            for (const fragment of line.segments) {
-                const span = document.createElement('span')
-                if (fragment.gapBefore > 0) span.style.marginLeft = `${fragment.gapBefore}px`
-                if (isInlineImageFragment(fragment)) {
-                    const img = document.createElement('img')
-                    img.src = fragment.source.attrs.src ?? ''
-                    img.alt = fragment.source.attrs.alt ?? ''
-                    img.style.cssText = `
-                        display: inline-block;
-                        width: ${parseCSSPixels(fragment.source.attrs['data-rebook-inline-image-width'], 11)}px;
-                        height: ${parseCSSPixels(fragment.source.attrs['data-rebook-inline-image-height'], 11)}px;
-                        max-width: 1em;
-                        max-height: 1em;
-                        vertical-align: super;
-                        object-fit: contain;
-                    `
-                    span.appendChild(img)
-                } else {
-                    span.textContent = fragment.text
-                    applyTextStyle(span, { ...this.getBaseTextStyle(), ...fragment.style })
-                }
-                lineEl.appendChild(span)
-            }
-
-            this.content.appendChild(lineEl)
+        if (!this.prepared || this.currentIndex < 0) {
+            this.compositor.clear()
+            return
         }
-    }
 
-    private createImageLine(line: LineRange, position: { top: number; left: number }): HTMLElement {
-        const layout = this.columnLayout
-        const image = line.image!
-        const imageLeft = getImageLeft(image, position.left, line.width, layout.columnWidth)
-        const wrapper = document.createElement('figure')
-        wrapper.style.cssText = `
-            position: absolute;
-            top: ${position.top}px;
-            left: ${imageLeft}px;
-            width: ${line.width}px;
-            height: ${line.height}px;
-            margin: 0;
-            overflow: hidden;
-        `
-        if (line.block) {
-            wrapper.dataset.blockId = line.block.id
-            wrapper.dataset.blockType = line.block.type
-        }
-        this.applyLineMarks(wrapper, line)
-        if (image.isCover) wrapper.dataset.cover = 'true'
-
-        const img = document.createElement('img')
-        img.src = image.src
-        img.alt = image.alt ?? ''
-        if (image.title) img.title = image.title
-        img.style.cssText = `
-            display: block;
-            width: 100%;
-            height: auto;
-            max-height: ${line.height}px;
-            object-fit: ${image.style?.objectFit ?? 'contain'};
-        `
-        wrapper.appendChild(img)
-        return wrapper
-    }
-
-    private createPreBlock(line: LineRange, position: { top: number; left: number }): HTMLElement {
-        const layout = this.columnLayout
-        const block = line.block!
-        const preStyle = block.style ?? {}
-        const fontSize = preStyle.fontSize ?? layout.columnWidth * 0.04
-        const inlineOffset = line.inlineOffset ?? 0
-        const preWidth = Math.max(1, layout.columnWidth - inlineOffset)
-
-        const wrapper = document.createElement('pre')
-        wrapper.style.cssText = `
-            position: absolute;
-            top: ${position.top}px;
-            left: ${position.left + inlineOffset}px;
-            width: ${preWidth}px;
-            height: ${line.height}px;
-            margin: 0;
-            padding: ${fontSize * 0.75}px ${fontSize}px;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-            font-size: ${fontSize}px;
-            line-height: 1.55;
-            white-space: pre;
-            overflow: auto;
-            background: #f5f5f5;
-            border-radius: 6px;
-            border: 1px solid #e0e0e0;
-            color: #333;
-            box-sizing: border-box;
-        `
-        if (block) {
-            wrapper.dataset.blockId = block.id
-            wrapper.dataset.blockType = block.type
-        }
-        this.applyLineMarks(wrapper, line)
-
-        // Build content with span-based inline styling if segments have varied styles
-        const hasVariedStyles = line.segments.some((seg, i) => {
-            if (i === 0) return false
-            return seg.style?.fontFamily !== line.segments[i - 1]?.style?.fontFamily
-                || seg.style?.fontWeight !== line.segments[i - 1]?.style?.fontWeight
-                || seg.style?.fontStyle !== line.segments[i - 1]?.style?.fontStyle
-                || seg.style?.color !== line.segments[i - 1]?.style?.color
+        const surfaceWidth = Math.max(1, layout.columnWidth * layout.columns + layout.gap * (layout.columns - 1))
+        const surface = this.contentRenderer.renderSurface({
+            sectionIndex: this.currentIndex,
+            pageIndex: this.pageIndex,
+            layoutMode: this.layoutMode,
+            layout,
+            lines: this.lines,
+            prepared: this.prepared,
+            styles: this.styles,
+            marks: Array.from(this.marks.values()),
+            baseTextStyle: this.getBaseTextStyle(),
+            lineHeightPixels: this.getLineHeightPixels(),
+            sourceScrollTop: this.getSourceScrollTop(),
+            sourceViewportHeight: this.getSourceViewportHeight(),
+            surfaceWidth,
+            surfaceHeight: Math.max(1, layout.totalHeight),
         })
-
-        if (hasVariedStyles && line.segments.length > 0) {
-            let currentStyle: TextStyle | null = null
-            let currentText = ''
-            const flush = () => {
-                if (currentText) {
-                    if (currentStyle) {
-                        const span = document.createElement('span')
-                        if (currentStyle.fontWeight) span.style.fontWeight = currentStyle.fontWeight
-                        if (currentStyle.fontStyle) span.style.fontStyle = currentStyle.fontStyle
-                        if (currentStyle.color) span.style.color = currentStyle.color
-                        if (currentStyle.fontFamily) span.style.fontFamily = currentStyle.fontFamily
-                        span.textContent = currentText
-                        wrapper.appendChild(span)
-                    } else {
-                        wrapper.appendChild(document.createTextNode(currentText))
-                    }
-                    currentText = ''
-                }
-            }
-            for (const seg of line.segments) {
-                const segKey = seg.style ? `${seg.style.fontWeight}-${seg.style.fontStyle}-${seg.style.color}-${seg.style.fontFamily}` : 'none'
-                const prevKey = currentStyle ? `${currentStyle.fontWeight}-${currentStyle.fontStyle}-${currentStyle.color}-${currentStyle.fontFamily}` : 'none'
-                if (segKey !== prevKey) {
-                    flush()
-                    currentStyle = seg.style ?? null
-                }
-                currentText += seg.text
-            }
-            flush()
-        } else {
-            wrapper.textContent = line.text
-        }
-
-        return wrapper
-    }
-
-    private createSeparatorLine(line: LineRange, position: { top: number; left: number }): HTMLElement {
-        const layout = this.columnLayout
-        const wrapper = document.createElement('div')
-        wrapper.style.cssText = `
-            position: absolute;
-            top: ${position.top}px;
-            left: ${position.left}px;
-            width: ${layout.columnWidth}px;
-            height: ${line.height}px;
-            display: flex;
-            align-items: center;
-        `
-        if (line.block) {
-            wrapper.dataset.blockId = line.block.id
-            wrapper.dataset.blockType = line.block.type
-        }
-        this.applyLineMarks(wrapper, line)
-
-        const rule = document.createElement('div')
-        rule.style.cssText = `
-            width: 100%;
-            border-top: 1px solid currentColor;
-            opacity: 0.35;
-        `
-        wrapper.appendChild(rule)
-        return wrapper
-    }
-
-    private createTableLine(line: LineRange, position: { top: number; left: number }): HTMLElement {
-        const layout = this.columnLayout
-        const table = line.table!
-        const wrapper = document.createElement('div')
-        wrapper.style.cssText = `
-            position: absolute;
-            top: ${position.top}px;
-            left: ${position.left}px;
-            width: ${layout.columnWidth}px;
-            height: ${line.height}px;
-            overflow: hidden;
-            font-family: ${this.styles.fontFamily ?? 'system-ui, -apple-system, Georgia, serif'};
-            font-size: ${parseCSSPixels(this.styles.fontSize, 16)}px;
-            line-height: ${this.getLineHeightPixels()}px;
-            color: ${this.styles.color ?? 'inherit'};
-        `
-        wrapper.dataset.blockId = line.block?.id ?? `table-row-${table.rowIndex}`
-        wrapper.dataset.blockType = 'table'
-        wrapper.setAttribute('role', 'row')
-        this.applyLineMarks(wrapper, line)
-
-        const row = document.createElement('div')
-        row.style.cssText = `
-            display: grid;
-            grid-template-columns: ${getTableGridTemplate(table)};
-            width: 100%;
-            min-height: 100%;
-            border-top: ${table.rowIndex === 0 ? '1px solid #8a8a8a' : '0'};
-            border-left: 1px solid #8a8a8a;
-            background: #fff;
-        `
-
-        for (const cell of table.rows[0]?.cells ?? []) {
-            const cellEl = document.createElement(cell.header ? 'strong' : 'span')
-            cellEl.textContent = cell.text
-            cellEl.style.cssText = `
-                display: block;
-                min-width: 0;
-                padding: 4px 6px;
-                border-right: 1px solid #8a8a8a;
-                border-bottom: 1px solid #8a8a8a;
-                white-space: normal;
-                overflow-wrap: anywhere;
-                text-align: ${getTableTextAlign(cell.align)};
-                ${cell.colspan ? `grid-column: span ${cell.colspan};` : ''}
-            `
-            row.appendChild(cellEl)
-        }
-
-        wrapper.appendChild(row)
-        return wrapper
-    }
-
-    private applyLineMarks(element: HTMLElement, line: LineRange): void {
-        const marks = this.getLineMarks(line)
-        if (!marks.length) return
-        element.dataset.markIds = marks.map(mark => mark.id).join(' ')
-        element.dataset.markKinds = marks.map(mark => mark.kind).filter(Boolean).join(' ')
-        for (const mark of marks) {
-            element.classList.add(...getMarkClassNames(mark))
-            for (const [key, value] of Object.entries(mark.data ?? {})) {
-                element.dataset[`mark${toPascalCase(key)}`] = String(value)
-            }
-        }
-    }
-
-    private getLineMarks(line: LineRange): ReaderMark[] {
-        if (this.currentIndex < 0) return []
-        return Array.from(this.marks.values()).filter(mark => markMatchesLine(mark, line, this.currentIndex))
+        this.compositor.compose(surface)
     }
 
     private emitRelocate(reason: string): void {
@@ -1011,19 +756,6 @@ export class BrowserRenderer implements Renderer {
         return getColumnCount(this.layoutMode, availableWidth, minColumnWidth, gap, this.maxColumnCount)
     }
 
-    private getRenderedLinePosition(line: LineRange): { top: number; left: number } {
-        const { columns, pageHeight, columnHeight, columnWidth, gap, pagePaddingBlock } = this.columnLayout
-        if (this.layoutMode !== 'paginated') return { top: line.top + pagePaddingBlock, left: 0 }
-
-        const sourceColumn = Math.floor(line.top / columnHeight)
-        const row = Math.floor(sourceColumn / columns)
-        const column = sourceColumn % columns
-        return {
-            top: row * pageHeight + pagePaddingBlock + (line.top % columnHeight),
-            left: column * (columnWidth + gap),
-        }
-    }
-
     private getSourceScrollTop(): number {
         if (this.layoutMode !== 'paginated') {
             return Math.max(0, this.scroller.scrollTop - this.columnLayout.pagePaddingBlock)
@@ -1163,69 +895,4 @@ function compareTOCPosition(a: TOCPosition, b: TOCPosition): number {
     return a.index - b.index
         || a.sourceTop - b.sourceTop
         || a.order - b.order
-}
-
-function markMatchesLine(mark: ReaderMark, line: LineRange, sectionIndex: number): boolean {
-    if (!('sectionIndex' in mark.range) || mark.range.sectionIndex !== sectionIndex) return false
-    if (!('blockId' in mark.range)) return false
-    if (line.block?.id !== mark.range.blockId) return false
-    if (mark.range.startOffset === undefined && mark.range.endOffset === undefined) return true
-    if ((line.block?.segments.length ?? 0) !== 1) return true
-    const lineStart = line.start?.cursor.graphemeIndex ?? 0
-    const lineEnd = line.end?.cursor.graphemeIndex ?? lineStart
-    if (lineEnd <= lineStart) return true
-    const markStart = mark.range.startOffset ?? Number.NEGATIVE_INFINITY
-    const markEnd = mark.range.endOffset ?? Number.POSITIVE_INFINITY
-    return lineStart < markEnd && lineEnd > markStart
-}
-
-function getMarkClassNames(mark: ReaderMark): string[] {
-    const names = mark.className?.trim().split(/\s+/).filter(Boolean) ?? []
-    if (mark.kind) names.push(`rebook-mark-${toKebabCase(mark.kind)}`)
-    return names.length ? names : ['rebook-mark']
-}
-
-function toKebabCase(value: string): string {
-    return value.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()
-}
-
-function toPascalCase(value: string): string {
-    return value
-        .replace(/[^a-zA-Z0-9]+(.)/g, (_, char: string) => char.toUpperCase())
-        .replace(/^[a-z]/, char => char.toUpperCase())
-}
-
-function applyTextStyle(element: HTMLElement, style: TextStyle): void {
-    if (style.fontFamily) element.style.fontFamily = style.fontFamily
-    if (style.fontSize) element.style.fontSize = `${style.fontSize}px`
-    if (style.fontWeight) element.style.fontWeight = style.fontWeight
-    if (style.fontStyle) element.style.fontStyle = style.fontStyle
-    if (style.fontVariant) element.style.fontVariant = style.fontVariant
-    if (style.color) element.style.color = style.color
-    if (style.textDecoration) element.style.textDecoration = style.textDecoration
-    if (style.verticalAlign) element.style.verticalAlign = style.verticalAlign
-    if (style.letterSpacing) element.style.letterSpacing = `${style.letterSpacing}px`
-}
-
-function isInlineImageFragment(fragment: { source?: { nodeType?: string; attrs?: Readonly<Record<string, string>> } }): fragment is { source: { nodeType: 'img'; attrs: Readonly<Record<string, string>> } } {
-    return fragment.source?.nodeType === 'img' && Boolean(fragment.source.attrs?.src)
-}
-
-function getImageLeft(image: TextImage, columnLeft: number, imageWidth: number, columnWidth: number): number {
-    if (image.style?.align === 'start') return columnLeft
-    if (image.style?.align === 'end') return columnLeft + columnWidth - imageWidth
-    return columnLeft + (columnWidth - imageWidth) / 2
-}
-
-function getTableGridTemplate(table: TextTable): string {
-    const weights = table.columnWeights?.length === table.columnCount
-        ? table.columnWeights
-        : Array.from({ length: table.columnCount }, () => 1)
-    return weights.map(weight => `minmax(0, ${Math.max(0.1, weight)}fr)`).join(' ')
-}
-
-function getTableTextAlign(align: 'start' | 'center' | 'end' | undefined): string {
-    if (align === 'center') return 'center'
-    if (align === 'end') return 'right'
-    return 'left'
 }

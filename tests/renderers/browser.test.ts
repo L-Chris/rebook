@@ -200,6 +200,9 @@ describe('BrowserRenderer', () => {
         await renderer.open(book)
         await renderer.goTo(0)
 
+        expect(container.querySelector('[data-rebook-page-surface="true"]')).toBeTruthy()
+        expect(container.querySelector('[data-rebook-surface-kind="reflowable-page"]')).toBeTruthy()
+        expect(container.querySelector('[data-rebook-reflowable-content-layer="true"]')).toBeTruthy()
         const renderedRows = container.querySelectorAll('span').length
         expect(loadedLines).toBeGreaterThan(5)
         expect(renderedRows).toBeGreaterThan(0)
@@ -280,6 +283,7 @@ describe('BrowserRenderer', () => {
         await reader.openBook(book)
         await reader.goTo(0)
 
+        expect(container.querySelector('[data-rebook-surface-kind="reflowable-page"]')).toBeTruthy()
         expect(container.querySelector('[data-block-type="chapter"]')).toBeDefined()
         expect(container.querySelector('iframe')).toBeNull()
 
@@ -526,17 +530,21 @@ describe('BrowserRenderer', () => {
         const lefts = new Set(rows.map(row => row.style.left))
         expect(lefts.size).toBeGreaterThan(1)
         expect(rows.some(row => row.style.left === '368px')).toBe(true)
-        const content = rows[0].parentElement as HTMLElement
-        expect(content.style.left).toBe('56px')
-        expect(content.style.width).toBe('688px')
+        const layer = rows[0].closest('[data-rebook-reflowable-content-layer="true"]') as HTMLElement
+        const frame = layer.parentElement as HTMLElement
+        const contentHost = frame.parentElement as HTMLElement
+        expect(contentHost.style.left).toBe('56px')
+        expect(frame.style.width).toBe('688px')
 
         renderer.setSpread(1)
         const singleColumnRows = Array.from(container.querySelectorAll('[data-block-type="paragraph"]')) as HTMLElement[]
         const singleColumnLefts = new Set(singleColumnRows.map(row => row.style.left))
         expect(singleColumnLefts).toEqual(new Set(['0px']))
-        const singleColumnContent = singleColumnRows[0].parentElement as HTMLElement
-        expect(singleColumnContent.style.left).toBe('240px')
-        expect(singleColumnContent.style.width).toBe('320px')
+        const singleColumnLayer = singleColumnRows[0].closest('[data-rebook-reflowable-content-layer="true"]') as HTMLElement
+        const singleColumnFrame = singleColumnLayer.parentElement as HTMLElement
+        const singleColumnContentHost = singleColumnFrame.parentElement as HTMLElement
+        expect(singleColumnContentHost.style.left).toBe('240px')
+        expect(singleColumnFrame.style.width).toBe('320px')
 
         renderer.destroy()
     })

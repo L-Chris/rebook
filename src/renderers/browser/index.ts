@@ -7,6 +7,12 @@ export {
     type BrowserFixedContentRendererConfig,
 } from './fixed-content'
 export {
+    BrowserReflowableContentRenderer,
+    createBrowserReflowableContentRenderer,
+    type BrowserReflowableContentRenderContext,
+    type ReflowableColumnLayout,
+} from './reflowable-content'
+export {
     BrowserPageCompositor,
     createBrowserPageCompositor,
     type BrowserPageCompositorConfig,
