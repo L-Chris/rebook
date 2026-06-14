@@ -15,17 +15,19 @@ export { BrowserRenderer, createBrowserRenderer, type BrowserRendererConfig } fr
 export { BrowserFixedRenderer, createBrowserFixedRenderer, type BrowserFixedRendererConfig } from './fixed'
 export {
     BrowserFixedContentRenderer,
-    BrowserFixedCanvasVisualRenderer,
-    BrowserFixedImageVisualRenderer,
     createBrowserFixedContentRenderer,
-    selectFixedVisualRenderer,
-    type BrowserFixedCanvasVisualRendererConfig,
     type BrowserFixedContentRenderContext,
     type BrowserFixedContentRendererConfig,
+} from './fixed-content'
+export {
+    BrowserFixedCanvasVisualRenderer,
+    BrowserFixedImageVisualRenderer,
+    selectFixedVisualRenderer,
+    type BrowserFixedCanvasVisualRendererConfig,
     type BrowserFixedVisualRenderContext,
     type BrowserFixedVisualRenderer,
     type BrowserFixedVisualRendererMatch,
-} from './fixed-content'
+} from './fixed-visual'
 export {
     BrowserFixedMarkLayerDecorator,
     createBrowserFixedMarkLayerDecorator,
