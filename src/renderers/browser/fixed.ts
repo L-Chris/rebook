@@ -62,6 +62,7 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     private layoutMode: LayoutMode
     private lastLocation: RelocateEvent | null = null
     private readonly devicePixelRatio?: number | (() => number)
+    private wheelNavigationPending = false
 
     constructor(config: BrowserFixedRendererConfig) {
         this.styles = config.styles ?? {}
@@ -92,6 +93,7 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
                 }),
             ],
         })
+        this.scroller.addEventListener('wheel', this.handleWheel, { passive: false })
     }
 
     async open(book: Book): Promise<void> {
@@ -189,6 +191,7 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     }
 
     destroy(): void {
+        this.scroller.removeEventListener('wheel', this.handleWheel)
         this.surfacePipeline.destroy()
         this.host.destroy({ compositor: false })
         this.events.clear()
@@ -203,6 +206,7 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         const fit = resolveFixedPageFit(page, this.getViewportMetrics(), {
             margin: this.styles.margin,
             maxInlineSize: this.styles.maxInlineSize,
+            maxColumnWidth: this.styles.maxColumnWidth,
             defaultMargin: DEFAULT_MARGIN,
             devicePixelRatio: this.getDevicePixelRatio(),
         })
@@ -212,9 +216,17 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         )
         if (!rendered) return
 
+        this.applyPageAlignment(fit.viewport.cssHeight, fit.margin)
         this.scroller.scrollTop = 0
         this.emit('load', { doc: rendered.surface.metadata?.textLayer ?? rendered.surface, index: page.index })
         this.emitRelocate(reason)
+    }
+
+    private applyPageAlignment(pageHeight: number, margin: number): void {
+        const totalBlockSize = pageHeight + margin * 2
+        this.pageHost.style.alignItems = totalBlockSize <= Math.max(1, this.scroller.clientHeight)
+            ? 'center'
+            : 'flex-start'
     }
 
     private getViewportMetrics(): FixedViewportMetrics {
@@ -248,6 +260,18 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
 
     private async canNavigate(direction: 'next' | 'prev'): Promise<boolean> {
         return await this.beforeNavigate?.(direction) !== false
+    }
+
+    private readonly handleWheel = (event: WheelEvent): void => {
+        if (Math.abs(event.deltaY) < 2) return
+        event.preventDefault()
+        if (this.wheelNavigationPending) return
+
+        this.wheelNavigationPending = true
+        const navigation = event.deltaY > 0 ? this.next() : this.prev()
+        void navigation.finally(() => {
+            this.wheelNavigationPending = false
+        })
     }
 }
 

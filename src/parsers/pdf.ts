@@ -68,7 +68,8 @@ export class PDFParser implements Parser {
                 href: pageHref(index),
             }))
             const pageIndexByRef = new Map(document.getPages().map(page => [pdfRefKey(page.object), page.index]))
-            const toc = outlineToTOC(await document.getOutline(), pageIndexByRef)
+            const outline = outlineToTOC(await document.getOutline(), pageIndexByRef)
+            const toc = outline.length > 0 ? outline : createPageTOC(document.pageCount)
             const metadata: BookMetadata = {
                 title: getInputName(input) ?? 'PDF Document',
                 format: 'pdf',
@@ -212,6 +213,13 @@ function outlineToTOC(items: readonly PdfOutlineItem[], pageIndexByRef: Readonly
         label: item.title,
         href: outlineHref(item, index, pageIndexByRef),
         subitems: item.items.length > 0 ? outlineToTOC(item.items, pageIndexByRef) : undefined,
+    }))
+}
+
+function createPageTOC(pageCount: number): TOCItem[] {
+    return Array.from({ length: pageCount }, (_, index): TOCItem => ({
+        label: `Page ${index + 1}`,
+        href: pageHref(index),
     }))
 }
 

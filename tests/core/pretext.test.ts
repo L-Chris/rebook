@@ -227,6 +227,32 @@ describe('Pretext pipeline', () => {
         expect(lines[0].table?.rows[0]?.cells[1]?.text).toBe('Article count')
     })
 
+    it('infers wider columns for dense unweighted table content', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('table', {}, [
+                elementNode('tr', {}, [
+                    elementNode('th', {}, [textNode('PDF version')]),
+                    elementNode('th', {}, [textNode('Acrobat Reader version')]),
+                    elementNode('th', {}, [textNode('Launched')]),
+                    elementNode('th', {}, [textNode('Summary of new features')]),
+                ]),
+                elementNode('tr', {}, [
+                    elementNode('td', {}, [textNode('1.7 (later ISO 32000-1:2008)')]),
+                    elementNode('td', {}, [textNode('8.0')]),
+                    elementNode('td', {}, [textNode('2006')]),
+                    elementNode('td', {}, [textNode('XFA 2.4, new kinds of string, extensions to public-key architecture.')]),
+                ]),
+            ]),
+        ], { fontSize: 16, lineHeight: 1.5 })
+
+        const weights = blocks[0].table?.columnWeights
+
+        expect(weights).toHaveLength(4)
+        expect(weights?.[3]).toBeGreaterThan((weights?.[0] ?? 0) * 1.8)
+        expect(weights?.[3]).toBeGreaterThan(weights?.[1] ?? 0)
+        expect(weights?.[3]).toBeGreaterThan(weights?.[2] ?? 0)
+    })
+
     it('moves atomic image and table blocks to the next page column when they would overflow', () => {
         const blocks = extractDocumentBlocks([
             elementNode('p', {}, [
@@ -309,6 +335,23 @@ describe('Pretext pipeline', () => {
         expect(lines[0].kind).toBe('pre')
         const indent = '\u00a0\u00a0\u00a0\u00a0'
         expect(lines[0].text).toBe(`<ol>\n${indent}<li>Dogs</li>\n${indent}<li>Cats</li>\n</ol>`)
+    })
+
+    it('wraps long preformatted lines into the measured block height', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('pre', {}, [
+                textNode('BT  /F0 36. Tf Select /F0 font at 36pt and then place a deliberately long PDF operator comment that must wrap'),
+            ]),
+        ], { fontSize: 16, lineHeight: 1.5 })
+
+        const prepared = prepareBlocks(blocks, { baseStyle: { fontSize: 16, lineHeight: 1.5 } })
+        const lines = layout(prepared, { inlineSize: 220, lineHeight: 24 })
+        const preLine = lines[0]
+
+        expect(preLine.kind).toBe('pre')
+        expect(preLine.text.split('\n').length).toBeGreaterThan(1)
+        expect(preLine.height).toBeGreaterThan(24 * 2)
+        expect(preLine.width).toBeLessThanOrEqual(220)
     })
 
     it('returns a visible line window', () => {

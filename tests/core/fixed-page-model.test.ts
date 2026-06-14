@@ -52,6 +52,22 @@ describe('fixed page model', () => {
         expect(fit.viewport.cssWidth).toBe(350)
     })
 
+    it('uses max column width as the fixed page inline cap', () => {
+        const page = createPage({ width: 612, height: 792 })
+        const fit = resolveFixedPageFit(page, {
+            inlineSize: 1400,
+            blockSize: 900,
+        }, {
+            margin: '32px',
+            maxColumnWidth: '720px',
+        })
+
+        expect(fit.availableInlineSize).toBe(1336)
+        expect(fit.targetInlineSize).toBe(720)
+        expect(fit.scale).toBeCloseTo(720 / 612)
+        expect(fit.viewport.cssWidth).toBeCloseTo(720)
+    })
+
     it('normalizes invalid fit options defensively', () => {
         const page = createPage({ width: 500, height: 250 })
         const fit = resolveFixedPageFit(page, {

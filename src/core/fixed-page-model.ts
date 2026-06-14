@@ -15,6 +15,7 @@ export interface FixedViewportMetrics {
 export interface FixedPageFitOptions {
     readonly margin?: RendererStyles['margin']
     readonly maxInlineSize?: RendererStyles['maxInlineSize']
+    readonly maxColumnWidth?: RendererStyles['maxColumnWidth']
     readonly defaultMargin?: number
     readonly minScale?: number
     readonly maxScale?: number
@@ -44,7 +45,10 @@ export function resolveFixedPageFit(
 ): FixedPageFit {
     const margin = parseCSSPixels(options.margin, options.defaultMargin ?? 0)
     const availableInlineSize = Math.max(1, metrics.inlineSize - margin * 2)
-    const maxInlineSize = parseCSSPixels(options.maxInlineSize, availableInlineSize)
+    const maxInlineSize = parseCSSPixels(
+        options.maxInlineSize ?? options.maxColumnWidth,
+        availableInlineSize,
+    )
     const targetInlineSize = Math.max(1, Math.min(availableInlineSize, maxInlineSize))
     const unclampedScale = targetInlineSize / Math.max(1, page.width)
     const scale = clampScale(unclampedScale, options.minScale, options.maxScale)

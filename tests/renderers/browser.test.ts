@@ -825,6 +825,64 @@ describe('BrowserRenderer', () => {
         reader.destroy()
     })
 
+    it('centers short fixed pages vertically and navigates with the wheel', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '420')
+        container.setAttribute('data-height', '520')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [],
+            pageList: [
+                { label: '1', href: 'pdf:page:0' },
+                { label: '2', href: 'pdf:page:1' },
+            ],
+            fixedDocument: {
+                kind: 'fixed-document',
+                format: 'pdf',
+                pageCount: 2,
+                getPage: pageIndex => ({ index: pageIndex, width: 300, height: 10 }),
+                getPages: () => [
+                    { index: 0, width: 300, height: 10 },
+                    { index: 1, width: 300, height: 10 },
+                ],
+                getPageText: pageIndex => ({
+                    pageIndex,
+                    width: 300,
+                    height: 10,
+                    text: `Wheel page ${pageIndex + 1}`,
+                    runs: [{
+                        text: `Wheel page ${pageIndex + 1}`,
+                        transform: [18, 0, 0, 18, 48, 48],
+                        fontSize: 18,
+                    }],
+                }),
+            },
+            resolveHref: href => {
+                const match = href.match(/^pdf:page:(\d+)$/)
+                return match ? { index: Number(match[1]) } : null
+            },
+        }
+
+        const reader = createReader({ container })
+        await reader.openBook(book)
+
+        const scroller = container.querySelector('[data-rebook-viewport-scroller="true"]') as HTMLElement
+        const scrollExtent = scroller.firstElementChild as HTMLElement
+        expect(scrollExtent.style.alignItems).toBe('center')
+
+        const event = new window.Event('wheel', { bubbles: true, cancelable: true }) as WheelEvent
+        Object.defineProperty(event, 'deltaY', { value: 120 })
+        scroller.dispatchEvent(event)
+        await new Promise(resolve => setTimeout(resolve, 0))
+
+        expect(event.defaultPrevented).toBe(true)
+        expect(reader.getLocation()?.pageItem?.label).toBe('2')
+        expect(container.textContent).toContain('Wheel page 2')
+
+        reader.destroy()
+    })
+
     it('renders custom fixed formats through injected visual content renderers', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
@@ -898,6 +956,34 @@ describe('BrowserRenderer', () => {
         expect(container.querySelector('[data-rebook-fixed-canvas="true"]')).toBeTruthy()
         expect((container.querySelector('[data-rebook-fixed-text-layer="true"] span') as HTMLElement | null)?.style.color).toBe('transparent')
         expect(container.textContent).toContain('Hello Rebook PDF')
+
+        reader.destroy()
+    })
+
+    it('caps fixed PDF page width with maxColumnWidth in wide viewports', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '1000')
+        container.setAttribute('data-height', '640')
+        document.body.appendChild(container)
+
+        const book = await new PDFParser().parse(makeSimplePdf().buffer)
+        const reader = createReader({
+            container,
+            styles: {
+                margin: '32px',
+                maxColumnWidth: '360px',
+            },
+        })
+        await reader.openBook(book)
+
+        const frame = container.querySelector('[data-rebook-fixed-page="true"]') as HTMLElement | null
+        const canvas = container.querySelector('[data-rebook-fixed-canvas="true"]') as HTMLCanvasElement | null
+
+        expect(frame?.style.width).toBe('360px')
+        expect(parseFloat(frame?.style.height ?? '')).toBeCloseTo(172.8)
+        expect(canvas?.style.width).toBe('300px')
+        expect(canvas?.style.transform).toBe('scale(1.2)')
+        expect(canvas?.width).toBe(360)
 
         reader.destroy()
     })
@@ -1325,6 +1411,7 @@ describe('BrowserRenderer', () => {
                             ],
                         }],
                     },
+                    style: { fontSize: 12.8, lineHeight: 1.25 },
                     segments: [],
                 }],
             }],
@@ -1343,6 +1430,8 @@ describe('BrowserRenderer', () => {
         expect(tableRow).toBeTruthy()
         expect(tableRow.textContent).toContain('Figure 1.1')
         expect(tableRow.textContent).toContain('Terms in a synonym ring')
+        expect(tableRow.style.fontSize).toBe('12.8px')
+        expect(tableRow.style.lineHeight).toBe('16px')
         expect((tableRow.firstElementChild as HTMLElement).style.gridTemplateColumns).toContain('20fr')
         expect((tableRow.firstElementChild as HTMLElement).style.gridTemplateColumns).toContain('80fr')
 
@@ -1392,7 +1481,11 @@ describe('BrowserRenderer', () => {
         const pre = container.querySelector('pre[data-block-type="pre"]') as HTMLElement
         expect(pre.style.width).toBe('260px')
         expect(pre.style.overflow).toBe('auto')
-        expect(pre.textContent).toContain('<li>Spot')
+        expect(pre.style.whiteSpace).toBe('pre-wrap')
+        expect(pre.style.overflowWrap).toBe('anywhere')
+        expect(pre.textContent).toContain('<li>')
+        expect(pre.textContent).toMatch(/Spot\s+with\s+a\s+deliberately/)
+        expect(pre.textContent!.split('\n').length).toBeGreaterThan(code.split('\n').length)
 
         renderer.destroy()
     })

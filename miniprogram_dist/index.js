@@ -15939,12 +15939,11 @@ function extractDocumentBlocks(nodes, baseStyle = {}, options = {}) {
     });
   };
   const pushTableBlocks = (node2) => {
-    var _a3, _b2, _c, _d;
+    var _a3, _b2;
     const table = getTableData(node2);
     if (!table || table.rows.length === 0) return;
-    const fontSize = (_a3 = baseStyle.fontSize) != null ? _a3 : DEFAULT_STYLE.fontSize;
-    const lineHeight = (_b2 = baseStyle.lineHeight) != null ? _b2 : DEFAULT_STYLE.lineHeight;
-    const tableId = (_d = (_c = node2.attrs) == null ? void 0 : _c.id) != null ? _d : `table-${nextId++}`;
+    const preset = getBlockPreset("table", baseStyle);
+    const tableId = (_b2 = (_a3 = node2.attrs) == null ? void 0 : _a3.id) != null ? _b2 : `table-${nextId++}`;
     table.rows.forEach((row, rowIndex) => {
       blocks.push({
         id: rowIndex === 0 ? tableId : `${tableId}-row-${rowIndex + 1}`,
@@ -15953,9 +15952,9 @@ function extractDocumentBlocks(nodes, baseStyle = {}, options = {}) {
           ...node2.attrs,
           "data-rebook-table-row": String(rowIndex)
         },
-        style: { fontSize, lineHeight },
-        blockGapBefore: rowIndex === 0 ? fontSize * 0.75 : 0,
-        blockGapAfter: rowIndex === table.rows.length - 1 ? fontSize * 0.75 : 0,
+        style: preset.style,
+        blockGapBefore: rowIndex === 0 ? preset.blockGapBefore : 0,
+        blockGapAfter: rowIndex === table.rows.length - 1 ? preset.blockGapAfter : 0,
         table: {
           ...table,
           rowIndex,
@@ -16096,7 +16095,7 @@ function prepareBlocks(textBlocks, options = {}) {
   return { segments, blocks, baseStyle, lineHeight };
 }
 function layout(prepared, options) {
-  var _a2, _b2, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
+  var _a2, _b2, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p;
   const lines = [];
   const inlineSize = Math.max(1, options.inlineSize);
   const lineHeight = (_a2 = options.lineHeight) != null ? _a2 : prepared.lineHeight;
@@ -16168,8 +16167,8 @@ function layout(prepared, options) {
       const metrics = getTableBlockMetrics(
         block.block.table,
         inlineSize,
-        lineHeight,
-        prepared.baseStyle.fontSize,
+        getBlockLineHeight(block.block, prepared.baseStyle.fontSize, lineHeight),
+        (_k = (_j = block.block.style) == null ? void 0 : _j.fontSize) != null ? _k : prepared.baseStyle.fontSize,
         options.maxBlockHeight
       );
       top = avoidAtomicBlockPageBreak(top, metrics.height, options.maxBlockHeight, lineHeight);
@@ -16180,7 +16179,7 @@ function layout(prepared, options) {
         table: block.block.table,
         start: null,
         end: null,
-        text: (_k = (_j = block.block.table.rows[0]) == null ? void 0 : _j.cells.map((cell) => cell.text).join(" ")) != null ? _k : "",
+        text: (_m = (_l = block.block.table.rows[0]) == null ? void 0 : _l.cells.map((cell) => cell.text).join(" ")) != null ? _m : "",
         width: metrics.width,
         top,
         height: metrics.height,
@@ -16188,7 +16187,7 @@ function layout(prepared, options) {
         segments: []
       });
       top += metrics.height;
-      top += (_l = block.block.blockGapAfter) != null ? _l : blockGap;
+      top += (_n = block.block.blockGapAfter) != null ? _n : blockGap;
       continue;
     }
     if (block.block.type === "pre") {
@@ -16203,8 +16202,6 @@ function layout(prepared, options) {
           lineTexts.push("");
           continue;
         }
-        const lineText = preLine.map((item) => toPreLayoutText(item.text)).join("");
-        lineTexts.push(lineText);
         const richInline2 = prepareRichInline(preLine.map((item) => {
           var _a3;
           return {
@@ -16233,6 +16230,7 @@ function layout(prepared, options) {
             };
           });
           allFragments.push(...fragments);
+          lineTexts.push(joinFragments(fragments));
           maxWidth = Math.max(maxWidth, materialized.width);
         });
       }
@@ -16257,7 +16255,7 @@ function layout(prepared, options) {
         segments: allFragments
       });
       top = preTop + totalHeight;
-      top += (_m = block.block.blockGapAfter) != null ? _m : blockGap;
+      top += (_o = block.block.blockGapAfter) != null ? _o : blockGap;
       continue;
     }
     const richInline = block.prepared;
@@ -16296,7 +16294,7 @@ function layout(prepared, options) {
       });
       top += lineHeight;
     });
-    if (lines.length > blockStartCount) top += (_n = block.block.blockGapAfter) != null ? _n : blockGap;
+    if (lines.length > blockStartCount) top += (_p = block.block.blockGapAfter) != null ? _p : blockGap;
   }
   if (lines.length === 0) {
     lines.push({
@@ -16656,7 +16654,8 @@ function getTableColumnWeights(table, rows, columnCount) {
     var _a2, _b2, _c;
     return (_c = parsePercentWidth((_a2 = cell.attrs) == null ? void 0 : _a2.style)) != null ? _c : parsePercentWidth((_b2 = cell.attrs) == null ? void 0 : _b2.width);
   });
-  return (weights == null ? void 0 : weights.every((value2) => typeof value2 === "number" && value2 > 0)) ? weights : void 0;
+  if (weights == null ? void 0 : weights.every((value2) => typeof value2 === "number" && value2 > 0)) return weights;
+  return inferTableColumnWeights(rows, columnCount);
 }
 function getColgroupWeights(table, columnCount) {
   var _a2;
@@ -16673,6 +16672,52 @@ function getColgroupWeights(table, columnCount) {
   };
   for (const child of (_a2 = table.children) != null ? _a2 : []) walk2(child);
   return cols.length === columnCount ? cols : void 0;
+}
+function inferTableColumnWeights(rows, columnCount) {
+  var _a2;
+  if (columnCount <= 1) return void 0;
+  const stats = Array.from({ length: columnCount }, () => ({
+    maxCellWeight: 0,
+    totalContentWeight: 0
+  }));
+  for (const row of rows) {
+    let columnIndex = 0;
+    for (const cell of row.cells) {
+      if (columnIndex >= columnCount) break;
+      const colspan = Math.min(Math.max(1, (_a2 = cell.colspan) != null ? _a2 : 1), columnCount - columnIndex);
+      const metrics = getTableCellContentMetrics(cell.text);
+      for (let offset = 0; offset < colspan; offset += 1) {
+        const stat = stats[columnIndex + offset];
+        stat.maxCellWeight = Math.max(stat.maxCellWeight, metrics.cellWeight / colspan);
+        stat.totalContentWeight += metrics.contentWeight / colspan;
+      }
+      columnIndex += colspan;
+    }
+  }
+  const weights = stats.map((stat) => Math.max(
+    TABLE_MIN_COLUMN_WEIGHT,
+    stat.maxCellWeight,
+    Math.min(TABLE_MAX_CONTENT_WEIGHT, stat.totalContentWeight * TABLE_COLUMN_DENSITY_WEIGHT_FACTOR)
+  ));
+  return weights.some((weight) => weight > 0) ? weights.map((weight) => weight || TABLE_MIN_COLUMN_WEIGHT) : void 0;
+}
+const TABLE_MIN_COLUMN_WEIGHT = 6;
+const TABLE_MAX_CONTENT_WEIGHT = 80;
+const TABLE_MEDIUM_CONTENT_WEIGHT = 24;
+const TABLE_MEDIUM_CONTENT_WEIGHT_FACTOR = 0.75;
+const TABLE_CONTENT_WEIGHT_FACTOR = 0.35;
+const TABLE_COLUMN_DENSITY_WEIGHT_FACTOR = 0.14;
+function getTableCellContentMetrics(text) {
+  const normalized = normalizeTableCellText(text);
+  if (!normalized) return { cellWeight: TABLE_MIN_COLUMN_WEIGHT, contentWeight: 0 };
+  const tokenWidth = normalized.split(/\s+/).reduce((max2, token) => Math.max(max2, estimateTextWidth(token, 1)), 0);
+  const contentWeight = estimateTextWidth(normalized, 1);
+  const mediumPreferredWidth = Math.min(TABLE_MEDIUM_CONTENT_WEIGHT, contentWeight * TABLE_MEDIUM_CONTENT_WEIGHT_FACTOR);
+  const preferredWidth = Math.min(TABLE_MAX_CONTENT_WEIGHT, contentWeight * TABLE_CONTENT_WEIGHT_FACTOR);
+  return {
+    cellWeight: Math.max(TABLE_MIN_COLUMN_WEIGHT, tokenWidth, mediumPreferredWidth, preferredWidth),
+    contentWeight
+  };
 }
 function isTableCellNode(type) {
   return type === "td" || type === "th";
@@ -16803,7 +16848,7 @@ function getTableBlockMetrics(table, inlineSize, lineHeight, fontSize, maxBlockH
     const colspan = Math.max(1, (_a3 = cell.colspan) != null ? _a3 : 1);
     const columnWidth = columnWidths.slice(cellIndex, cellIndex + colspan).reduce((sum, width) => sum + width, 0);
     const textWidth = Math.max(fontSize * 2, columnWidth - cellPadding * 2);
-    const estimatedLineCount = Math.max(1, Math.ceil(estimateTextWidth(cell.text, fontSize) / textWidth));
+    const estimatedLineCount = estimateWrappedLineCount(cell.text, fontSize, textWidth);
     return Math.max(max2, estimatedLineCount * lineHeight + cellPadding * 2);
   }, lineHeight + cellPadding * 2)) != null ? _a2 : lineHeight + cellPadding * 2;
   const maxHeight = maxBlockHeight ? Math.max(lineHeight * 1.5, maxBlockHeight) : Number.POSITIVE_INFINITY;
@@ -16817,6 +16862,35 @@ function getResolvedColumnWidths(table, inlineSize) {
   const weights = ((_a2 = table.columnWeights) == null ? void 0 : _a2.length) === table.columnCount ? table.columnWeights : Array.from({ length: table.columnCount }, () => 1);
   const total = weights.reduce((sum, width) => sum + Math.max(0, width), 0) || table.columnCount;
   return weights.map((weight) => inlineSize * (Math.max(0, weight) / total));
+}
+function estimateWrappedLineCount(text, fontSize, inlineSize) {
+  const words = normalizeTableCellText(text).split(/\s+/).filter(Boolean);
+  if (words.length === 0) return 1;
+  const maxInlineSize = Math.max(fontSize, inlineSize);
+  const spaceWidth = estimateTextWidth(" ", fontSize);
+  let lineCount = 1;
+  let currentWidth = 0;
+  for (const word of words) {
+    const wordWidth = estimateTextWidth(word, fontSize);
+    if (wordWidth > maxInlineSize) {
+      if (currentWidth > 0) {
+        lineCount += 1;
+        currentWidth = 0;
+      }
+      const overflowLines = Math.ceil(wordWidth / maxInlineSize);
+      lineCount += overflowLines - 1;
+      currentWidth = wordWidth % maxInlineSize || maxInlineSize;
+      continue;
+    }
+    const nextWidth = currentWidth === 0 ? wordWidth : currentWidth + spaceWidth + wordWidth;
+    if (nextWidth <= maxInlineSize) {
+      currentWidth = nextWidth;
+    } else {
+      lineCount += 1;
+      currentWidth = wordWidth;
+    }
+  }
+  return lineCount;
 }
 function estimateTextWidth(text, fontSize) {
   return Array.from(text).reduce((sum, char) => {
@@ -16919,6 +16993,16 @@ function getBlockPreset(type, baseStyle, depth) {
       blockGapAfter: fontSize * 0.35
     };
   }
+  if (type === "table") {
+    return {
+      style: {
+        fontSize: fontSize * 0.8,
+        lineHeight: 1.25
+      },
+      blockGapBefore: fontSize * 0.5,
+      blockGapAfter: fontSize * 0.5
+    };
+  }
   return {
     style: { fontSize, lineHeight },
     blockGapBefore: 0,
@@ -16929,6 +17013,12 @@ function getBlockInlineOffset(block, fontSize) {
   var _a2;
   if (block.type !== "listItem") return 0;
   return Math.max(0, (_a2 = block.depth) != null ? _a2 : 0) * fontSize * 1.65;
+}
+function getBlockLineHeight(block, fallbackFontSize, fallbackLineHeight) {
+  var _a2, _b2, _c;
+  const fontSize = (_b2 = (_a2 = block.style) == null ? void 0 : _a2.fontSize) != null ? _b2 : fallbackFontSize;
+  const lineHeight = (_c = block.style) == null ? void 0 : _c.lineHeight;
+  return typeof lineHeight === "number" && Number.isFinite(lineHeight) && lineHeight > 0 ? fontSize * lineHeight : fallbackLineHeight;
 }
 function getBlockAnchorAttrs(node2) {
   var _a2, _b2, _c;

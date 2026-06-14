@@ -1,5 +1,7 @@
+import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import { registry } from '../../src/core/parser'
+import { nodePdfRuntime } from '../../src/pdf/platform/node'
 import { PDFParser, pdf } from '../../src/parsers/pdf'
 import { makeFlatePdf, makeOutlinePdf, makeSimplePdf, pdfUtf16BeHexString, pdfUtf8HexString } from '../fixtures/pdf-fixture'
 
@@ -22,6 +24,7 @@ describe('PDFParser', () => {
         expect(book.fixedDocument?.format).toBe('pdf')
         expect(book.fixedDocument?.pageCount).toBe(1)
         expect(book.pageList?.[0]).toEqual({ label: '1', href: 'pdf:page:0' })
+        expect(book.toc?.[0]).toEqual({ label: 'Page 1', href: 'pdf:page:0' })
         expect(book.metadata?.format).toBe('pdf')
 
         const page = await book.fixedDocument!.getPage(0)
@@ -55,6 +58,22 @@ describe('PDFParser', () => {
 
         expect(book.toc?.[0]).toMatchObject({ label: 'Chapter 1', href: 'pdf:page:0' })
         expect(book.resolveHref?.(book.toc![0].href)).toEqual({ index: 0 })
+    })
+
+    it('generates page TOC entries for PDFs without outlines', async () => {
+        const data = await readFile('data/网络文学创作原理.pdf')
+        const book = await new PDFParser().parse(data, {
+            runtime: nodePdfRuntime,
+            embeddedFonts: false,
+        })
+
+        expect(book.fixedDocument?.pageCount).toBeGreaterThan(1)
+        expect(book.toc).toHaveLength(book.fixedDocument?.pageCount)
+        expect(book.toc?.[0]).toEqual({ label: 'Page 1', href: 'pdf:page:0' })
+        expect(book.toc?.at(-1)).toEqual({
+            label: `Page ${book.fixedDocument?.pageCount}`,
+            href: `pdf:page:${(book.fixedDocument?.pageCount ?? 1) - 1}`,
+        })
     })
 
     it('decodes UTF-16BE PDF outline titles', async () => {

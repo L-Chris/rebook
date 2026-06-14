@@ -284,6 +284,74 @@ describe('EPUB Pretext segments', () => {
         expect(preLine?.height).toBeLessThanOrEqual(200)
     })
 
+    it('wraps PDF explained program listings in Building the Elements', async () => {
+        const parser = new EPUBParser()
+        const data = await readFile('data/PDF explained.epub')
+        const book = await parser.parse(data.buffer.slice(
+            data.byteOffset,
+            data.byteOffset + data.byteLength,
+        ), {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+
+        const section = book.sections.find(item => String(item.id).endsWith('ch02s03.html'))
+        expect(section).toBeDefined()
+
+        const blocks = await section!.getBlocks?.()
+        const listing = blocks?.find(block =>
+            block.type === 'pre'
+            && block.segments.map(segment => segment.text).join('').includes('/MediaBox [0 0 612 792]')
+        )
+        expect(listing).toBeDefined()
+
+        const prepared = prepareBlocks([listing!], { baseStyle: { fontSize: 16, lineHeight: 1.5 } })
+        const narrow = layout(prepared, { inlineSize: 260, lineHeight: 24 })
+        const wide = layout(prepared, { inlineSize: 1000, lineHeight: 24 })
+
+        expect(narrow[0].kind).toBe('pre')
+        expect(narrow[0].text.split('\n').length).toBeGreaterThan(wide[0].text.split('\n').length)
+        expect(narrow[0].height).toBeGreaterThan(wide[0].height)
+        expect(narrow[0].width).toBeLessThanOrEqual(260)
+    })
+
+    it('infers compact content-weighted columns for PDF explained version summary tables', async () => {
+        const parser = new EPUBParser()
+        const data = await readFile('data/PDF explained.epub')
+        const book = await parser.parse(data.buffer.slice(
+            data.byteOffset,
+            data.byteOffset + data.byteLength,
+        ), {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+
+        const section = book.sections.find(item => String(item.id).endsWith('ch01.html'))
+        expect(section).toBeDefined()
+
+        const blocks = await section!.getBlocks?.()
+        const tableRows = blocks?.filter(block => block.type === 'table' && block.table?.columnCount === 4) ?? []
+        const header = tableRows.find(block =>
+            block.table?.rows[0]?.cells.some(cell => cell.text === 'PDF version')
+        )
+        expect(header).toBeDefined()
+
+        const weights = header!.table!.columnWeights
+        expect(weights).toHaveLength(4)
+        expect(weights![3]).toBeGreaterThan(weights![0] + weights![1] + weights![2])
+
+        const prepared = prepareBlocks(tableRows, { baseStyle: { fontSize: 16, lineHeight: 1.5 } })
+        const lines = layout(prepared, { inlineSize: 720, lineHeight: 24 })
+        const totalHeight = lines.reduce((sum, line) => sum + line.height, 0)
+        const extensionLevel3 = lines.find(line =>
+            line.table?.rows[0]?.cells[0]?.text === '1.7 Extension Level 3'
+        )
+
+        expect(lines).toHaveLength(12)
+        expect(extensionLevel3?.height).toBeGreaterThanOrEqual(59)
+        expect(totalHeight).toBeLessThan(720)
+    })
+
     it('extracts tables and figure blocks from The Accidental Taxonomist', async () => {
         const parser = new EPUBParser()
         const data = await readFile('data/The Accidental Taxonomist.epub')

@@ -225,7 +225,8 @@ function createPreBlock(
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         font-size: ${fontSize}px;
         line-height: 1.55;
-        white-space: pre;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
         overflow: auto;
         background: #f5f5f5;
         border-radius: 6px;
@@ -239,46 +240,7 @@ function createPreBlock(
     }
     wrapper.dataset.rebookLineIndex = String(line.index)
 
-    const hasVariedStyles = line.segments.some((seg, i) => {
-        if (i === 0) return false
-        return seg.style?.fontFamily !== line.segments[i - 1]?.style?.fontFamily
-            || seg.style?.fontWeight !== line.segments[i - 1]?.style?.fontWeight
-            || seg.style?.fontStyle !== line.segments[i - 1]?.style?.fontStyle
-            || seg.style?.color !== line.segments[i - 1]?.style?.color
-    })
-
-    if (hasVariedStyles && line.segments.length > 0) {
-        let currentStyle: TextStyle | null = null
-        let currentText = ''
-        const flush = () => {
-            if (currentText) {
-                if (currentStyle) {
-                    const span = document.createElement('span')
-                    if (currentStyle.fontWeight) span.style.fontWeight = currentStyle.fontWeight
-                    if (currentStyle.fontStyle) span.style.fontStyle = currentStyle.fontStyle
-                    if (currentStyle.color) span.style.color = currentStyle.color
-                    if (currentStyle.fontFamily) span.style.fontFamily = currentStyle.fontFamily
-                    span.textContent = currentText
-                    wrapper.appendChild(span)
-                } else {
-                    wrapper.appendChild(document.createTextNode(currentText))
-                }
-                currentText = ''
-            }
-        }
-        for (const seg of line.segments) {
-            const segKey = seg.style ? `${seg.style.fontWeight}-${seg.style.fontStyle}-${seg.style.color}-${seg.style.fontFamily}` : 'none'
-            const prevKey = currentStyle ? `${currentStyle.fontWeight}-${currentStyle.fontStyle}-${currentStyle.color}-${currentStyle.fontFamily}` : 'none'
-            if (segKey !== prevKey) {
-                flush()
-                currentStyle = seg.style ?? null
-            }
-            currentText += seg.text
-        }
-        flush()
-    } else {
-        wrapper.textContent = line.text
-    }
+    wrapper.textContent = line.text
 
     return wrapper
 }
@@ -320,6 +282,8 @@ function createTableLine(
     context: BrowserReflowableContentRenderContext,
 ): HTMLElement {
     const table = line.table!
+    const fontSize = line.block?.style?.fontSize ?? parseCSSPixels(context.styles.fontSize, 16)
+    const lineHeight = getCSSLineHeight(line.block?.style?.lineHeight, fontSize, context.lineHeightPixels)
     const wrapper = document.createElement('div')
     wrapper.style.cssText = `
         position: absolute;
@@ -329,8 +293,8 @@ function createTableLine(
         height: ${line.height}px;
         overflow: hidden;
         font-family: ${context.styles.fontFamily ?? 'system-ui, -apple-system, Georgia, serif'};
-        font-size: ${parseCSSPixels(context.styles.fontSize, 16)}px;
-        line-height: ${context.lineHeightPixels}px;
+        font-size: ${fontSize}px;
+        line-height: ${lineHeight}px;
         color: ${context.styles.color ?? 'inherit'};
     `
     wrapper.dataset.blockId = line.block?.id ?? `table-row-${table.rowIndex}`
@@ -403,4 +367,10 @@ function getTableTextAlign(align: 'start' | 'center' | 'end' | undefined): strin
     if (align === 'center') return 'center'
     if (align === 'end') return 'right'
     return 'left'
+}
+
+function getCSSLineHeight(value: number | undefined, fontSize: number, fallback: number): number {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0
+        ? fontSize * value
+        : fallback
 }

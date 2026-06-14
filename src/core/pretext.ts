@@ -317,8 +317,7 @@ export function extractDocumentBlocks(
     const pushTableBlocks = (node: DocumentNode) => {
         const table = getTableData(node)
         if (!table || table.rows.length === 0) return
-        const fontSize = baseStyle.fontSize ?? DEFAULT_STYLE.fontSize
-        const lineHeight = baseStyle.lineHeight ?? DEFAULT_STYLE.lineHeight
+        const preset = getBlockPreset('table', baseStyle)
         const tableId = node.attrs?.id ?? `table-${nextId++}`
 
         table.rows.forEach((row, rowIndex) => {
@@ -329,9 +328,9 @@ export function extractDocumentBlocks(
                     ...node.attrs,
                     'data-rebook-table-row': String(rowIndex),
                 },
-                style: { fontSize, lineHeight },
-                blockGapBefore: rowIndex === 0 ? fontSize * 0.75 : 0,
-                blockGapAfter: rowIndex === table.rows.length - 1 ? fontSize * 0.75 : 0,
+                style: preset.style,
+                blockGapBefore: rowIndex === 0 ? preset.blockGapBefore : 0,
+                blockGapAfter: rowIndex === table.rows.length - 1 ? preset.blockGapAfter : 0,
                 table: {
                     ...table,
                     rowIndex,
@@ -580,8 +579,8 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
             const metrics = getTableBlockMetrics(
                 block.block.table,
                 inlineSize,
-                lineHeight,
-                prepared.baseStyle.fontSize,
+                getBlockLineHeight(block.block, prepared.baseStyle.fontSize, lineHeight),
+                block.block.style?.fontSize ?? prepared.baseStyle.fontSize,
                 options.maxBlockHeight,
             )
             top = avoidAtomicBlockPageBreak(top, metrics.height, options.maxBlockHeight, lineHeight)
@@ -617,9 +616,6 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
                     continue
                 }
 
-                const lineText = preLine.map(item => toPreLayoutText(item.text)).join('')
-                lineTexts.push(lineText)
-
                 const richInline = prepareRichInline(preLine.map(item => ({
                     text: toPreLayoutText(item.text),
                     font: toCanvasFont({ ...prepared.baseStyle, ...item.style }),
@@ -644,6 +640,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
                         }
                     })
                     allFragments.push(...fragments)
+                    lineTexts.push(joinFragments(fragments))
                     maxWidth = Math.max(maxWidth, materialized.width)
                 })
             }
@@ -1134,7 +1131,9 @@ function getTableColumnWeights(
 
     const firstCompleteRow = rows.find(row => row.cells.length === columnCount && row.cells.every(cell => !cell.colspan || cell.colspan === 1))
     const weights = firstCompleteRow?.cells.map(cell => parsePercentWidth(cell.attrs?.style) ?? parsePercentWidth(cell.attrs?.width))
-    return weights?.every((value): value is number => typeof value === 'number' && value > 0) ? weights : undefined
+    if (weights?.every((value): value is number => typeof value === 'number' && value > 0)) return weights
+
+    return inferTableColumnWeights(rows, columnCount)
 }
 
 function getColgroupWeights(table: DocumentNode, columnCount: number): readonly number[] | undefined {
@@ -1150,6 +1149,56 @@ function getColgroupWeights(table: DocumentNode, columnCount: number): readonly 
     }
     for (const child of table.children ?? []) walk(child)
     return cols.length === columnCount ? cols : undefined
+}
+
+function inferTableColumnWeights(rows: readonly TextTableRow[], columnCount: number): readonly number[] | undefined {
+    if (columnCount <= 1) return undefined
+    const stats = Array.from({ length: columnCount }, () => ({
+        maxCellWeight: 0,
+        totalContentWeight: 0,
+    }))
+    for (const row of rows) {
+        let columnIndex = 0
+        for (const cell of row.cells) {
+            if (columnIndex >= columnCount) break
+            const colspan = Math.min(Math.max(1, cell.colspan ?? 1), columnCount - columnIndex)
+            const metrics = getTableCellContentMetrics(cell.text)
+            for (let offset = 0; offset < colspan; offset += 1) {
+                const stat = stats[columnIndex + offset]
+                stat.maxCellWeight = Math.max(stat.maxCellWeight, metrics.cellWeight / colspan)
+                stat.totalContentWeight += metrics.contentWeight / colspan
+            }
+            columnIndex += colspan
+        }
+    }
+    const weights = stats.map(stat => Math.max(
+        TABLE_MIN_COLUMN_WEIGHT,
+        stat.maxCellWeight,
+        Math.min(TABLE_MAX_CONTENT_WEIGHT, stat.totalContentWeight * TABLE_COLUMN_DENSITY_WEIGHT_FACTOR),
+    ))
+    return weights.some(weight => weight > 0) ? weights.map(weight => weight || TABLE_MIN_COLUMN_WEIGHT) : undefined
+}
+
+const TABLE_MIN_COLUMN_WEIGHT = 6
+const TABLE_MAX_CONTENT_WEIGHT = 80
+const TABLE_MEDIUM_CONTENT_WEIGHT = 24
+const TABLE_MEDIUM_CONTENT_WEIGHT_FACTOR = 0.75
+const TABLE_CONTENT_WEIGHT_FACTOR = 0.35
+const TABLE_COLUMN_DENSITY_WEIGHT_FACTOR = 0.14
+
+function getTableCellContentMetrics(text: string): { cellWeight: number; contentWeight: number } {
+    const normalized = normalizeTableCellText(text)
+    if (!normalized) return { cellWeight: TABLE_MIN_COLUMN_WEIGHT, contentWeight: 0 }
+    const tokenWidth = normalized
+        .split(/\s+/)
+        .reduce((max, token) => Math.max(max, estimateTextWidth(token, 1)), 0)
+    const contentWeight = estimateTextWidth(normalized, 1)
+    const mediumPreferredWidth = Math.min(TABLE_MEDIUM_CONTENT_WEIGHT, contentWeight * TABLE_MEDIUM_CONTENT_WEIGHT_FACTOR)
+    const preferredWidth = Math.min(TABLE_MAX_CONTENT_WEIGHT, contentWeight * TABLE_CONTENT_WEIGHT_FACTOR)
+    return {
+        cellWeight: Math.max(TABLE_MIN_COLUMN_WEIGHT, tokenWidth, mediumPreferredWidth, preferredWidth),
+        contentWeight,
+    }
 }
 
 function isTableCellNode(type: string): boolean {
@@ -1341,7 +1390,7 @@ function getTableBlockMetrics(
             .slice(cellIndex, cellIndex + colspan)
             .reduce((sum, width) => sum + width, 0)
         const textWidth = Math.max(fontSize * 2, columnWidth - cellPadding * 2)
-        const estimatedLineCount = Math.max(1, Math.ceil(estimateTextWidth(cell.text, fontSize) / textWidth))
+        const estimatedLineCount = estimateWrappedLineCount(cell.text, fontSize, textWidth)
         return Math.max(max, estimatedLineCount * lineHeight + cellPadding * 2)
     }, lineHeight + cellPadding * 2) ?? lineHeight + cellPadding * 2
     const maxHeight = maxBlockHeight
@@ -1359,6 +1408,39 @@ function getResolvedColumnWidths(table: TextTable, inlineSize: number): number[]
         : Array.from({ length: table.columnCount }, () => 1)
     const total = weights.reduce((sum, width) => sum + Math.max(0, width), 0) || table.columnCount
     return weights.map(weight => inlineSize * (Math.max(0, weight) / total))
+}
+
+function estimateWrappedLineCount(text: string, fontSize: number, inlineSize: number): number {
+    const words = normalizeTableCellText(text).split(/\s+/).filter(Boolean)
+    if (words.length === 0) return 1
+    const maxInlineSize = Math.max(fontSize, inlineSize)
+    const spaceWidth = estimateTextWidth(' ', fontSize)
+    let lineCount = 1
+    let currentWidth = 0
+
+    for (const word of words) {
+        const wordWidth = estimateTextWidth(word, fontSize)
+        if (wordWidth > maxInlineSize) {
+            if (currentWidth > 0) {
+                lineCount += 1
+                currentWidth = 0
+            }
+            const overflowLines = Math.ceil(wordWidth / maxInlineSize)
+            lineCount += overflowLines - 1
+            currentWidth = wordWidth % maxInlineSize || maxInlineSize
+            continue
+        }
+
+        const nextWidth = currentWidth === 0 ? wordWidth : currentWidth + spaceWidth + wordWidth
+        if (nextWidth <= maxInlineSize) {
+            currentWidth = nextWidth
+        } else {
+            lineCount += 1
+            currentWidth = wordWidth
+        }
+    }
+
+    return lineCount
 }
 
 function estimateTextWidth(text: string, fontSize: number): number {
@@ -1486,6 +1568,17 @@ function getBlockPreset(
         }
     }
 
+    if (type === 'table') {
+        return {
+            style: {
+                fontSize: fontSize * 0.8,
+                lineHeight: 1.25,
+            },
+            blockGapBefore: fontSize * 0.5,
+            blockGapAfter: fontSize * 0.5,
+        }
+    }
+
     return {
         style: { fontSize, lineHeight },
         blockGapBefore: 0,
@@ -1496,6 +1589,14 @@ function getBlockPreset(
 function getBlockInlineOffset(block: TextBlock, fontSize: number): number {
     if (block.type !== 'listItem') return 0
     return Math.max(0, block.depth ?? 0) * fontSize * 1.65
+}
+
+function getBlockLineHeight(block: TextBlock, fallbackFontSize: number, fallbackLineHeight: number): number {
+    const fontSize = block.style?.fontSize ?? fallbackFontSize
+    const lineHeight = block.style?.lineHeight
+    return typeof lineHeight === 'number' && Number.isFinite(lineHeight) && lineHeight > 0
+        ? fontSize * lineHeight
+        : fallbackLineHeight
 }
 
 function getBlockAnchorAttrs(node: DocumentNode): Readonly<Record<string, string>> | undefined {
