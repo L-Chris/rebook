@@ -54,8 +54,8 @@
       "renderers/browser/fixed": [
         "dist/renderers/browser/fixed.d.ts"
       ],
-      "renderers/browser/pdf-canvas": [
-        "dist/renderers/browser/pdf-canvas.d.ts"
+      "renderers/browser/fixed-pdf-canvas": [
+        "dist/renderers/browser/fixed-pdf-canvas.d.ts"
       ],
       "renderers/wechat-miniprogram": [
         "dist/renderers/wechat-miniprogram/index.d.ts"
@@ -63,11 +63,11 @@
       "parsers/*": [
         "dist/parsers/*.d.ts"
       ],
-      "pdf/platform/node": [
-        "dist/pdf/platform/node.d.ts"
+      "pdf/runtime/node": [
+        "dist/pdf/runtime/node.d.ts"
       ],
-      "pdf/renderers/node-canvas": [
-        "dist/pdf/renderers/node-canvas.d.ts"
+      "pdf/paint/node-canvas": [
+        "dist/pdf/paint/node-canvas.d.ts"
       ],
       "renderers/*": [
         "dist/renderers/*.d.ts"
@@ -117,13 +117,13 @@
       "types": "./dist/parsers/*.d.ts",
       "import": "./dist/parsers/*.js"
     },
-    "./pdf/platform/node": {
-      "types": "./dist/pdf/platform/node.d.ts",
-      "import": "./dist/pdf/platform/node.js"
+    "./pdf/runtime/node": {
+      "types": "./dist/pdf/runtime/node.d.ts",
+      "import": "./dist/pdf/runtime/node.js"
     },
-    "./pdf/renderers/node-canvas": {
-      "types": "./dist/pdf/renderers/node-canvas.d.ts",
-      "import": "./dist/pdf/renderers/node-canvas.js"
+    "./pdf/paint/node-canvas": {
+      "types": "./dist/pdf/paint/node-canvas.d.ts",
+      "import": "./dist/pdf/paint/node-canvas.js"
     },
     "./core/parser": {
       "types": "./dist/core/parser.d.ts",
@@ -181,9 +181,9 @@
       "types": "./dist/renderers/browser/fixed.d.ts",
       "import": "./dist/renderers/browser/fixed.js"
     },
-    "./renderers/browser/pdf-canvas": {
-      "types": "./dist/renderers/browser/pdf-canvas.d.ts",
-      "import": "./dist/renderers/browser/pdf-canvas.js"
+    "./renderers/browser/fixed-pdf-canvas": {
+      "types": "./dist/renderers/browser/fixed-pdf-canvas.d.ts",
+      "import": "./dist/renderers/browser/fixed-pdf-canvas.js"
     },
     "./renderers/wechat-miniprogram": {
       "types": "./dist/renderers/wechat-miniprogram/index.d.ts",

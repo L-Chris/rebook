@@ -84,8 +84,8 @@ async function runRebook(path, mode) {
     const [{ createCanvas }, { RebookPdfDocument }, { nodeRuntime }, { createNodeCanvasRenderer }] = await Promise.all([
       import('@napi-rs/canvas'),
       import('../dist/index.js'),
-      import('../dist/pdf/platform/node.js'),
-      import('../dist/pdf/renderers/node-canvas.js'),
+      import('../dist/pdf/runtime/node.js'),
+      import('../dist/pdf/paint/node-canvas.js'),
     ])
     const start = performance.now()
     const document = await RebookPdfDocument.load(input, {
@@ -134,7 +134,7 @@ async function runRebook(path, mode) {
   if (mode === 'display-list') {
     const [{ RebookPdfDocument }, { nodeRuntime }] = await Promise.all([
       import('../dist/index.js'),
-      import('../dist/pdf/platform/node.js'),
+      import('../dist/pdf/runtime/node.js'),
     ])
     const start = performance.now()
     const document = await RebookPdfDocument.load(input, {

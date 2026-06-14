@@ -11,22 +11,22 @@ import {
     Canvas2DRenderer,
     createCanvas2DRenderer,
     type Canvas2DRendererOptions,
-} from '../../pdf/renderers/canvas'
+} from '../../pdf/paint/canvas2d'
 
-export interface BrowserPdfCanvasRenderResult extends FixedPageRenderResult {
+export interface BrowserFixedPdfCanvasRenderResult extends FixedPageRenderResult {
     readonly ops: number
 }
 
-export interface BrowserPdfCanvasRendererConfig extends Canvas2DRendererOptions {
+export interface BrowserFixedPdfCanvasRendererConfig extends Canvas2DRendererOptions {
     readonly renderer?: Canvas2DRenderer
 }
 
-export class BrowserPdfCanvasRenderer implements FixedPageRenderer<HTMLCanvasElement, BrowserPdfCanvasRenderResult> {
-    readonly id = 'browser-pdf-canvas'
+export class BrowserFixedPdfCanvasRenderer implements FixedPageRenderer<HTMLCanvasElement, BrowserFixedPdfCanvasRenderResult> {
+    readonly id = 'browser-fixed-pdf-canvas'
     readonly platform = 'browser'
     private readonly renderer: Canvas2DRenderer
 
-    constructor(config: BrowserPdfCanvasRendererConfig = {}) {
+    constructor(config: BrowserFixedPdfCanvasRendererConfig = {}) {
         const { renderer, ...rendererOptions } = config
         this.renderer = renderer ?? createCanvas2DRenderer(rendererOptions)
     }
@@ -36,15 +36,15 @@ export class BrowserPdfCanvasRenderer implements FixedPageRenderer<HTMLCanvasEle
         target: HTMLCanvasElement,
         pageIndex: number,
         options: FixedPageRenderOptions = {},
-    ): Promise<BrowserPdfCanvasRenderResult> {
+    ): Promise<BrowserFixedPdfCanvasRenderResult> {
         if (!isPdfFixedDocument(document)) {
-            throw new UnsupportedFormatError('BrowserPdfCanvasRenderer requires a PDF fixed document')
+            throw new UnsupportedFormatError('BrowserFixedPdfCanvasRenderer requires a PDF fixed document')
         }
 
         const page = await document.getPage(pageIndex)
         const viewport = createFixedPageViewport(page, options)
         const context = target.getContext('2d')
-        if (!context) throw new UnsupportedFormatError('BrowserPdfCanvasRenderer requires a 2D canvas context')
+        if (!context) throw new UnsupportedFormatError('BrowserFixedPdfCanvasRenderer requires a 2D canvas context')
 
         const result = await this.renderer.renderPage(
             { document },
@@ -68,5 +68,5 @@ export class BrowserPdfCanvasRenderer implements FixedPageRenderer<HTMLCanvasEle
     }
 }
 
-export const createBrowserPdfCanvasRenderer = (config?: BrowserPdfCanvasRendererConfig): BrowserPdfCanvasRenderer =>
-    new BrowserPdfCanvasRenderer(config)
+export const createBrowserFixedPdfCanvasRenderer = (config?: BrowserFixedPdfCanvasRendererConfig): BrowserFixedPdfCanvasRenderer =>
+    new BrowserFixedPdfCanvasRenderer(config)

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import { registry } from '../../src/core/parser'
-import { nodePdfRuntime } from '../../src/pdf/platform/node'
+import { nodePdfRuntime } from '../../src/pdf/runtime/node'
 import { PDFParser, pdf } from '../../src/parsers/pdf'
 import { makeFlatePdf, makeOutlinePdf, makeSimplePdf, pdfUtf16BeHexString, pdfUtf8HexString } from '../fixtures/pdf-fixture'
 

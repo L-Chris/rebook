@@ -2,7 +2,7 @@ import type { FixedDocument, FixedPageRenderer } from '../../core/fixed-document
 import type { FixedPageContentRenderContext } from '../../core/fixed-page-model'
 import { isPdfFixedDocument } from '../../pdf/fixed-document'
 import type { BrowserPageSurfaceLayer } from './compositor'
-import { BrowserPdfCanvasRenderer } from './pdf-canvas'
+import { BrowserFixedPdfCanvasRenderer } from './fixed-pdf-canvas'
 
 export type BrowserFixedVisualRendererMatch = boolean | number
 
@@ -53,7 +53,7 @@ export class BrowserFixedImageVisualRenderer implements BrowserFixedVisualRender
 export class BrowserFixedCanvasVisualRenderer implements BrowserFixedVisualRenderer {
     readonly id = 'browser-fixed-canvas-visual'
     private readonly configuredFixedPageRenderer?: FixedPageRenderer<HTMLCanvasElement>
-    private readonly defaultPdfPageRenderer = new BrowserPdfCanvasRenderer()
+    private readonly defaultPdfPageRenderer = new BrowserFixedPdfCanvasRenderer()
     private readonly devicePixelRatio?: number | (() => number)
 
     constructor(config: BrowserFixedCanvasVisualRendererConfig = {}) {

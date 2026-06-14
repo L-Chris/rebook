@@ -1,6 +1,6 @@
 import { createCanvas, ImageData, type Canvas, type ContextAttributes, type SKRSContext2D } from '@napi-rs/canvas'
 import type { PdfImageData } from '../types'
-import { Canvas2DRenderer, type Canvas2DRenderResult, type Canvas2DRendererOptions, type PdfCanvas2DContext } from './canvas'
+import { Canvas2DRenderer, type Canvas2DRenderResult, type Canvas2DRendererOptions, type PdfCanvas2DContext } from './canvas2d'
 import type { PdfRenderContext, PdfRenderer, PdfRenderPageOptions } from './types'
 
 export interface NodeCanvasRendererOptions extends Omit<Canvas2DRendererOptions, 'createImageSurface'> {

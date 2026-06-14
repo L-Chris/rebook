@@ -82,11 +82,11 @@ export {
     type BrowserSurfacePipelineRenderResult,
 } from './surface-pipeline'
 export {
-    BrowserPdfCanvasRenderer,
-    createBrowserPdfCanvasRenderer,
-    type BrowserPdfCanvasRendererConfig,
-    type BrowserPdfCanvasRenderResult,
-} from './pdf-canvas'
+    BrowserFixedPdfCanvasRenderer,
+    createBrowserFixedPdfCanvasRenderer,
+    type BrowserFixedPdfCanvasRendererConfig,
+    type BrowserFixedPdfCanvasRenderResult,
+} from './fixed-pdf-canvas'
 export {
     ReaderView,
     createReader,

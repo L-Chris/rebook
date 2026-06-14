@@ -13,7 +13,7 @@ import { ParseError, UnsupportedInputError } from '../core/errors'
 import { getInputName, isBlobLike } from '../core/binary'
 import { RebookPdfDocument } from '../pdf/engine/document'
 import type { PdfFixedDocument } from '../pdf/fixed-document'
-import { getBrowserPdfRuntime } from '../pdf/platform/browser'
+import { getBrowserPdfRuntime } from '../pdf/runtime/browser'
 import type { PdfMatrix, PdfOutlineItem, PdfPageInfo, PdfPageText, PdfRuntime, PdfTextRun } from '../pdf/types'
 
 const PDF_HEADER = '%PDF-'
