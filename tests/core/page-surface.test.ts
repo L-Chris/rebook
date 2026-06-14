@@ -145,6 +145,40 @@ describe('PageSurfaceController', () => {
         expect(result).toMatchObject({ result: 'layers:1' })
         expect(controller.getCurrentSurface()?.layers.map(layer => layer.id)).toEqual(['overlay'])
     })
+
+    it('destroys the compositor, decorators, and content renderer together', () => {
+        const surface = createSurface('surface-1')
+        const destroyRenderer = vi.fn()
+        const destroyCompositor = vi.fn()
+        const destroyDecorator = vi.fn()
+        const contentRenderer: ContentRenderer<{ surface: PageSurface }> = {
+            id: 'destroy-renderer',
+            renderSurface: context => context.surface,
+            destroy: destroyRenderer,
+        }
+        const compositor: PageCompositor<PageSurface, undefined, string> = {
+            id: 'destroy-compositor',
+            compose: rendered => `composed:${rendered.id}`,
+            destroy: destroyCompositor,
+        }
+        const controller = new PageSurfaceController({
+            contentRenderer,
+            compositor,
+            decorators: [{
+                id: 'destroy-decorator',
+                decorate: rendered => rendered,
+                destroy: destroyDecorator,
+            }],
+        })
+
+        controller.render({ surface })
+        controller.destroy()
+
+        expect(controller.getCurrentSurface()).toBeNull()
+        expect(destroyCompositor).toHaveBeenCalledTimes(1)
+        expect(destroyDecorator).toHaveBeenCalledTimes(1)
+        expect(destroyRenderer).toHaveBeenCalledTimes(1)
+    })
 })
 
 function createSurface(id: string, destroy = vi.fn()): PageSurface {

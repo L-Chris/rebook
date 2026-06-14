@@ -363,9 +363,8 @@ export class BrowserRenderer implements Renderer {
     destroy(): void {
         this.activeLoadId++
         this.resizeObserver.disconnect()
-        this.surfaceController.cancelPending()
-        void this.contentRenderer.destroy?.()
-        this.host.destroy()
+        this.surfaceController.destroy()
+        this.host.destroy({ compositor: false })
         this.events.clear()
         this.book = null
         this.marks.clear()

@@ -209,9 +209,8 @@ export class BrowserFixedRenderer implements Renderer {
     }
 
     destroy(): void {
-        this.surfaceController.cancelPending()
-        void this.contentRenderer.destroy?.()
-        this.host.destroy()
+        this.surfaceController.destroy()
+        this.host.destroy({ compositor: false })
         this.events.clear()
         this.marks.clear()
         this.book = null

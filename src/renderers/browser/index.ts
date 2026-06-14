@@ -48,6 +48,7 @@ export {
     BrowserSurfaceHost,
     createBrowserSurfaceHost,
     type BrowserSurfaceHostConfig,
+    type BrowserSurfaceHostDestroyOptions,
 } from './surface-host'
 export {
     BrowserPdfCanvasRenderer,

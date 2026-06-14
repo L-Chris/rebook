@@ -133,6 +133,14 @@ export class PageSurfaceController<
         this.compositor.clear?.()
     }
 
+    destroy(): void {
+        this.cancelPending()
+        this.currentSurface = null
+        this.compositor.destroy?.()
+        for (const decorator of this.decorators) void decorator.destroy?.()
+        void this.contentRenderer.destroy?.()
+    }
+
     private decorateAndComposeCurrent(
         token: number,
         surface: TSurface,

@@ -16,6 +16,10 @@ export interface BrowserSurfaceHostConfig {
     readonly pageShadow?: string
 }
 
+export interface BrowserSurfaceHostDestroyOptions {
+    readonly compositor?: boolean
+}
+
 export class BrowserSurfaceHost {
     readonly viewport: BrowserViewportHost
     readonly compositor: BrowserPageCompositor
@@ -70,8 +74,8 @@ export class BrowserSurfaceHost {
         this.compositor.clear()
     }
 
-    destroy(): void {
-        this.compositor.destroy()
+    destroy(options: BrowserSurfaceHostDestroyOptions = {}): void {
+        if (options.compositor !== false) this.compositor.destroy()
         this.viewport.destroy()
     }
 }
