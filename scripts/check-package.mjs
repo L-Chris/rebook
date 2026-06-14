@@ -5,6 +5,8 @@ const maxUnpackedBytes = bytesArg('max-unpacked-kb', 3800 * 1024, 1024)
 const requiredFiles = [
   'dist/index.js',
   'dist/core/fixed-document.js',
+  'dist/core/location.js',
+  'dist/core/page-surface.js',
   'dist/core/renderer-router.js',
   'dist/parsers/pdf.js',
   'dist/pdf/platform/node.js',

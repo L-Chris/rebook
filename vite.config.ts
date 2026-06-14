@@ -19,6 +19,8 @@ export default defineConfig({
       entry: {
         index: resolve(__dirname, 'src/index.ts'),
         'core/fixed-document': resolve(__dirname, 'src/core/fixed-document.ts'),
+        'core/location': resolve(__dirname, 'src/core/location.ts'),
+        'core/page-surface': resolve(__dirname, 'src/core/page-surface.ts'),
         'core/parser': resolve(__dirname, 'src/core/parser.ts'),
         'core/reader': resolve(__dirname, 'src/core/reader.ts'),
         'core/renderer-router': resolve(__dirname, 'src/core/renderer-router.ts'),

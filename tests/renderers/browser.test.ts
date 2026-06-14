@@ -9,7 +9,7 @@ import { epub } from '../../src/parsers/epub'
 import { mobi } from '../../src/parsers/mobi'
 import { PDFParser } from '../../src/parsers/pdf'
 import { withTrialLimit } from '../../src/plugins/trial-limit'
-import { createReader, BrowserRenderer } from '../../src/renderers/browser'
+import { createReader, BrowserPageCompositor, BrowserRenderer } from '../../src/renderers/browser'
 import { makeSimplePdf } from '../fixtures/pdf-fixture'
 
 class MockResizeObserver {
@@ -132,6 +132,39 @@ beforeEach(() => {
 })
 
 describe('BrowserRenderer', () => {
+    it('composes page surfaces into layered browser DOM', () => {
+        const host = document.createElement('div')
+        const content = document.createElement('div')
+        content.textContent = 'surface content'
+
+        const compositor = new BrowserPageCompositor({ host })
+        const result = compositor.compose({
+            id: 'surface-1',
+            kind: 'fixed-page',
+            pageIndex: 3,
+            width: 200,
+            height: 100,
+            scale: 2,
+            layers: [{
+                id: 'content',
+                kind: 'content',
+                contentKind: 'dom',
+                content,
+                selectable: false,
+            }],
+        })
+
+        expect(result.frame.dataset.rebookPageSurface).toBe('true')
+        expect(result.frame.dataset.rebookFixedPage).toBe('true')
+        expect(result.frame.dataset.pageIndex).toBe('3')
+        expect(result.frame.style.width).toBe('400px')
+        expect(content.dataset.rebookSurfaceLayer).toBe('content')
+        expect(content.style.transform).toBe('scale(2)')
+
+        compositor.destroy()
+        expect(host.children.length).toBe(0)
+    })
+
     it('renders only visible Pretext line ranges into minimal DOM rows', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
@@ -327,6 +360,8 @@ describe('BrowserRenderer', () => {
         reader.on('relocate', event => { location = event })
 
         await reader.openBook(book)
+        expect(container.querySelector('[data-rebook-page-surface="true"]')).toBeTruthy()
+        expect(container.querySelector('[data-rebook-surface-layer="text"]')).toBeTruthy()
         expect(container.querySelector('[data-rebook-fixed-page="true"]')).toBeTruthy()
         expect(container.querySelector('[data-rebook-fixed-text-layer="true"]')).toBeTruthy()
         expect(container.textContent).toContain('Fixed page 1')

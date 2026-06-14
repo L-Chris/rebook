@@ -15,6 +15,12 @@
       "core/fixed-document": [
         "dist/core/fixed-document.d.ts"
       ],
+      "core/location": [
+        "dist/core/location.d.ts"
+      ],
+      "core/page-surface": [
+        "dist/core/page-surface.d.ts"
+      ],
       "core/reader": [
         "dist/core/reader.d.ts"
       ],
@@ -101,6 +107,14 @@
     "./core/fixed-document": {
       "types": "./dist/core/fixed-document.d.ts",
       "import": "./dist/core/fixed-document.js"
+    },
+    "./core/location": {
+      "types": "./dist/core/location.d.ts",
+      "import": "./dist/core/location.js"
+    },
+    "./core/page-surface": {
+      "types": "./dist/core/page-surface.d.ts",
+      "import": "./dist/core/page-surface.js"
     },
     "./core/reader": {
       "types": "./dist/core/reader.d.ts",

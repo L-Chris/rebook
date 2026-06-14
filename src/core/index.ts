@@ -98,6 +98,28 @@ export {
     type FixedPageViewport,
     type FixedPageViewportOptions,
 } from './fixed-document'
+export { REBOOK_LOCATION_MODEL_VERSION } from './location'
+export type {
+    Annotation,
+    BookLocation,
+    BookRange,
+    BookSelection,
+    Rect,
+    TextChunk,
+    TextProvider,
+    TextSearchResult,
+} from './location'
+export { REBOOK_PAGE_SURFACE_MODEL_VERSION } from './page-surface'
+export type {
+    ContentRenderer,
+    PageCompositor,
+    PageSurface,
+    PageSurfaceKind,
+    PageSurfaceLayer,
+    PageSurfaceLayerContentKind,
+    PageSurfaceLayerKind,
+    PageSurfaceRequest,
+} from './page-surface'
 export {
     RendererRouter,
     createRendererRouter,
