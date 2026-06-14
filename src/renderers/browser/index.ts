@@ -66,6 +66,13 @@ export {
     type BrowserSurfaceHostDestroyOptions,
 } from './surface-host'
 export {
+    BrowserSurfacePipeline,
+    createBrowserSurfacePipeline,
+    type BrowserSurfacePipelineConfig,
+    type BrowserSurfacePipelineDecoratorContext,
+    type BrowserSurfacePipelineRenderResult,
+} from './surface-pipeline'
+export {
     BrowserPdfCanvasRenderer,
     createBrowserPdfCanvasRenderer,
     type BrowserPdfCanvasRendererConfig,

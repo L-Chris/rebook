@@ -7,8 +7,7 @@
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
 import { debugRebook } from '../../core/debug'
-import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
-import { PageSurfaceController } from '../../core/page-surface'
+import { RendererEventDispatcher } from '../../core/renderer-state'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
@@ -30,13 +29,14 @@ import {
     type TextBlock,
     type TextStyle,
 } from '../../core/pretext'
-import type { BrowserPageComposeResult, BrowserPageCompositor, BrowserPageSurface } from './compositor'
+import type { BrowserPageCompositor, BrowserPageSurface } from './compositor'
 import {
     BrowserReflowableContentRenderer,
     type BrowserReflowableContentRenderContext,
     type ReflowableColumnLayout,
 } from './reflowable-content'
 import { BrowserReflowableMarkLayerDecorator } from './reflowable-mark-layer'
+import { BrowserSurfacePipeline } from './surface-pipeline'
 import { BrowserSurfaceHost } from './surface-host'
 
 interface RendererEventMap {
@@ -84,13 +84,7 @@ export class BrowserRenderer implements Renderer {
     private currentIndex = -1
     private prepared: PreparedText | null = null
     private lines: LineRange[] = []
-    private readonly contentRenderer: BrowserReflowableContentRenderer
-    private readonly surfaceController: PageSurfaceController<
-        BrowserReflowableContentRenderContext,
-        BrowserPageSurface,
-        undefined,
-        BrowserPageComposeResult
-    >
+    private readonly surfacePipeline: BrowserSurfacePipeline<BrowserReflowableContentRenderContext>
     private styles: RendererStyles
     private maxColumnCount: number
     private columnLayout: ReflowableColumnLayout = {
@@ -116,7 +110,6 @@ export class BrowserRenderer implements Renderer {
     private suppressNextScrollRelocate = false
     private prefetchPageCount = 0
     private beforeNavigate: RendererConfig['beforeNavigate']
-    private readonly marks = new ReaderMarkStore()
 
     constructor(config: BrowserRendererConfig) {
         this.styles = config.styles ?? {}
@@ -137,13 +130,13 @@ export class BrowserRenderer implements Renderer {
         this.content = this.host.surfaceHost
         this.applyOverflowMode()
 
-        this.contentRenderer = config.reflowableContentRenderer ?? new BrowserReflowableContentRenderer()
-        this.surfaceController = new PageSurfaceController({
-            contentRenderer: this.contentRenderer,
+        const contentRenderer = config.reflowableContentRenderer ?? new BrowserReflowableContentRenderer()
+        this.surfacePipeline = new BrowserSurfacePipeline({
+            contentRenderer,
             compositor: this.host.compositor,
-            decorators: [
+            createDecorators: ({ getMarks }) => [
                 new BrowserReflowableMarkLayerDecorator({
-                    getMarks: () => this.marks.getAll(),
+                    getMarks,
                 }),
             ],
         })
@@ -185,7 +178,7 @@ export class BrowserRenderer implements Renderer {
         this.lastLocation = null
         this.prepared = null
         this.lines = []
-        this.surfaceController.clear()
+        this.surfacePipeline.clear()
         this.host.resetScrollExtent()
         this.scroller.scrollTop = 0
         this.prefetchPageCount = getPluginPrefetchPageCount(book)
@@ -312,22 +305,22 @@ export class BrowserRenderer implements Renderer {
     }
 
     setMark(mark: ReaderMark): void {
-        this.marks.set(mark)
+        this.surfacePipeline.setMark(mark)
         this.renderVisibleLines()
     }
 
     removeMark(id: string): void {
-        this.marks.remove(id)
+        this.surfacePipeline.removeMark(id)
         this.renderVisibleLines()
     }
 
     clearMarks(kind?: string): void {
-        this.marks.clear(kind)
+        this.surfacePipeline.clearMarks(kind)
         this.renderVisibleLines()
     }
 
     getMarks(): ReaderMark[] {
-        return this.marks.getAll()
+        return this.surfacePipeline.getMarks()
     }
 
     getLocation(): RelocateEvent | null {
@@ -335,7 +328,7 @@ export class BrowserRenderer implements Renderer {
     }
 
     getCurrentSurface(): BrowserPageSurface | null {
-        return this.surfaceController.getCurrentSurface()
+        return this.surfacePipeline.getCurrentSurface()
     }
 
     getSectionFractions(): number[] {
@@ -363,11 +356,10 @@ export class BrowserRenderer implements Renderer {
     destroy(): void {
         this.activeLoadId++
         this.resizeObserver.disconnect()
-        this.surfaceController.destroy()
+        this.surfacePipeline.destroy()
         this.host.destroy({ compositor: false })
         this.events.clear()
         this.book = null
-        this.marks.clear()
     }
 
     private async loadSection(
@@ -488,12 +480,12 @@ export class BrowserRenderer implements Renderer {
     private renderVisibleLines(): void {
         const layout = this.columnLayout
         if (!this.prepared || this.currentIndex < 0) {
-            this.surfaceController.clear()
+            this.surfacePipeline.clear()
             return
         }
 
         const surfaceWidth = Math.max(1, layout.columnWidth * layout.columns + layout.gap * (layout.columns - 1))
-        this.surfaceController.render({
+        this.surfacePipeline.render({
             sectionIndex: this.currentIndex,
             pageIndex: this.pageIndex,
             layoutMode: this.layoutMode,

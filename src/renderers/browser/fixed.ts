@@ -15,11 +15,11 @@ import type { Book, LinkEvent, LoadEvent, RelocateEvent, TOCItem } from '../../c
 import type { EventListener, LayoutMode, ReaderMark, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
 import { UnsupportedFormatError } from '../../core/errors'
 import { parseCSSPixels } from '../../core/renderer-utils'
-import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
-import { PageSurfaceController } from '../../core/page-surface'
-import type { BrowserPageComposeResult, BrowserPageCompositor, BrowserPageSurface } from './compositor'
+import { RendererEventDispatcher } from '../../core/renderer-state'
+import type { BrowserPageCompositor, BrowserPageSurface } from './compositor'
 import { BrowserFixedContentRenderer, type BrowserFixedContentRenderContext, type BrowserFixedVisualRenderer } from './fixed-content'
 import { BrowserFixedMarkLayerDecorator } from './fixed-mark-layer'
+import { BrowserSurfacePipeline } from './surface-pipeline'
 import { BrowserSurfaceHost } from './surface-host'
 
 interface RendererEventMap {
@@ -51,15 +51,8 @@ const DEFAULT_TEXT_COLOR = '#111111'
 export class BrowserFixedRenderer implements Renderer {
     private readonly host: BrowserSurfaceHost
     private readonly events = new RendererEventDispatcher<RendererEventMap>()
-    private readonly marks = new ReaderMarkStore()
     private readonly beforeNavigate: RendererConfig['beforeNavigate']
-    private readonly contentRenderer: BrowserFixedContentRenderer
-    private readonly surfaceController: PageSurfaceController<
-        BrowserFixedContentRenderContext,
-        BrowserPageSurface,
-        undefined,
-        BrowserPageComposeResult
-    >
+    private readonly surfacePipeline: BrowserSurfacePipeline<BrowserFixedContentRenderContext>
     private readonly scroller: HTMLElement
     private readonly pageHost: HTMLElement
     private book: Book | null = null
@@ -84,17 +77,17 @@ export class BrowserFixedRenderer implements Renderer {
         })
         this.scroller = this.host.scroller
         this.pageHost = this.host.scrollExtent
-        this.contentRenderer = config.fixedContentRenderer ?? new BrowserFixedContentRenderer({
+        const contentRenderer = config.fixedContentRenderer ?? new BrowserFixedContentRenderer({
             fixedPageRenderer: config.fixedPageRenderer,
             visualRenderers: config.fixedVisualRenderers,
             devicePixelRatio: config.devicePixelRatio,
         })
-        this.surfaceController = new PageSurfaceController({
-            contentRenderer: this.contentRenderer,
+        this.surfacePipeline = new BrowserSurfacePipeline({
+            contentRenderer,
             compositor: this.host.compositor,
-            decorators: [
+            createDecorators: ({ getMarks }) => [
                 new BrowserFixedMarkLayerDecorator({
-                    getMarks: () => this.marks.getAll(),
+                    getMarks,
                 }),
             ],
         })
@@ -160,22 +153,22 @@ export class BrowserFixedRenderer implements Renderer {
     }
 
     setMark(mark: ReaderMark): void {
-        this.marks.set(mark)
+        this.surfacePipeline.setMark(mark)
         void this.renderCurrentPage('mark')
     }
 
     removeMark(id: string): void {
-        this.marks.remove(id)
+        this.surfacePipeline.removeMark(id)
         void this.renderCurrentPage('mark')
     }
 
     clearMarks(kind?: string): void {
-        this.marks.clear(kind)
+        this.surfacePipeline.clearMarks(kind)
         void this.renderCurrentPage('mark')
     }
 
     getMarks(): ReaderMark[] {
-        return this.marks.getAll()
+        return this.surfacePipeline.getMarks()
     }
 
     getLocation(): RelocateEvent | null {
@@ -183,7 +176,7 @@ export class BrowserFixedRenderer implements Renderer {
     }
 
     getCurrentSurface(): BrowserPageSurface | null {
-        return this.surfaceController.getCurrentSurface()
+        return this.surfacePipeline.getCurrentSurface()
     }
 
     getSectionFractions(): number[] {
@@ -209,10 +202,9 @@ export class BrowserFixedRenderer implements Renderer {
     }
 
     destroy(): void {
-        this.surfaceController.destroy()
+        this.surfacePipeline.destroy()
         this.host.destroy({ compositor: false })
         this.events.clear()
-        this.marks.clear()
         this.book = null
         this.document = null
         this.pages = []
@@ -226,7 +218,7 @@ export class BrowserFixedRenderer implements Renderer {
         const margin = parseCSSPixels(this.styles.margin, DEFAULT_MARGIN)
         const scale = this.getPageScale(page, margin)
         this.pageHost.style.padding = `${margin}px`
-        const rendered = await this.surfaceController.render({
+        const rendered = await this.surfacePipeline.render({
             document: fixedDocument,
             page,
             scale,

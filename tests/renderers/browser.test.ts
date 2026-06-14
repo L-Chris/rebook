@@ -19,6 +19,7 @@ import {
     BrowserRenderer,
     BrowserReflowableContentRenderer,
     BrowserSurfaceHost,
+    BrowserSurfacePipeline,
     BrowserViewportHost,
     ReaderView,
     matchesBrowserFixedContent,
@@ -233,6 +234,72 @@ describe('BrowserRenderer', () => {
         expect(content.style.transform).toBe('scale(2)')
 
         compositor.destroy()
+        expect(host.children.length).toBe(0)
+    })
+
+    it('runs browser content surfaces through a shared pipeline', async () => {
+        const host = document.createElement('div')
+        const compositor = new BrowserPageCompositor({ host })
+        const pipeline = new BrowserSurfacePipeline<{ text: string }>({
+            compositor,
+            contentRenderer: {
+                id: 'test-content',
+                renderSurface(context) {
+                    const content = document.createElement('div')
+                    content.textContent = context.text
+                    return {
+                        id: 'pipeline-surface',
+                        kind: 'fixed-page',
+                        pageIndex: 0,
+                        width: 120,
+                        height: 80,
+                        scale: 1,
+                        layers: [{
+                            id: 'content',
+                            kind: 'content',
+                            contentKind: 'dom',
+                            content,
+                        }],
+                    }
+                },
+            },
+            createDecorators: ({ getMarks }) => [{
+                id: 'test-mark-decorator',
+                decorate(surface) {
+                    const marks = getMarks()
+                    if (!marks.length) return surface
+                    const overlay = document.createElement('div')
+                    overlay.dataset.markCount = String(marks.length)
+                    overlay.textContent = marks.map(mark => mark.id).join(',')
+                    return {
+                        ...surface,
+                        layers: [
+                            ...surface.layers,
+                            {
+                                id: 'marks',
+                                kind: 'annotation',
+                                contentKind: 'dom',
+                                content: overlay,
+                            },
+                        ],
+                    }
+                },
+            }],
+        })
+
+        pipeline.setMark({
+            id: 'm1',
+            kind: 'highlight',
+            location: { type: 'fixed', format: 'pdf', pageIndex: 0 },
+        })
+        const result = await pipeline.render({ text: 'Pipeline text' })
+
+        expect(result?.surface).toBe(pipeline.getCurrentSurface())
+        expect(host.querySelector('[data-rebook-surface-layer="content"]')?.textContent).toBe('Pipeline text')
+        expect(host.querySelector('[data-rebook-surface-layer="marks"]')?.textContent).toBe('m1')
+        expect((host.querySelector('[data-rebook-surface-layer="marks"]') as HTMLElement | null)?.dataset.markCount).toBe('1')
+
+        pipeline.destroy()
         expect(host.children.length).toBe(0)
     })
 
