@@ -3,6 +3,10 @@ import type { LayoutMode, RendererStyles } from '../../core/renderer'
 import { parseCSSPixels } from '../../core/renderer-utils'
 import { createReflowableTextProvider } from '../../core/reflowable-text-provider'
 import {
+    getRenderedReflowableLinePosition,
+    type ReflowableColumnLayout,
+} from '../../core/reflowable-page-model'
+import {
     getVisibleLines,
     type LineRange,
     type PreparedText,
@@ -11,18 +15,6 @@ import {
     type TextTable,
 } from '../../core/pretext'
 import type { BrowserPageSurface, BrowserPageSurfaceLayer } from './compositor'
-
-export interface ReflowableColumnLayout {
-    margin: number
-    gap: number
-    columnWidth: number
-    columns: number
-    pageHeight: number
-    columnHeight: number
-    pagePaddingBlock: number
-    totalHeight: number
-    pageCount: number
-}
 
 export interface BrowserReflowableContentRenderContext {
     readonly sectionIndex: number
@@ -96,7 +88,7 @@ export class BrowserReflowableContentRenderer implements ContentRenderer<Browser
             },
             textProvider: createReflowableTextProvider({
                 sectionIndex: context.sectionIndex,
-                getLinePosition: line => getRenderedLinePosition(line, context.layout, context.layoutMode),
+                getLinePosition: line => getRenderedReflowableLinePosition(line, context.layout, context.layoutMode),
             }, window.lines),
             destroy() {
                 for (const layer of layers) layer.destroy?.()
@@ -105,7 +97,7 @@ export class BrowserReflowableContentRenderer implements ContentRenderer<Browser
     }
 
     private createLineElement(line: LineRange, context: BrowserReflowableContentRenderContext): HTMLElement {
-        const position = getRenderedLinePosition(line, context.layout, context.layoutMode)
+        const position = getRenderedReflowableLinePosition(line, context.layout, context.layoutMode)
 
         if (line.kind === 'image' && line.image) {
             return createImageLine(line, position, context)
@@ -376,23 +368,6 @@ function createTableLine(
 
     wrapper.appendChild(row)
     return wrapper
-}
-
-function getRenderedLinePosition(
-    line: LineRange,
-    layout: ReflowableColumnLayout,
-    layoutMode: LayoutMode,
-): { top: number; left: number } {
-    const { columns, pageHeight, columnHeight, columnWidth, gap, pagePaddingBlock } = layout
-    if (layoutMode !== 'paginated') return { top: line.top + pagePaddingBlock, left: 0 }
-
-    const sourceColumn = Math.floor(line.top / columnHeight)
-    const row = Math.floor(sourceColumn / columns)
-    const column = sourceColumn % columns
-    return {
-        top: row * pageHeight + pagePaddingBlock + (line.top % columnHeight),
-        left: column * (columnWidth + gap),
-    }
 }
 
 function applyTextStyle(element: HTMLElement, style: TextStyle): void {

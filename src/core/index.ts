@@ -84,6 +84,25 @@ export {
     type ResolvedMarkRect,
 } from './mark-resolver'
 export {
+    clampReflowablePageIndex,
+    findReadableReflowablePage,
+    getRenderedReflowableLinePosition,
+    getReflowablePageIndexForScrollTop,
+    getReflowablePageScrollTop,
+    getReflowableScrollTopForFraction,
+    getReflowableScrollTopForSourceTop,
+    getReflowableSectionFraction,
+    getReflowableSourceHeightForPages,
+    getReflowableSourceScrollTop,
+    getReflowableSourceViewport,
+    getReflowableSourceViewportHeight,
+    getReflowableVisibleLineWindow,
+    hasReadableLinesOnReflowablePage,
+    type ReflowableColumnLayout,
+    type ReflowableSourceViewport,
+    type ReflowableViewportMetrics,
+} from './reflowable-page-model'
+export {
     createReflowableTextProvider,
     lineMatchesReflowableBookRange,
     lineToReflowableBookRange,

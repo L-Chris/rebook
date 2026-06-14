@@ -14,12 +14,26 @@ import {
     getAnchorIds,
     getColumnCount,
     getLineHeightMultiplier,
-    getLinePageIndex,
     getPagePaddingBlock,
     getPluginPrefetchPageCount,
     getReadablePageCount,
     parseCSSPixels,
 } from '../../core/renderer-utils'
+import {
+    clampReflowablePageIndex,
+    findReadableReflowablePage,
+    getReflowablePageIndexForScrollTop,
+    getReflowablePageScrollTop,
+    getReflowableScrollTopForFraction,
+    getReflowableScrollTopForSourceTop,
+    getReflowableSectionFraction,
+    getReflowableSourceHeightForPages,
+    getReflowableSourceScrollTop,
+    getReflowableSourceViewport,
+    getReflowableSourceViewportHeight,
+    type ReflowableColumnLayout,
+    type ReflowableViewportMetrics,
+} from '../../core/reflowable-page-model'
 import {
     getVisibleLines,
     layout as layoutText,
@@ -34,7 +48,6 @@ import type { BrowserPageCompositor, BrowserPageSurface } from './compositor'
 import {
     BrowserReflowableContentRenderer,
     type BrowserReflowableContentRenderContext,
-    type ReflowableColumnLayout,
 } from './reflowable-content'
 import { BrowserReflowableMarkLayerDecorator } from './reflowable-mark-layer'
 import { BrowserSurfacePipeline } from './surface-pipeline'
@@ -269,9 +282,13 @@ export class BrowserRenderer implements BrowserContentEngine {
             this.applyPageScroll('fraction')
             return
         }
-        const maxScroll = Math.max(0, this.scroller.scrollHeight - this.scroller.clientHeight)
         this.suppressNextScrollRelocate = true
-        this.scroller.scrollTop = maxScroll * sectionFraction
+        this.scroller.scrollTop = getReflowableScrollTopForFraction(
+            this.layoutMode,
+            this.columnLayout,
+            this.getViewportMetrics(),
+            sectionFraction,
+        )
         this.renderVisibleLines()
         this.emitRelocate('fraction')
         this.emitBlockWindow('fraction')
@@ -382,18 +399,18 @@ export class BrowserRenderer implements BrowserContentEngine {
             : prepare(segments, { baseStyle: this.getBaseTextStyle() })
         this.currentIndex = index
         this.pageIndex = this.layoutMode === 'paginated'
-            ? Math.max(0, Math.floor(restoreScrollTop / Math.max(1, this.columnLayout.pageHeight)))
+            ? getReflowablePageIndexForScrollTop(this.columnLayout, restoreScrollTop)
             : 0
         this.relayout()
 
         const anchorScrollTop = this.getAnchorScrollTop(anchor, href)
         const targetScrollTop = anchorScrollTop ?? restoreScrollTop
         if (this.layoutMode === 'paginated') {
-            this.pageIndex = Math.max(0, Math.floor(targetScrollTop / Math.max(1, this.columnLayout.pageHeight)))
-            this.pageIndex = Math.min(this.pageIndex, this.columnLayout.pageCount - 1)
+            this.pageIndex = getReflowablePageIndexForScrollTop(this.columnLayout, targetScrollTop)
+            this.pageIndex = clampReflowablePageIndex(this.pageIndex, this.columnLayout)
             this.pageIndex = this.findReadablePage(this.pageIndex, 0) ?? this.pageIndex
             this.suppressNextScrollRelocate = true
-            this.scroller.scrollTop = this.pageIndex * this.columnLayout.pageHeight
+            this.scroller.scrollTop = getReflowablePageScrollTop(this.columnLayout, this.pageIndex)
         } else {
             this.suppressNextScrollRelocate = true
             this.scroller.scrollTop = targetScrollTop
@@ -486,6 +503,12 @@ export class BrowserRenderer implements BrowserContentEngine {
             return
         }
 
+        const viewport = getReflowableSourceViewport(
+            this.layoutMode,
+            layout,
+            this.getViewportMetrics(),
+            this.pageIndex,
+        )
         const surfaceWidth = Math.max(1, layout.columnWidth * layout.columns + layout.gap * (layout.columns - 1))
         this.surfacePipeline.render({
             sectionIndex: this.currentIndex,
@@ -497,8 +520,8 @@ export class BrowserRenderer implements BrowserContentEngine {
             styles: this.styles,
             baseTextStyle: this.getBaseTextStyle(),
             lineHeightPixels: this.getLineHeightPixels(),
-            sourceScrollTop: this.getSourceScrollTop(),
-            sourceViewportHeight: this.getSourceViewportHeight(),
+            sourceScrollTop: viewport.sourceScrollTop,
+            sourceViewportHeight: viewport.sourceViewportHeight,
             surfaceWidth,
             surfaceHeight: Math.max(1, layout.totalHeight),
         })
@@ -506,14 +529,23 @@ export class BrowserRenderer implements BrowserContentEngine {
 
     private emitRelocate(reason: string): void {
         if (this.currentIndex < 0) return
-        const maxScroll = Math.max(0, this.scroller.scrollHeight - this.scroller.clientHeight)
-        const fraction = this.layoutMode === 'paginated'
-            ? this.columnLayout.pageCount > 1 ? this.pageIndex / (this.columnLayout.pageCount - 1) : 0
-            : maxScroll > 0 ? this.scroller.scrollTop / maxScroll : 0
+        const metrics = this.getViewportMetrics()
+        const fraction = getReflowableSectionFraction(
+            this.layoutMode,
+            this.columnLayout,
+            metrics,
+            this.pageIndex,
+        )
+        const viewport = getReflowableSourceViewport(
+            this.layoutMode,
+            this.columnLayout,
+            metrics,
+            this.pageIndex,
+        )
         const range = getVisibleLines(
             this.lines,
-            this.getSourceScrollTop(),
-            this.getSourceViewportHeight(),
+            viewport.sourceScrollTop,
+            viewport.sourceViewportHeight,
             0,
         )
         const tocItem = this.pendingTOCItem ?? this.getCurrentTOCItem()
@@ -536,8 +568,8 @@ export class BrowserRenderer implements BrowserContentEngine {
             tocLabel: tocItem?.label,
             tocHref: tocItem?.href,
             tocPositions: this.tocPositions.length,
-            sourceTop: this.getSourceScrollTop(),
-            sourceHeight: this.getSourceViewportHeight(),
+            sourceTop: viewport.sourceScrollTop,
+            sourceHeight: viewport.sourceViewportHeight,
         })
         this.lastLocation = event
         this.emit('relocate', event)
@@ -560,8 +592,9 @@ export class BrowserRenderer implements BrowserContentEngine {
     private getPrefetchBlockIds(): string[] {
         const ids: string[] = []
         const seen = new Set<string>()
+        const metrics = this.getViewportMetrics()
         const sourceStart = this.getSourceScrollTop()
-        const sourceEnd = sourceStart + this.getSourceViewportHeight() + this.getSourceHeightForPages(this.prefetchPageCount)
+        const sourceEnd = sourceStart + this.getSourceViewportHeight() + this.getSourceHeightForPages(this.prefetchPageCount, metrics)
 
         for (const line of this.lines) {
             if (line.top + line.height < sourceStart) continue
@@ -575,11 +608,8 @@ export class BrowserRenderer implements BrowserContentEngine {
         return ids
     }
 
-    private getSourceHeightForPages(pageCount: number): number {
-        const safePageCount = Math.max(1, pageCount)
-        return this.layoutMode === 'paginated'
-            ? this.columnLayout.columnHeight * this.columnLayout.columns * safePageCount
-            : this.scroller.clientHeight * safePageCount
+    private getSourceHeightForPages(pageCount: number, metrics = this.getViewportMetrics()): number {
+        return getReflowableSourceHeightForPages(this.layoutMode, this.columnLayout, metrics, pageCount)
     }
 
     private resolveHrefFallback(href: string): ResolvedNavigation | null {
@@ -727,13 +757,7 @@ export class BrowserRenderer implements BrowserContentEngine {
     }
 
     private getScrollTopForSourceTop(sourceTop: number): number {
-        const safeSourceTop = Math.max(0, sourceTop)
-        if (this.layoutMode === 'paginated') {
-            const pageSourceHeight = Math.max(1, this.columnLayout.columnHeight * this.columnLayout.columns)
-            const page = Math.floor(safeSourceTop / pageSourceHeight)
-            return page * this.columnLayout.pageHeight
-        }
-        return safeSourceTop + this.columnLayout.pagePaddingBlock
+        return getReflowableScrollTopForSourceTop(sourceTop, this.layoutMode, this.columnLayout)
     }
 
     private getBaseTextStyle(): TextStyle {
@@ -750,25 +774,32 @@ export class BrowserRenderer implements BrowserContentEngine {
     }
 
     private getSourceScrollTop(): number {
-        if (this.layoutMode !== 'paginated') {
-            return Math.max(0, this.scroller.scrollTop - this.columnLayout.pagePaddingBlock)
-        }
-        return this.pageIndex * this.columnLayout.columnHeight * this.columnLayout.columns
+        return getReflowableSourceScrollTop(
+            this.layoutMode,
+            this.columnLayout,
+            this.getViewportMetrics(),
+            this.pageIndex,
+        )
     }
 
     private getSourceViewportHeight(): number {
-        if (this.layoutMode !== 'paginated') {
-            return this.scroller.clientHeight + this.columnLayout.pagePaddingBlock * 2
+        return getReflowableSourceViewportHeight(this.layoutMode, this.columnLayout, this.getViewportMetrics())
+    }
+
+    private getViewportMetrics(): ReflowableViewportMetrics {
+        return {
+            scrollTop: this.scroller.scrollTop,
+            scrollHeight: this.scroller.scrollHeight,
+            clientHeight: this.scroller.clientHeight,
         }
-        return this.columnLayout.columnHeight * this.columnLayout.columns
     }
 
     private applyPageScroll(reason: string): void {
         if (this.layoutMode === 'paginated') {
             this.pageIndex = this.findReadablePage(this.pageIndex, 0) ?? this.pageIndex
-            this.pageIndex = Math.min(Math.max(0, this.pageIndex), this.columnLayout.pageCount - 1)
+            this.pageIndex = clampReflowablePageIndex(this.pageIndex, this.columnLayout)
             this.suppressNextScrollRelocate = true
-            this.scroller.scrollTop = this.pageIndex * this.columnLayout.pageHeight
+            this.scroller.scrollTop = getReflowablePageScrollTop(this.columnLayout, this.pageIndex)
         }
         this.renderVisibleLines()
         this.emitRelocate(reason)
@@ -784,14 +815,14 @@ export class BrowserRenderer implements BrowserContentEngine {
     }
 
     private getSectionFraction(): number {
-        if (this.currentIndex < 0) return 0
-        if (this.layoutMode === 'paginated') {
-            return this.columnLayout.pageCount > 1
-                ? this.pageIndex / (this.columnLayout.pageCount - 1)
-                : 0
-        }
-        const maxScroll = Math.max(0, this.scroller.scrollHeight - this.scroller.clientHeight)
-        return maxScroll > 0 ? this.scroller.scrollTop / maxScroll : 0
+        return this.currentIndex < 0
+            ? 0
+            : getReflowableSectionFraction(
+                this.layoutMode,
+                this.columnLayout,
+                this.getViewportMetrics(),
+                this.pageIndex,
+            )
     }
 
     private restoreSectionFraction(fraction: number): void {
@@ -803,7 +834,7 @@ export class BrowserRenderer implements BrowserContentEngine {
             )
             this.pageIndex = this.findReadablePage(this.pageIndex, 0) ?? this.pageIndex
             this.suppressNextScrollRelocate = true
-            this.scroller.scrollTop = this.pageIndex * this.columnLayout.pageHeight
+            this.scroller.scrollTop = getReflowablePageScrollTop(this.columnLayout, this.pageIndex)
         } else {
             this.suppressNextScrollRelocate = true
             this.scroller.scrollTop = this.scrollTopForFraction(safe)
@@ -812,13 +843,12 @@ export class BrowserRenderer implements BrowserContentEngine {
     }
 
     private scrollTopForFraction(fraction: number): number {
-        const safe = Math.max(0, Math.min(1, fraction))
-        if (this.layoutMode === 'paginated') {
-            const page = Math.round(safe * Math.max(0, this.columnLayout.pageCount - 1))
-            return page * this.columnLayout.pageHeight
-        }
-        const maxScroll = Math.max(0, this.scroller.scrollHeight - this.scroller.clientHeight)
-        return maxScroll * safe
+        return getReflowableScrollTopForFraction(
+            this.layoutMode,
+            this.columnLayout,
+            this.getViewportMetrics(),
+            fraction,
+        )
     }
 
     private getLineHeightPixels(): number {
@@ -831,40 +861,7 @@ export class BrowserRenderer implements BrowserContentEngine {
     }
 
     private findReadablePage(pageIndex: number, direction: -1 | 0 | 1): number | null {
-        if (this.layoutMode !== 'paginated') return 0
-        const pageCount = this.columnLayout.pageCount
-        if (pageCount <= 0) return null
-        if (direction > 0 && pageIndex >= pageCount) return null
-        if (direction < 0 && pageIndex < 0) return null
-        const start = Math.min(Math.max(0, pageIndex), pageCount - 1)
-        if (this.hasReadableLinesOnPage(start)) return start
-
-        if (direction > 0) {
-            for (let page = start + 1; page < pageCount; page++) {
-                if (this.hasReadableLinesOnPage(page)) return page
-            }
-            return null
-        }
-
-        if (direction < 0) {
-            for (let page = start - 1; page >= 0; page--) {
-                if (this.hasReadableLinesOnPage(page)) return page
-            }
-            return null
-        }
-
-        for (let distance = 1; distance < pageCount; distance++) {
-            const previous = start - distance
-            const next = start + distance
-            if (previous >= 0 && this.hasReadableLinesOnPage(previous)) return previous
-            if (next < pageCount && this.hasReadableLinesOnPage(next)) return next
-        }
-        return null
-    }
-
-    private hasReadableLinesOnPage(pageIndex: number): boolean {
-        const { columns, columnHeight } = this.columnLayout
-        return this.lines.some(line => getLinePageIndex(line, columnHeight, columns) === pageIndex)
+        return findReadableReflowablePage(this.lines, this.layoutMode, this.columnLayout, pageIndex, direction)
     }
 
     private emit<K extends keyof RendererEventMap>(event: K, data: RendererEventMap[K]): void {

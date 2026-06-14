@@ -37,8 +37,10 @@ export {
     BrowserReflowableContentRenderer,
     createBrowserReflowableContentRenderer,
     type BrowserReflowableContentRenderContext,
-    type ReflowableColumnLayout,
 } from './reflowable-content'
+export {
+    type ReflowableColumnLayout,
+} from '../../core/reflowable-page-model'
 export {
     BrowserReflowableMarkLayerDecorator,
     createBrowserReflowableMarkLayerDecorator,

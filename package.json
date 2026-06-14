@@ -33,6 +33,9 @@
       "core/reader": [
         "dist/core/reader.d.ts"
       ],
+      "core/reflowable-page-model": [
+        "dist/core/reflowable-page-model.d.ts"
+      ],
       "core/reflowable-text-provider": [
         "dist/core/reflowable-text-provider.d.ts"
       ],
@@ -146,6 +149,10 @@
     "./core/reader": {
       "types": "./dist/core/reader.d.ts",
       "import": "./dist/core/reader.js"
+    },
+    "./core/reflowable-page-model": {
+      "types": "./dist/core/reflowable-page-model.d.ts",
+      "import": "./dist/core/reflowable-page-model.js"
     },
     "./core/reflowable-text-provider": {
       "types": "./dist/core/reflowable-text-provider.d.ts",
