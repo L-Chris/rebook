@@ -20702,6 +20702,66 @@ function reflowableLocationMatchesBlock(location, range, endOffset = location.of
   if (markEnd === markStart) return rangeStart <= markStart && markStart < rangeEnd;
   return rangeStart < markEnd && rangeEnd > markStart;
 }
+class ReaderMarkStore {
+  constructor() {
+    __publicField(this, "marks", /* @__PURE__ */ new Map());
+  }
+  set(mark) {
+    this.marks.set(mark.id, mark);
+  }
+  remove(id) {
+    this.marks.delete(id);
+  }
+  clear(kind) {
+    if (kind === void 0) {
+      this.marks.clear();
+      return;
+    }
+    for (const [id, mark] of this.marks) {
+      if (mark.kind === kind) this.marks.delete(id);
+    }
+  }
+  getAll() {
+    return Array.from(this.marks.values());
+  }
+  values() {
+    return this.marks.values();
+  }
+}
+class RendererEventDispatcher {
+  constructor() {
+    __publicField(this, "listeners", /* @__PURE__ */ new Map());
+  }
+  on(event, listener) {
+    let listeners = this.listeners.get(event);
+    if (!listeners) {
+      listeners = /* @__PURE__ */ new Set();
+      this.listeners.set(event, listeners);
+    }
+    listeners.add(listener);
+  }
+  off(event, listener) {
+    var _a2;
+    (_a2 = this.listeners.get(event)) == null ? void 0 : _a2.delete(listener);
+  }
+  emit(event, payload) {
+    var _a2;
+    for (const listener of (_a2 = this.listeners.get(event)) != null ? _a2 : []) listener(payload);
+  }
+  replayTo(renderer) {
+    for (const [event, listeners] of this.listeners) {
+      for (const listener of listeners) renderer.on(event, listener);
+    }
+  }
+  detachFrom(renderer) {
+    for (const [event, listeners] of this.listeners) {
+      for (const listener of listeners) renderer.off(event, listener);
+    }
+  }
+  clear() {
+    this.listeners.clear();
+  }
+}
 class SectionProgress {
   constructor(sections, sizePerLoc = 1500) {
     __publicField(this, "sizes");
@@ -20868,13 +20928,13 @@ class WechatMiniProgramRenderer {
     __publicField(this, "scrollTop", 0);
     __publicField(this, "progress", null);
     __publicField(this, "lastLocation", null);
-    __publicField(this, "listeners", /* @__PURE__ */ new Map());
+    __publicField(this, "events", new RendererEventDispatcher());
     __publicField(this, "activeLoadId", 0);
     __publicField(this, "prefetchPageCount", 0);
     __publicField(this, "tocPositions", []);
     __publicField(this, "pendingTOCItem", null);
     __publicField(this, "beforeNavigate");
-    __publicField(this, "marks", /* @__PURE__ */ new Map());
+    __publicField(this, "marks", new ReaderMarkStore());
     __publicField(this, "columnLayout", {
       margin: DEFAULT_MARGIN,
       gap: DEFAULT_GAP,
@@ -21011,25 +21071,19 @@ class WechatMiniProgramRenderer {
     this.publishPosition("spread");
   }
   setMark(mark) {
-    this.marks.set(mark.id, mark);
+    this.marks.set(mark);
     this.publishSnapshot();
   }
   removeMark(id) {
-    this.marks.delete(id);
+    this.marks.remove(id);
     this.publishSnapshot();
   }
   clearMarks(kind) {
-    if (kind === void 0) {
-      this.marks.clear();
-    } else {
-      for (const [id, mark] of this.marks) {
-        if (mark.kind === kind) this.marks.delete(id);
-      }
-    }
+    this.marks.clear(kind);
     this.publishSnapshot();
   }
   getMarks() {
-    return Array.from(this.marks.values());
+    return this.marks.getAll();
   }
   setViewport(width, height) {
     const fraction = this.getSectionFraction();
@@ -21079,16 +21133,14 @@ class WechatMiniProgramRenderer {
     this.publishPosition("refresh");
   }
   on(event, listener) {
-    if (!this.listeners.has(event)) this.listeners.set(event, /* @__PURE__ */ new Set());
-    this.listeners.get(event).add(listener);
+    this.events.on(event, listener);
   }
   off(event, listener) {
-    var _a2;
-    (_a2 = this.listeners.get(event)) == null ? void 0 : _a2.delete(listener);
+    this.events.off(event, listener);
   }
   destroy() {
     this.activeLoadId++;
-    this.listeners.clear();
+    this.events.clear();
     this.book = null;
     this.sections = [];
     this.prepared = null;
@@ -21263,7 +21315,7 @@ class WechatMiniProgramRenderer {
   }
   getLineMarks(line) {
     if (this.currentIndex < 0) return [];
-    return Array.from(this.marks.values()).filter((mark) => markMatchesLine(mark, line, this.currentIndex));
+    return this.marks.getAll().filter((mark) => markMatchesLine(mark, line, this.currentIndex));
   }
   publishPosition(reason) {
     this.publishSnapshot();
@@ -21530,8 +21582,7 @@ class WechatMiniProgramRenderer {
     return await ((_a2 = this.beforeNavigate) == null ? void 0 : _a2.call(this, direction)) !== false;
   }
   emit(event, data) {
-    var _a2;
-    (_a2 = this.listeners.get(event)) == null ? void 0 : _a2.forEach((fn) => fn(data));
+    this.events.emit(event, data);
   }
 }
 const createWechatMiniProgramRenderer = (config) => {

@@ -16,6 +16,7 @@ import type {
     Renderer,
     RendererStyles,
 } from './renderer'
+import { ReaderMarkStore, RendererEventDispatcher } from './renderer-state'
 
 export type RendererRouteMatch = boolean | number
 
@@ -33,8 +34,8 @@ export class RendererRouter implements Renderer {
     private readonly routes: readonly RendererRoute[]
     private active: Renderer | null = null
     private activeRouteId: string | null = null
-    private readonly listeners = new Map<string, Set<EventListener>>()
-    private readonly marks = new Map<string, ReaderMark>()
+    private readonly events = new RendererEventDispatcher()
+    private readonly marks = new ReaderMarkStore()
     private styles: RendererStyles | null = null
     private layout: LayoutMode | null = null
     private spread: number | null = null
@@ -91,30 +92,22 @@ export class RendererRouter implements Renderer {
     }
 
     setMark(mark: ReaderMark): void {
-        this.marks.set(mark.id, mark)
+        this.marks.set(mark)
         this.active?.setMark(mark)
     }
 
     removeMark(id: string): void {
-        this.marks.delete(id)
+        this.marks.remove(id)
         this.active?.removeMark(id)
     }
 
     clearMarks(kind?: string): void {
-        if (kind) {
-            for (const [id, mark] of this.marks) {
-                if (mark.kind === kind) {
-                    this.marks.delete(id)
-                }
-            }
-        } else {
-            this.marks.clear()
-        }
+        this.marks.clear(kind)
         this.active?.clearMarks(kind)
     }
 
     getMarks(): ReaderMark[] {
-        return this.active?.getMarks() ?? Array.from(this.marks.values())
+        return this.active?.getMarks() ?? this.marks.getAll()
     }
 
     getLocation() {
@@ -130,17 +123,12 @@ export class RendererRouter implements Renderer {
     }
 
     on(event: string, listener: EventListener): void {
-        let listeners = this.listeners.get(event)
-        if (!listeners) {
-            listeners = new Set()
-            this.listeners.set(event, listeners)
-        }
-        listeners.add(listener)
+        this.events.on(event, listener)
         this.active?.on(event, listener)
     }
 
     off(event: string, listener: EventListener): void {
-        this.listeners.get(event)?.delete(listener)
+        this.events.off(event, listener)
         this.active?.off(event, listener)
     }
 
@@ -148,7 +136,7 @@ export class RendererRouter implements Renderer {
         this.active?.destroy()
         this.active = null
         this.activeRouteId = null
-        this.listeners.clear()
+        this.events.clear()
         this.marks.clear()
         this.styles = null
         this.layout = null
@@ -171,11 +159,7 @@ export class RendererRouter implements Renderer {
     }
 
     private replayListeners(renderer: Renderer): void {
-        for (const [event, listeners] of this.listeners) {
-            for (const listener of listeners) {
-                renderer.on(event, listener)
-            }
-        }
+        this.events.replayTo(renderer)
     }
 
     private replayState(renderer: Renderer): void {

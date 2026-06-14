@@ -8,6 +8,7 @@
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from '../../core/renderer'
 import { bookPositionMatchesReflowableRange } from '../../core/location'
+import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
@@ -178,13 +179,13 @@ export class WechatMiniProgramRenderer implements Renderer {
     private scrollTop = 0
     private progress: SectionProgress | null = null
     private lastLocation: RelocateEvent | null = null
-    private listeners = new Map<string, Set<Listener<unknown>>>()
+    private readonly events = new RendererEventDispatcher<RendererEventMap>()
     private activeLoadId = 0
     private prefetchPageCount = 0
     private tocPositions: TOCPosition[] = []
     private pendingTOCItem: TOCItem | null = null
     private beforeNavigate: RendererNavigationHooks['beforeNavigate']
-    private marks = new Map<string, ReaderMark>()
+    private readonly marks = new ReaderMarkStore()
     private columnLayout: ColumnLayout = {
         margin: DEFAULT_MARGIN,
         gap: DEFAULT_GAP,
@@ -334,28 +335,22 @@ export class WechatMiniProgramRenderer implements Renderer {
     }
 
     setMark(mark: ReaderMark): void {
-        this.marks.set(mark.id, mark)
+        this.marks.set(mark)
         this.publishSnapshot()
     }
 
     removeMark(id: string): void {
-        this.marks.delete(id)
+        this.marks.remove(id)
         this.publishSnapshot()
     }
 
     clearMarks(kind?: string): void {
-        if (kind === undefined) {
-            this.marks.clear()
-        } else {
-            for (const [id, mark] of this.marks) {
-                if (mark.kind === kind) this.marks.delete(id)
-            }
-        }
+        this.marks.clear(kind)
         this.publishSnapshot()
     }
 
     getMarks(): ReaderMark[] {
-        return Array.from(this.marks.values())
+        return this.marks.getAll()
     }
 
     setViewport(width: number, height: number): void {
@@ -413,19 +408,18 @@ export class WechatMiniProgramRenderer implements Renderer {
     on<K extends keyof RendererEventMap>(event: K, listener: Listener<RendererEventMap[K]>): void
     on(event: string, listener: Listener<unknown>): void
     on(event: string, listener: Listener<unknown>): void {
-        if (!this.listeners.has(event)) this.listeners.set(event, new Set())
-        this.listeners.get(event)!.add(listener)
+        this.events.on(event, listener)
     }
 
     off<K extends keyof RendererEventMap>(event: K, listener: Listener<RendererEventMap[K]>): void
     off(event: string, listener: Listener<unknown>): void
     off(event: string, listener: Listener<unknown>): void {
-        this.listeners.get(event)?.delete(listener)
+        this.events.off(event, listener)
     }
 
     destroy(): void {
         this.activeLoadId++
-        this.listeners.clear()
+        this.events.clear()
         this.book = null
         this.sections = []
         this.prepared = null
@@ -618,7 +612,7 @@ export class WechatMiniProgramRenderer implements Renderer {
 
     private getLineMarks(line: LineRange): ReaderMark[] {
         if (this.currentIndex < 0) return []
-        return Array.from(this.marks.values()).filter(mark => markMatchesLine(mark, line, this.currentIndex))
+        return this.marks.getAll().filter(mark => markMatchesLine(mark, line, this.currentIndex))
     }
 
     private publishPosition(reason: string): void {
@@ -916,7 +910,7 @@ export class WechatMiniProgramRenderer implements Renderer {
     }
 
     private emit<K extends keyof RendererEventMap>(event: K, data: RendererEventMap[K]): void {
-        this.listeners.get(event)?.forEach(fn => fn(data))
+        this.events.emit(event, data)
     }
 }
 

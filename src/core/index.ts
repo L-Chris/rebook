@@ -139,3 +139,8 @@ export {
     type RendererRouteMatch,
     type RendererRouterConfig,
 } from './renderer-router'
+export {
+    ReaderMarkStore,
+    RendererEventDispatcher,
+    type RendererEventTarget,
+} from './renderer-state'

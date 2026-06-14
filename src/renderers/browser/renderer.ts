@@ -7,6 +7,7 @@
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
 import { debugRebook } from '../../core/debug'
+import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
@@ -98,7 +99,7 @@ export class BrowserRenderer implements Renderer {
     private pageIndex = 0
     private progress: SectionProgress | null = null
     private lastLocation: RelocateEvent | null = null
-    private listeners = new Map<string, Set<Listener<unknown>>>()
+    private readonly events = new RendererEventDispatcher<RendererEventMap>()
     private resizeObserver: ResizeObserver
     private activeLoadId = 0
     private tocPositions: TOCPosition[] = []
@@ -106,7 +107,7 @@ export class BrowserRenderer implements Renderer {
     private suppressNextScrollRelocate = false
     private prefetchPageCount = 0
     private beforeNavigate: RendererConfig['beforeNavigate']
-    private marks = new Map<string, ReaderMark>()
+    private readonly marks = new ReaderMarkStore()
 
     constructor(config: BrowserRendererConfig) {
         this.container = config.container
@@ -307,28 +308,22 @@ export class BrowserRenderer implements Renderer {
     }
 
     setMark(mark: ReaderMark): void {
-        this.marks.set(mark.id, mark)
+        this.marks.set(mark)
         this.renderVisibleLines()
     }
 
     removeMark(id: string): void {
-        this.marks.delete(id)
+        this.marks.remove(id)
         this.renderVisibleLines()
     }
 
     clearMarks(kind?: string): void {
-        if (kind === undefined) {
-            this.marks.clear()
-        } else {
-            for (const [id, mark] of this.marks) {
-                if (mark.kind === kind) this.marks.delete(id)
-            }
-        }
+        this.marks.clear(kind)
         this.renderVisibleLines()
     }
 
     getMarks(): ReaderMark[] {
-        return Array.from(this.marks.values())
+        return this.marks.getAll()
     }
 
     getLocation(): RelocateEvent | null {
@@ -348,14 +343,13 @@ export class BrowserRenderer implements Renderer {
     on<K extends keyof RendererEventMap>(event: K, listener: Listener<RendererEventMap[K]>): void
     on(event: string, listener: Listener<unknown>): void
     on(event: string, listener: Listener<unknown>): void {
-        if (!this.listeners.has(event)) this.listeners.set(event, new Set())
-        this.listeners.get(event)!.add(listener)
+        this.events.on(event, listener)
     }
 
     off<K extends keyof RendererEventMap>(event: K, listener: Listener<RendererEventMap[K]>): void
     off(event: string, listener: Listener<unknown>): void
     off(event: string, listener: Listener<unknown>): void {
-        this.listeners.get(event)?.delete(listener)
+        this.events.off(event, listener)
     }
 
     destroy(): void {
@@ -364,7 +358,7 @@ export class BrowserRenderer implements Renderer {
         this.compositor.destroy()
         void this.contentRenderer.destroy?.()
         this.scroller.remove()
-        this.listeners.clear()
+        this.events.clear()
         this.book = null
         this.marks.clear()
     }
@@ -500,7 +494,7 @@ export class BrowserRenderer implements Renderer {
             lines: this.lines,
             prepared: this.prepared,
             styles: this.styles,
-            marks: Array.from(this.marks.values()),
+            marks: this.marks.getAll(),
             baseTextStyle: this.getBaseTextStyle(),
             lineHeightPixels: this.getLineHeightPixels(),
             sourceScrollTop: this.getSourceScrollTop(),
@@ -875,7 +869,7 @@ export class BrowserRenderer implements Renderer {
     }
 
     private emit<K extends keyof RendererEventMap>(event: K, data: RendererEventMap[K]): void {
-        this.listeners.get(event)?.forEach(fn => fn(data))
+        this.events.emit(event, data)
     }
 }
 

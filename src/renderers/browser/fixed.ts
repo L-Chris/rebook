@@ -15,6 +15,7 @@ import type { Book, LinkEvent, LoadEvent, RelocateEvent, TOCItem } from '../../c
 import type { EventListener, LayoutMode, ReaderMark, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
 import { UnsupportedFormatError } from '../../core/errors'
 import { parseCSSPixels } from '../../core/renderer-utils'
+import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
 import { BrowserPageCompositor } from './compositor'
 import { BrowserFixedContentRenderer } from './fixed-content'
 
@@ -44,8 +45,8 @@ const DEFAULT_TEXT_COLOR = '#111111'
 
 export class BrowserFixedRenderer implements Renderer {
     private readonly container: HTMLElement
-    private readonly listeners = new Map<string, Set<Listener<unknown>>>()
-    private readonly marks = new Map<string, ReaderMark>()
+    private readonly events = new RendererEventDispatcher<RendererEventMap>()
+    private readonly marks = new ReaderMarkStore()
     private readonly beforeNavigate: RendererConfig['beforeNavigate']
     private readonly contentRenderer: BrowserFixedContentRenderer
     private readonly compositor: BrowserPageCompositor
@@ -159,29 +160,22 @@ export class BrowserFixedRenderer implements Renderer {
     }
 
     setMark(mark: ReaderMark): void {
-        this.marks.set(mark.id, mark)
+        this.marks.set(mark)
         void this.renderCurrentPage('mark')
     }
 
     removeMark(id: string): void {
-        this.marks.delete(id)
+        this.marks.remove(id)
         void this.renderCurrentPage('mark')
     }
 
     clearMarks(kind?: string): void {
-        if (kind === undefined) {
-            this.marks.clear()
-            void this.renderCurrentPage('mark')
-            return
-        }
-        for (const [id, mark] of this.marks) {
-            if (mark.kind === kind) this.marks.delete(id)
-        }
+        this.marks.clear(kind)
         void this.renderCurrentPage('mark')
     }
 
     getMarks(): ReaderMark[] {
-        return Array.from(this.marks.values())
+        return this.marks.getAll()
     }
 
     getLocation(): RelocateEvent | null {
@@ -201,14 +195,13 @@ export class BrowserFixedRenderer implements Renderer {
     on<K extends keyof RendererEventMap>(event: K, listener: Listener<RendererEventMap[K]>): void
     on(event: string, listener: EventListener): void
     on(event: string, listener: Listener<unknown>): void {
-        if (!this.listeners.has(event)) this.listeners.set(event, new Set())
-        this.listeners.get(event)!.add(listener)
+        this.events.on(event, listener)
     }
 
     off<K extends keyof RendererEventMap>(event: K, listener: Listener<RendererEventMap[K]>): void
     off(event: string, listener: EventListener): void
     off(event: string, listener: Listener<unknown>): void {
-        this.listeners.get(event)?.delete(listener)
+        this.events.off(event, listener)
     }
 
     destroy(): void {
@@ -216,7 +209,7 @@ export class BrowserFixedRenderer implements Renderer {
         this.compositor.destroy()
         void this.contentRenderer.destroy?.()
         this.scroller.remove()
-        this.listeners.clear()
+        this.events.clear()
         this.marks.clear()
         this.book = null
         this.document = null
@@ -236,7 +229,7 @@ export class BrowserFixedRenderer implements Renderer {
             page,
             scale,
             styles: this.styles,
-            marks: Array.from(this.marks.values()),
+            marks: this.marks.getAll(),
         })
         if (token !== this.renderToken) {
             surface.destroy?.()
@@ -286,7 +279,7 @@ export class BrowserFixedRenderer implements Renderer {
     private emit<K extends keyof RendererEventMap>(event: K, payload: RendererEventMap[K]): void
     private emit(event: string, payload: unknown): void
     private emit(event: string, payload: unknown): void {
-        for (const listener of this.listeners.get(event) ?? []) listener(payload)
+        this.events.emit(event, payload)
     }
 
     private async canNavigate(direction: 'next' | 'prev'): Promise<boolean> {

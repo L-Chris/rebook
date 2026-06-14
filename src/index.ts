@@ -230,6 +230,11 @@ export {
     type RendererRouteMatch,
     type RendererRouterConfig,
 } from './core/renderer-router'
+export {
+    ReaderMarkStore,
+    RendererEventDispatcher,
+    type RendererEventTarget,
+} from './core/renderer-state'
 
 // Search
 export {
