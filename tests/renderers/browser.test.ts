@@ -648,6 +648,7 @@ describe('BrowserRenderer', () => {
         const annotation = container.querySelector('[data-rebook-annotation="true"]') as HTMLElement | null
         expect(container.querySelector('[data-rebook-annotation-layer="true"]')).toBeTruthy()
         expect(annotation?.dataset.markId).toBe('fixed-highlight')
+        expect(annotation?.dataset.markColor).toBe('rgba(0, 128, 255, 0.25)')
         expect(annotation?.classList.contains('rebook-mark-highlight')).toBe(true)
         expect(annotation?.style.left).toBe('30px')
         expect(annotation?.style.top).toBe('24px')

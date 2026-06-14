@@ -3,6 +3,10 @@ import type { PageSurfaceDecorator } from '../../core/page-surface'
 import type { ReaderMark } from '../../core/renderer'
 import type { LineRange } from '../../core/pretext'
 import type { BrowserPageSurface } from './compositor'
+import {
+    applyBrowserMarkDataset,
+    getBrowserMarkClassNames,
+} from './mark-style'
 
 export interface BrowserReflowableMarkLayerDecoratorConfig {
     readonly getMarks: () => readonly ReaderMark[]
@@ -54,10 +58,8 @@ function applyLineMarks(
     element.dataset.markIds = matching.map(mark => mark.id).join(' ')
     element.dataset.markKinds = matching.map(mark => mark.kind).filter(Boolean).join(' ')
     for (const mark of matching) {
-        element.classList.add(...getMarkClassNames(mark))
-        for (const [key, value] of Object.entries(mark.data ?? {})) {
-            element.dataset[`mark${toPascalCase(key)}`] = String(value)
-        }
+        element.classList.add(...getBrowserMarkClassNames(mark))
+        applyBrowserMarkDataset(element, mark)
     }
 }
 
@@ -69,22 +71,6 @@ function markMatchesLine(mark: ReaderMark, line: LineRange, sectionIndex: number
         endOffset: line.end?.cursor.graphemeIndex,
         offsetsReliable: (line.block?.segments.length ?? 0) === 1,
     })
-}
-
-function getMarkClassNames(mark: ReaderMark): string[] {
-    const names = mark.className?.trim().split(/\s+/).filter(Boolean) ?? []
-    if (mark.kind) names.push(`rebook-mark-${toKebabCase(mark.kind)}`)
-    return names.length ? names : ['rebook-mark']
-}
-
-function toKebabCase(value: string): string {
-    return value.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()
-}
-
-function toPascalCase(value: string): string {
-    return value
-        .replace(/[^a-zA-Z0-9]+(.)/g, (_, char: string) => char.toUpperCase())
-        .replace(/^[a-z]/, char => char.toUpperCase())
 }
 
 export const createBrowserReflowableMarkLayerDecorator = (

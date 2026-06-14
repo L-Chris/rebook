@@ -31,6 +31,11 @@ export {
     type BrowserReflowableSurfaceMetadata,
 } from './reflowable-mark-layer'
 export {
+    applyBrowserMarkDataset,
+    getBrowserMarkClassNames,
+    getBrowserMarkColor,
+} from './mark-style'
+export {
     BrowserPageCompositor,
     createBrowserPageCompositor,
     type BrowserPageCompositorConfig,

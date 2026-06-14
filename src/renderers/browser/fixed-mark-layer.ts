@@ -2,6 +2,11 @@ import { getFixedPositionRects, type Rect } from '../../core/location'
 import type { PageSurfaceDecorator } from '../../core/page-surface'
 import type { ReaderMark } from '../../core/renderer'
 import type { BrowserPageSurface, BrowserPageSurfaceLayer } from './compositor'
+import {
+    applyBrowserMarkDataset,
+    getBrowserMarkClassNames,
+    getBrowserMarkColor,
+} from './mark-style'
 
 export interface BrowserFixedMarkLayerDecoratorConfig {
     readonly getMarks: () => readonly ReaderMark[]
@@ -47,16 +52,17 @@ function createMarkLayer(surface: BrowserPageSurface, marks: readonly ReaderMark
     for (const item of rects) {
         const element = document.createElement('div')
         element.dataset.rebookAnnotation = 'true'
+        applyBrowserMarkDataset(element, item.mark)
         element.dataset.markId = item.mark.id
         if (item.mark.kind) element.dataset.markKind = item.mark.kind
-        element.classList.add(...getMarkClassNames(item.mark))
+        element.classList.add(...getBrowserMarkClassNames(item.mark))
         element.style.cssText = `
             position: absolute;
             left: ${item.rect.x}px;
             top: ${item.rect.y}px;
             width: ${item.rect.width}px;
             height: ${item.rect.height}px;
-            background: ${getMarkColor(item.mark)};
+            background: ${getBrowserMarkColor(item.mark)};
             border-radius: 2px;
             pointer-events: none;
             box-sizing: border-box;
@@ -103,21 +109,6 @@ function getImagePageMarkRects(surface: BrowserPageSurface, marks: readonly Read
         }
     }
     return output
-}
-
-function getMarkClassNames(mark: ReaderMark): string[] {
-    const names = mark.className?.trim().split(/\s+/).filter(Boolean) ?? []
-    if (mark.kind) names.push(`rebook-mark-${toKebabCase(mark.kind)}`)
-    return names.length ? names : ['rebook-mark']
-}
-
-function getMarkColor(mark: ReaderMark): string {
-    const color = mark.data?.color
-    return typeof color === 'string' ? color : 'rgba(255, 214, 10, 0.35)'
-}
-
-function toKebabCase(value: string): string {
-    return value.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()
 }
 
 export const createBrowserFixedMarkLayerDecorator = (
