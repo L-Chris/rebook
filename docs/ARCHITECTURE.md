@@ -90,7 +90,7 @@ The fixed document contract stores page geometry, text runs, and text transforms
 
 `RendererRouter` keeps the high-level reader API stable. `ReaderSession` still owns one `Renderer`, but that renderer can choose a concrete engine after parsing, based on `Book.fixedDocument` and other Book capabilities. Browser `ReaderView` uses this router by default: reflowable books go to the existing `BrowserRenderer`, and fixed/page-native books require a fixed renderer instead of silently falling back to the text-flow renderer.
 
-`src/parsers/pdf.ts` uses the in-tree PDF engine under `src/pdf` to parse PDF files into this contract. `rebook-pdf` was a prototype for learning the PDF rendering path and should not become a dependency of `rebook`; PDF rendering should continue behind this `rebook` core contract and share platform renderer patterns with browser, Mini Program, and future hosts.
+`src/parsers/pdf.ts` uses the in-tree PDF engine under `src/pdf` to parse PDF files into this contract. Browser `ReaderView` includes a default `BrowserFixedRenderer` for fixed documents, so parsed PDFs can be opened through the same reader API and rendered as selectable fixed-position text pages. `rebook-pdf` was a prototype for learning the PDF rendering path and should not become a dependency of `rebook`; visual PDF painting should continue behind this `rebook` core contract and share platform renderer patterns with browser, Mini Program, and future hosts.
 
 ### Plugins Are Book Middleware
 
@@ -264,6 +264,7 @@ src/
   renderers/
     browser/
       renderer.ts      Pretext-backed browser renderer
+      fixed.ts         fixed-document browser text/page renderer
       view.ts         ReaderView high-level API
     wechat-miniprogram/
       index.ts        public reader/renderer exports

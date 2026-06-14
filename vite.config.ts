@@ -32,6 +32,7 @@ export default defineConfig({
         'adapters/node': resolve(__dirname, 'src/adapters/node.ts'),
         'adapters/wechat-miniprogram': resolve(__dirname, 'src/adapters/wechat-miniprogram.ts'),
         'renderers/browser': resolve(__dirname, 'src/renderers/browser/index.ts'),
+        'renderers/browser/fixed': resolve(__dirname, 'src/renderers/browser/fixed.ts'),
         'renderers/wechat-miniprogram': resolve(__dirname, 'src/renderers/wechat-miniprogram/index.ts'),
         'exporters/index': resolve(__dirname, 'src/exporters/index.ts'),
         'exporters/epub': resolve(__dirname, 'src/exporters/epub.ts'),

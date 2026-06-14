@@ -24,6 +24,9 @@
       "renderers/browser": [
         "dist/renderers/browser/index.d.ts"
       ],
+      "renderers/browser/fixed": [
+        "dist/renderers/browser/fixed.d.ts"
+      ],
       "renderers/wechat-miniprogram": [
         "dist/renderers/wechat-miniprogram/index.d.ts"
       ],
@@ -93,6 +96,10 @@
     "./renderers/browser": {
       "types": "./dist/renderers/browser/index.d.ts",
       "import": "./dist/renderers/browser.js"
+    },
+    "./renderers/browser/fixed": {
+      "types": "./dist/renderers/browser/fixed.d.ts",
+      "import": "./dist/renderers/browser/fixed.js"
     },
     "./renderers/wechat-miniprogram": {
       "types": "./dist/renderers/wechat-miniprogram/index.d.ts",

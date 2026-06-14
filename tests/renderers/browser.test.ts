@@ -7,8 +7,10 @@ import type { TOCViewItem } from '../../src/core/reader'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import { epub } from '../../src/parsers/epub'
 import { mobi } from '../../src/parsers/mobi'
+import { PDFParser } from '../../src/parsers/pdf'
 import { withTrialLimit } from '../../src/plugins/trial-limit'
 import { createReader, BrowserRenderer } from '../../src/renderers/browser'
+import { makeSimplePdf } from '../fixtures/pdf-fixture'
 
 class MockResizeObserver {
     observe() {}
@@ -197,6 +199,79 @@ describe('BrowserRenderer', () => {
         expect(fixedRenderer.opened).toBe(1)
         expect(fixedRenderer.book).toBe(book)
         expect(container.children.length).toBe(0)
+
+        reader.destroy()
+    })
+
+    it('renders fixed-document books with the built-in browser fixed renderer', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '160')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [],
+            pageList: [
+                { label: '1', href: 'pdf:page:0' },
+                { label: '2', href: 'pdf:page:1' },
+            ],
+            fixedDocument: {
+                kind: 'fixed-document',
+                format: 'pdf',
+                pageCount: 2,
+                getPage: pageIndex => ({ index: pageIndex, width: 300, height: 144 }),
+                getPages: () => [
+                    { index: 0, width: 300, height: 144 },
+                    { index: 1, width: 300, height: 144 },
+                ],
+                getPageText: pageIndex => ({
+                    pageIndex,
+                    width: 300,
+                    height: 144,
+                    text: `Fixed page ${pageIndex + 1}`,
+                    runs: [{
+                        text: `Fixed page ${pageIndex + 1}`,
+                        transform: [18, 0, 0, 18, 48, 48],
+                        fontSize: 18,
+                        width: 120,
+                    }],
+                }),
+            },
+            resolveHref: href => {
+                const match = href.match(/^pdf:page:(\d+)$/)
+                return match ? { index: Number(match[1]) } : null
+            },
+        }
+
+        const reader = createReader({ container })
+        let location: RelocateEvent | null = null
+        reader.on('relocate', event => { location = event })
+
+        await reader.openBook(book)
+        expect(container.querySelector('[data-rebook-fixed-page="true"]')).toBeTruthy()
+        expect(container.querySelector('[data-rebook-fixed-text-layer="true"]')).toBeTruthy()
+        expect(container.textContent).toContain('Fixed page 1')
+        expect(location?.pageItem?.label).toBe('1')
+
+        await reader.next()
+        expect(container.textContent).toContain('Fixed page 2')
+        expect(reader.getLocation()?.pageItem?.label).toBe('2')
+
+        reader.destroy()
+    })
+
+    it('renders parsed PDF books through createReader without a custom renderer', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '160')
+        document.body.appendChild(container)
+
+        const book = await new PDFParser().parse(makeSimplePdf().buffer)
+        const reader = createReader({ container })
+        await reader.openBook(book)
+
+        expect(container.querySelector('[data-rebook-fixed-page="true"]')).toBeTruthy()
+        expect(container.textContent).toContain('Hello Rebook PDF')
 
         reader.destroy()
     })

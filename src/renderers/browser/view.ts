@@ -15,6 +15,7 @@ import {
 } from '../../core/renderer-router'
 import { BrowserDOMAdapter, BrowserURLFactory } from '../../adapters/browser'
 import { BrowserRenderer, type BrowserRendererConfig } from './renderer'
+import { BrowserFixedRenderer } from './fixed'
 
 export interface ReaderConfig extends BrowserRendererConfig {
     /** Parser options */
@@ -22,9 +23,8 @@ export interface ReaderConfig extends BrowserRendererConfig {
     /** Plugins to transform the book before rendering */
     plugins?: readonly RebookPlugin[]
     /**
-     * Renderer factory for fixed/page-native books. When omitted, opening a
-     * Book with fixedDocument fails explicitly instead of falling back to the
-     * reflowable text renderer.
+     * Renderer factory override for fixed/page-native books. When omitted,
+     * ReaderView uses BrowserFixedRenderer.
      */
     createFixedRenderer?: (hooks?: RendererNavigationHooks) => Renderer
 }
@@ -53,13 +53,16 @@ function createBrowserReaderSessionConfig(config: ReaderConfig): ReaderSessionCo
                 beforeNavigate,
             }
             return createRendererRouter([
-                ...(config.createFixedRenderer
-                    ? [{
-                        id: 'fixed-document',
-                        match: matchesFixedDocument,
-                        createRenderer: () => config.createFixedRenderer!(rendererHooks),
-                    }]
-                    : []),
+                {
+                    id: 'fixed-document',
+                    match: matchesFixedDocument,
+                    createRenderer: () => config.createFixedRenderer
+                        ? config.createFixedRenderer(rendererHooks)
+                        : new BrowserFixedRenderer({
+                            ...config,
+                            beforeNavigate,
+                        }),
+                },
                 {
                     id: 'reflowable-browser',
                     match: matchesReflowableBook,
