@@ -169,6 +169,19 @@ export type {
     PageSurfacePipelineRenderResult,
 } from './surface-pipeline'
 export {
+    ContentEngineRouter,
+    createContentEngineRouter,
+    matchesFixedContent,
+    matchesReflowableContent,
+    selectContentEngineRoute,
+} from './content-engine-router'
+export type {
+    ContentEngine,
+    ContentEngineRoute,
+    ContentEngineRouteMatch,
+    ContentEngineRouterConfig,
+} from './content-engine-router'
+export {
     RendererRouter,
     createRendererRouter,
     matchesFixedDocument,

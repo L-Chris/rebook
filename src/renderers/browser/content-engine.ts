@@ -1,12 +1,11 @@
-import type { Renderer } from '../../core/renderer'
-import type { Book } from '../../core/types'
+import type {
+    ContentEngine,
+    ContentEngineRoute,
+    ContentEngineRouteMatch,
+} from '../../core/content-engine-router'
 
-export type BrowserContentEngine = Renderer
+export type BrowserContentEngine = ContentEngine
 
-export type BrowserContentEngineMatch = boolean | number
+export type BrowserContentEngineMatch = ContentEngineRouteMatch
 
-export interface BrowserContentEngineRoute {
-    readonly id: string
-    match(book: Book): BrowserContentEngineMatch
-    createEngine(): BrowserContentEngine
-}
+export type BrowserContentEngineRoute = ContentEngineRoute<BrowserContentEngine>

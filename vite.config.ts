@@ -18,6 +18,7 @@ export default defineConfig({
     lib: {
       entry: {
         index: resolve(__dirname, 'src/index.ts'),
+        'core/content-engine-router': resolve(__dirname, 'src/core/content-engine-router.ts'),
         'core/fixed-document': resolve(__dirname, 'src/core/fixed-document.ts'),
         'core/location': resolve(__dirname, 'src/core/location.ts'),
         'core/page-surface': resolve(__dirname, 'src/core/page-surface.ts'),

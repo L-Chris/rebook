@@ -259,6 +259,19 @@ export type {
     PageSurfacePipelineDecoratorContext,
     PageSurfacePipelineRenderResult,
 } from './core/surface-pipeline'
+export {
+    ContentEngineRouter,
+    createContentEngineRouter,
+    matchesFixedContent,
+    matchesReflowableContent,
+    selectContentEngineRoute,
+} from './core/content-engine-router'
+export type {
+    ContentEngine,
+    ContentEngineRoute,
+    ContentEngineRouteMatch,
+    ContentEngineRouterConfig,
+} from './core/content-engine-router'
 
 export {
     RendererRouter,

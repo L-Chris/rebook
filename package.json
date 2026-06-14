@@ -9,6 +9,9 @@
   "miniprogram": "miniprogram_dist",
   "typesVersions": {
     "*": {
+      "core/content-engine-router": [
+        "dist/core/content-engine-router.d.ts"
+      ],
       "core/parser": [
         "dist/core/parser.d.ts"
       ],
@@ -90,6 +93,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./core/content-engine-router": {
+      "types": "./dist/core/content-engine-router.d.ts",
+      "import": "./dist/core/content-engine-router.js"
     },
     "./parsers/*": {
       "types": "./dist/parsers/*.d.ts",
