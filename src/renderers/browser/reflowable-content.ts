@@ -1,5 +1,5 @@
 import type { ContentRenderer } from '../../core/page-surface'
-import type { LayoutMode, ReaderMark, RendererStyles } from '../../core/renderer'
+import type { LayoutMode, RendererStyles } from '../../core/renderer'
 import { bookPositionMatchesReflowableRange, type BookRange, type Rect, type TextChunk, type TextProvider } from '../../core/location'
 import { parseCSSPixels } from '../../core/renderer-utils'
 import { searchTextChunks } from '../../core/text-provider'
@@ -33,7 +33,6 @@ export interface BrowserReflowableContentRenderContext {
     readonly lines: readonly LineRange[]
     readonly prepared: PreparedText | null
     readonly styles: RendererStyles
-    readonly marks: readonly ReaderMark[]
     readonly baseTextStyle: TextStyle
     readonly lineHeightPixels: number
     readonly sourceScrollTop: number
@@ -94,6 +93,7 @@ export class BrowserReflowableContentRenderer implements ContentRenderer<Browser
             metadata: {
                 range: window,
                 sectionIndex: context.sectionIndex,
+                lines: window.lines,
             },
             textProvider: createReflowableTextProvider(context, window.lines),
             destroy() {
@@ -136,7 +136,7 @@ export class BrowserReflowableContentRenderer implements ContentRenderer<Browser
             lineEl.dataset.blockId = block.id
             lineEl.dataset.blockType = block.type
         }
-        applyLineMarks(lineEl, line, context)
+        lineEl.dataset.rebookLineIndex = String(line.index)
 
         for (const fragment of line.segments) {
             const span = document.createElement('span')
@@ -190,7 +190,7 @@ function createImageLine(
         wrapper.dataset.blockId = line.block.id
         wrapper.dataset.blockType = line.block.type
     }
-    applyLineMarks(wrapper, line, context)
+    wrapper.dataset.rebookLineIndex = String(line.index)
     if (image.isCover) wrapper.dataset.cover = 'true'
 
     const img = document.createElement('img')
@@ -243,7 +243,7 @@ function createPreBlock(
         wrapper.dataset.blockId = block.id
         wrapper.dataset.blockType = block.type
     }
-    applyLineMarks(wrapper, line, context)
+    wrapper.dataset.rebookLineIndex = String(line.index)
 
     const hasVariedStyles = line.segments.some((seg, i) => {
         if (i === 0) return false
@@ -308,7 +308,7 @@ function createSeparatorLine(
         wrapper.dataset.blockId = line.block.id
         wrapper.dataset.blockType = line.block.type
     }
-    applyLineMarks(wrapper, line, context)
+    wrapper.dataset.rebookLineIndex = String(line.index)
 
     const rule = document.createElement('div')
     rule.style.cssText = `
@@ -341,8 +341,8 @@ function createTableLine(
     `
     wrapper.dataset.blockId = line.block?.id ?? `table-row-${table.rowIndex}`
     wrapper.dataset.blockType = 'table'
+    wrapper.dataset.rebookLineIndex = String(line.index)
     wrapper.setAttribute('role', 'row')
-    applyLineMarks(wrapper, line, context)
 
     const row = document.createElement('div')
     row.style.cssText = `
@@ -374,24 +374,6 @@ function createTableLine(
 
     wrapper.appendChild(row)
     return wrapper
-}
-
-function applyLineMarks(element: HTMLElement, line: LineRange, context: BrowserReflowableContentRenderContext): void {
-    const marks = getLineMarks(line, context)
-    if (!marks.length) return
-    element.dataset.markIds = marks.map(mark => mark.id).join(' ')
-    element.dataset.markKinds = marks.map(mark => mark.kind).filter(Boolean).join(' ')
-    for (const mark of marks) {
-        element.classList.add(...getMarkClassNames(mark))
-        for (const [key, value] of Object.entries(mark.data ?? {})) {
-            element.dataset[`mark${toPascalCase(key)}`] = String(value)
-        }
-    }
-}
-
-function getLineMarks(line: LineRange, context: BrowserReflowableContentRenderContext): ReaderMark[] {
-    if (context.sectionIndex < 0) return []
-    return context.marks.filter(mark => markMatchesLine(mark, line, context.sectionIndex))
 }
 
 interface ReflowableTextChunkRecord {
@@ -491,32 +473,6 @@ function getRenderedLinePosition(
         top: row * pageHeight + pagePaddingBlock + (line.top % columnHeight),
         left: column * (columnWidth + gap),
     }
-}
-
-function markMatchesLine(mark: ReaderMark, line: LineRange, sectionIndex: number): boolean {
-    return bookPositionMatchesReflowableRange(mark.location, {
-        sectionIndex,
-        blockId: line.block?.id,
-        startOffset: line.start?.cursor.graphemeIndex,
-        endOffset: line.end?.cursor.graphemeIndex,
-        offsetsReliable: (line.block?.segments.length ?? 0) === 1,
-    })
-}
-
-function getMarkClassNames(mark: ReaderMark): string[] {
-    const names = mark.className?.trim().split(/\s+/).filter(Boolean) ?? []
-    if (mark.kind) names.push(`rebook-mark-${toKebabCase(mark.kind)}`)
-    return names.length ? names : ['rebook-mark']
-}
-
-function toKebabCase(value: string): string {
-    return value.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()
-}
-
-function toPascalCase(value: string): string {
-    return value
-        .replace(/[^a-zA-Z0-9]+(.)/g, (_, char: string) => char.toUpperCase())
-        .replace(/^[a-z]/, char => char.toUpperCase())
 }
 
 function applyTextStyle(element: HTMLElement, style: TextStyle): void {

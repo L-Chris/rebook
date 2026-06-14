@@ -36,6 +36,7 @@ import {
     type BrowserReflowableContentRenderContext,
     type ReflowableColumnLayout,
 } from './reflowable-content'
+import { BrowserReflowableMarkLayerDecorator } from './reflowable-mark-layer'
 import { BrowserSurfaceHost } from './surface-host'
 
 interface RendererEventMap {
@@ -140,6 +141,11 @@ export class BrowserRenderer implements Renderer {
         this.surfaceController = new PageSurfaceController({
             contentRenderer: this.contentRenderer,
             compositor: this.host.compositor,
+            decorators: [
+                new BrowserReflowableMarkLayerDecorator({
+                    getMarks: () => this.marks.getAll(),
+                }),
+            ],
         })
 
         this.scroller.addEventListener('scroll', () => {
@@ -496,7 +502,6 @@ export class BrowserRenderer implements Renderer {
             lines: this.lines,
             prepared: this.prepared,
             styles: this.styles,
-            marks: this.marks.getAll(),
             baseTextStyle: this.getBaseTextStyle(),
             lineHeightPixels: this.getLineHeightPixels(),
             sourceScrollTop: this.getSourceScrollTop(),

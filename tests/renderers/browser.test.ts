@@ -313,7 +313,6 @@ describe('BrowserRenderer', () => {
             lines: [line],
             prepared: null,
             styles: {},
-            marks: [],
             baseTextStyle: { fontFamily: 'serif', fontSize: 16, lineHeight: 1.5 },
             lineHeightPixels: 24,
             sourceScrollTop: 0,
@@ -337,6 +336,9 @@ describe('BrowserRenderer', () => {
         expect(chunks[0].rects?.[0]).toMatchObject({ x: 0, y: 28, width: 180, height: 24 })
         expect(scoped).toHaveLength(1)
         expect(results[0].range.start).toMatchObject({ type: 'reflowable', sectionIndex: 2, blockId: 'p1' })
+        expect(surface.metadata?.sectionIndex).toBe(2)
+        expect((surface.metadata?.lines as readonly LineRange[] | undefined)?.[0]).toBe(line)
+        expect((surface.layers[0].content as HTMLElement).querySelector('[data-rebook-line-index="0"]')).toBeTruthy()
 
         surface.destroy?.()
     })

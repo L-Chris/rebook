@@ -25,6 +25,12 @@ export {
     type ReflowableColumnLayout,
 } from './reflowable-content'
 export {
+    BrowserReflowableMarkLayerDecorator,
+    createBrowserReflowableMarkLayerDecorator,
+    type BrowserReflowableMarkLayerDecoratorConfig,
+    type BrowserReflowableSurfaceMetadata,
+} from './reflowable-mark-layer'
+export {
     BrowserPageCompositor,
     createBrowserPageCompositor,
     type BrowserPageCompositorConfig,
