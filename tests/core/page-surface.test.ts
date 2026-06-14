@@ -87,6 +87,64 @@ describe('PageSurfaceController', () => {
         expect(destroyed).toHaveBeenCalledTimes(1)
         expect(controller.getCurrentSurface()).toBeNull()
     })
+
+    it('destroys surfaces when an asynchronous compositor result becomes stale', async () => {
+        let resolveCompose!: (value: string) => void
+        const destroyed = vi.fn()
+        const firstSurface = createSurface('first', destroyed)
+        const secondSurface = createSurface('second')
+        const contentRenderer: ContentRenderer<{ surface: PageSurface }> = {
+            id: 'async-compositor-renderer',
+            renderSurface: context => context.surface,
+        }
+        const compositor: PageCompositor<PageSurface, undefined, string> = {
+            id: 'async-compositor',
+            compose: surface => surface.id === 'first'
+                ? new Promise(resolve => { resolveCompose = resolve })
+                : `composed:${surface.id}`,
+        }
+        const controller = new PageSurfaceController({ contentRenderer, compositor })
+
+        const first = controller.render({ surface: firstSurface }) as Promise<PageSurfaceComposeOutcome<PageSurface, string> | null>
+        const second = controller.render({ surface: secondSurface })
+        resolveCompose('composed:first')
+
+        expect(second).toMatchObject({ surface: secondSurface, result: 'composed:second' })
+        await expect(first).resolves.toBeNull()
+        expect(destroyed).toHaveBeenCalledTimes(1)
+        expect(controller.getCurrentSurface()).toBe(secondSurface)
+    })
+
+    it('decorates surfaces before composing them', () => {
+        const base = createSurface('base')
+        const contentRenderer: ContentRenderer<void> = {
+            id: 'decorated-renderer',
+            renderSurface: () => base,
+        }
+        const compositor: PageCompositor<PageSurface, undefined, string> = {
+            id: 'decorated-compositor',
+            compose: surface => `layers:${surface.layers.length}`,
+        }
+        const controller = new PageSurfaceController({
+            contentRenderer,
+            compositor,
+            decorators: [{
+                id: 'append-layer',
+                decorate: surface => ({
+                    ...surface,
+                    layers: [
+                        ...surface.layers,
+                        { id: 'overlay', kind: 'overlay', contentKind: 'custom', content: {} },
+                    ],
+                }),
+            }],
+        })
+
+        const result = controller.render(undefined)
+
+        expect(result).toMatchObject({ result: 'layers:1' })
+        expect(controller.getCurrentSurface()?.layers.map(layer => layer.id)).toEqual(['overlay'])
+    })
 })
 
 function createSurface(id: string, destroy = vi.fn()): PageSurface {

@@ -6,7 +6,7 @@ import type {
     FixedPageTextRun,
 } from '../../core/fixed-document'
 import type { ContentRenderer } from '../../core/page-surface'
-import type { ReaderMark, RendererStyles } from '../../core/renderer'
+import type { RendererStyles } from '../../core/renderer'
 import { getBookPositionLocations, getFixedPositionRects, type BookLocation, type BookRange, type Rect, type TextChunk, type TextProvider } from '../../core/location'
 import { createStaticTextProvider } from '../../core/text-provider'
 import { isPdfFixedDocument } from '../../pdf/fixed-document'
@@ -36,7 +36,6 @@ export interface BrowserFixedContentRenderContext {
     readonly page: FixedPageInfo
     readonly scale: number
     readonly styles: RendererStyles
-    readonly marks?: readonly ReaderMark[]
 }
 
 const DEFAULT_TEXT_COLOR = '#111111'
@@ -66,12 +65,10 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
             : emptyTextLayer(context.page)
         const visual = await this.renderContentLayer(context)
         const textLayer = this.createTextLayer(text, context.styles, visual !== null)
-        const annotationLayer = this.createAnnotationLayer(context)
         const layers: BrowserPageSurfaceLayer[] = []
 
         if (visual) layers.push(visual)
         layers.push(textLayer)
-        if (annotationLayer) layers.push(annotationLayer)
 
         return {
             id: `${context.document.format}:${context.page.index}`,
@@ -120,46 +117,6 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
             zIndex: 10,
             selectable: true,
             pointerEvents: 'auto',
-        }
-    }
-
-    private createAnnotationLayer(context: BrowserFixedContentRenderContext): BrowserPageSurfaceLayer | null {
-        const rects = getPageMarkRects(context.marks ?? [], context.document.format, context.page.index)
-        if (rects.length === 0) return null
-
-        const layer = document.createElement('div')
-        layer.dataset.rebookAnnotationLayer = 'true'
-        layer.style.pointerEvents = 'none'
-        layer.style.userSelect = 'none'
-
-        for (const item of rects) {
-            const element = document.createElement('div')
-            element.dataset.rebookAnnotation = 'true'
-            element.dataset.markId = item.mark.id
-            if (item.mark.kind) element.dataset.markKind = item.mark.kind
-            element.classList.add(...getMarkClassNames(item.mark))
-            element.style.cssText = `
-                position: absolute;
-                left: ${item.rect.x}px;
-                top: ${item.rect.y}px;
-                width: ${item.rect.width}px;
-                height: ${item.rect.height}px;
-                background: ${getMarkColor(item.mark)};
-                border-radius: 2px;
-                pointer-events: none;
-                box-sizing: border-box;
-            `
-            layer.append(element)
-        }
-
-        return {
-            id: 'annotation',
-            kind: 'annotation',
-            contentKind: 'dom',
-            content: layer,
-            zIndex: 20,
-            selectable: false,
-            pointerEvents: 'none',
         }
     }
 
@@ -330,40 +287,6 @@ function renderTextLayer(target: HTMLElement, layer: FixedPageTextLayer, options
 
         target.append(span)
     }
-}
-
-interface PageMarkRect {
-    readonly mark: ReaderMark
-    readonly rect: Rect
-}
-
-function getPageMarkRects(marks: readonly ReaderMark[], format: string, pageIndex: number): PageMarkRect[] {
-    const output: PageMarkRect[] = []
-    for (const mark of marks) {
-        for (const rect of getMarkRects(mark, format, pageIndex)) {
-            output.push({ mark, rect })
-        }
-    }
-    return output
-}
-
-function getMarkRects(mark: ReaderMark, format: string, pageIndex: number): Rect[] {
-    return getFixedPositionRects(mark.location, { format, pageIndex })
-}
-
-function getMarkClassNames(mark: ReaderMark): string[] {
-    const names = mark.className?.trim().split(/\s+/).filter(Boolean) ?? []
-    if (mark.kind) names.push(`rebook-mark-${toKebabCase(mark.kind)}`)
-    return names.length ? names : ['rebook-mark']
-}
-
-function getMarkColor(mark: ReaderMark): string {
-    const color = mark.data?.color
-    return typeof color === 'string' ? color : 'rgba(255, 214, 10, 0.35)'
-}
-
-function toKebabCase(value: string): string {
-    return value.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()
 }
 
 function emptyTextLayer(page: FixedPageInfo): FixedPageTextLayer {

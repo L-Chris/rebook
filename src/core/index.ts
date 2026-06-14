@@ -132,6 +132,7 @@ export type {
     PageCompositor,
     PageSurfaceComposeOutcome,
     PageSurfaceControllerConfig,
+    PageSurfaceDecorator,
     PageSurface,
     PageSurfaceKind,
     PageSurfaceLayer,

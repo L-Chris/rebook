@@ -14,6 +14,11 @@ export {
     type BrowserFixedVisualRendererMatch,
 } from './fixed-content'
 export {
+    BrowserFixedMarkLayerDecorator,
+    createBrowserFixedMarkLayerDecorator,
+    type BrowserFixedMarkLayerDecoratorConfig,
+} from './fixed-mark-layer'
+export {
     BrowserReflowableContentRenderer,
     createBrowserReflowableContentRenderer,
     type BrowserReflowableContentRenderContext,

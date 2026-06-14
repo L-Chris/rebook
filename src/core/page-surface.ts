@@ -68,6 +68,13 @@ export interface PageSurfaceControllerConfig<
 > {
     readonly contentRenderer: ContentRenderer<TContext, TSurface>
     readonly compositor: PageCompositor<TSurface, TTarget, TResult>
+    readonly decorators?: readonly PageSurfaceDecorator<TSurface>[]
+}
+
+export interface PageSurfaceDecorator<TSurface extends PageSurface = PageSurface> {
+    readonly id: string
+    decorate(surface: TSurface): Promise<TSurface> | TSurface
+    destroy?(): Promise<void> | void
 }
 
 export interface PageSurfaceComposeOutcome<
@@ -86,12 +93,14 @@ export class PageSurfaceController<
 > {
     private readonly contentRenderer: ContentRenderer<TContext, TSurface>
     private readonly compositor: PageCompositor<TSurface, TTarget, TResult>
+    private readonly decorators: readonly PageSurfaceDecorator<TSurface>[]
     private sequence = 0
     private currentSurface: TSurface | null = null
 
     constructor(config: PageSurfaceControllerConfig<TContext, TSurface, TTarget, TResult>) {
         this.contentRenderer = config.contentRenderer
         this.compositor = config.compositor
+        this.decorators = config.decorators ?? []
     }
 
     render(
@@ -105,9 +114,9 @@ export class PageSurfaceController<
         const token = ++this.sequence
         const surface = this.contentRenderer.renderSurface(context, request)
         if (isPromiseLike(surface)) {
-            return surface.then(rendered => this.composeCurrent(token, rendered, target))
+            return surface.then(rendered => this.decorateAndComposeCurrent(token, rendered, target))
         }
-        return this.composeCurrent(token, surface, target)
+        return this.decorateAndComposeCurrent(token, surface, target)
     }
 
     getCurrentSurface(): TSurface | null {
@@ -122,6 +131,50 @@ export class PageSurfaceController<
         this.cancelPending()
         this.currentSurface = null
         this.compositor.clear?.()
+    }
+
+    private decorateAndComposeCurrent(
+        token: number,
+        surface: TSurface,
+        target?: TTarget,
+    ):
+        | PageSurfaceComposeOutcome<TSurface, TResult>
+        | Promise<PageSurfaceComposeOutcome<TSurface, TResult> | null>
+        | null {
+        if (token !== this.sequence) {
+            surface.destroy?.()
+            return null
+        }
+
+        let decorated: Promise<TSurface> | TSurface
+        try {
+            decorated = this.applyDecorators(surface)
+        } catch (error) {
+            surface.destroy?.()
+            throw error
+        }
+        if (isPromiseLike(decorated)) {
+            return decorated.then(
+                next => this.composeCurrent(token, next, target),
+                error => {
+                    surface.destroy?.()
+                    throw error
+                },
+            )
+        }
+        return this.composeCurrent(token, decorated, target)
+    }
+
+    private applyDecorators(surface: TSurface, index = 0): Promise<TSurface> | TSurface {
+        let current = surface
+        for (let i = index; i < this.decorators.length; i++) {
+            const decorated = this.decorators[i].decorate(current)
+            if (isPromiseLike(decorated)) {
+                return decorated.then(next => this.applyDecorators(next, i + 1))
+            }
+            current = decorated
+        }
+        return current
     }
 
     private composeCurrent(
@@ -147,7 +200,10 @@ export class PageSurfaceController<
 
         if (isPromiseLike(result)) {
             return result.then(composed => {
-                if (token !== this.sequence) return null
+                if (token !== this.sequence) {
+                    surface.destroy?.()
+                    return null
+                }
                 this.currentSurface = surface
                 return { surface, result: composed }
             })

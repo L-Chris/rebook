@@ -19,6 +19,7 @@ import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-st
 import { PageSurfaceController } from '../../core/page-surface'
 import type { BrowserPageComposeResult, BrowserPageCompositor, BrowserPageSurface } from './compositor'
 import { BrowserFixedContentRenderer, type BrowserFixedContentRenderContext, type BrowserFixedVisualRenderer } from './fixed-content'
+import { BrowserFixedMarkLayerDecorator } from './fixed-mark-layer'
 import { BrowserSurfaceHost } from './surface-host'
 
 interface RendererEventMap {
@@ -91,6 +92,11 @@ export class BrowserFixedRenderer implements Renderer {
         this.surfaceController = new PageSurfaceController({
             contentRenderer: this.contentRenderer,
             compositor: this.host.compositor,
+            decorators: [
+                new BrowserFixedMarkLayerDecorator({
+                    getMarks: () => this.marks.getAll(),
+                }),
+            ],
         })
     }
 
@@ -226,7 +232,6 @@ export class BrowserFixedRenderer implements Renderer {
             page,
             scale,
             styles: this.styles,
-            marks: this.marks.getAll(),
         })
         if (!rendered) return
 
