@@ -34,6 +34,7 @@ import {
     BrowserReflowableContentRenderer,
     type ReflowableColumnLayout,
 } from './reflowable-content'
+import { BrowserViewportHost } from './viewport'
 
 interface RendererEventMap {
     load: LoadEvent
@@ -71,10 +72,10 @@ const debounce = <T extends (...args: unknown[]) => void>(fn: T, wait: number): 
 }
 
 export class BrowserRenderer implements Renderer {
-    private container: HTMLElement
-    private scroller: HTMLElement
-    private spacer: HTMLElement
-    private content: HTMLElement
+    private readonly viewport: BrowserViewportHost
+    private readonly scroller: HTMLElement
+    private readonly spacer: HTMLElement
+    private readonly content: HTMLElement
     private book: Book | null = null
     private sections: readonly Section[] = []
     private currentIndex = -1
@@ -110,32 +111,21 @@ export class BrowserRenderer implements Renderer {
     private readonly marks = new ReaderMarkStore()
 
     constructor(config: BrowserRendererConfig) {
-        this.container = config.container
         this.styles = config.styles ?? {}
         this.maxColumnCount = config.maxColumnCount ?? 2
         this.layoutMode = config.layout ?? 'paginated'
         this.beforeNavigate = config.beforeNavigate
 
-        this.scroller = document.createElement('div')
-        this.scroller.style.cssText = `
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            position: relative;
-            color: ${this.styles.color ?? 'inherit'};
-            background: ${this.styles.background ?? 'transparent'};
-        `
+        this.viewport = new BrowserViewportHost({
+            container: config.container,
+            kind: 'reflowable',
+            styles: this.styles,
+        })
+        this.scroller = this.viewport.scroller
+        this.spacer = this.viewport.scrollExtent
+        this.content = this.viewport.surfaceHost
         this.applyOverflowMode()
 
-        this.spacer = document.createElement('div')
-        this.spacer.style.cssText = 'position: relative; width: 100%; min-height: 100%;'
-
-        this.content = document.createElement('div')
-        this.content.style.cssText = 'position: absolute; top: 0; left: 0; right: 0;'
-
-        this.spacer.appendChild(this.content)
-        this.scroller.appendChild(this.spacer)
-        this.container.appendChild(this.scroller)
         this.compositor = config.pageCompositor ?? new BrowserPageCompositor({
             host: this.content,
             pageBackground: 'transparent',
@@ -166,7 +156,7 @@ export class BrowserRenderer implements Renderer {
             this.emitRelocate('resize')
             this.emitBlockWindow('resize')
         }, RESIZE_DEBOUNCE_MS))
-        this.resizeObserver.observe(this.container)
+        this.resizeObserver.observe(config.container)
     }
 
     async open(book: Book): Promise<void> {
@@ -181,7 +171,7 @@ export class BrowserRenderer implements Renderer {
         this.prepared = null
         this.lines = []
         this.compositor.clear()
-        this.spacer.style.height = '100%'
+        this.viewport.resetScrollExtent()
         this.scroller.scrollTop = 0
         this.prefetchPageCount = getPluginPrefetchPageCount(book)
     }
@@ -280,8 +270,7 @@ export class BrowserRenderer implements Renderer {
     setStyles(styles: RendererStyles): void {
         const fraction = this.getSectionFraction()
         this.styles = { ...this.styles, ...styles }
-        this.scroller.style.color = this.styles.color ?? 'inherit'
-        this.scroller.style.background = this.styles.background ?? 'transparent'
+        this.viewport.applyStyles(this.styles)
         if (this.currentIndex >= 0) {
             void this.loadSection(this.currentIndex, undefined, this.scrollTopForFraction(fraction))
         }
@@ -357,7 +346,7 @@ export class BrowserRenderer implements Renderer {
         this.resizeObserver.disconnect()
         this.compositor.destroy()
         void this.contentRenderer.destroy?.()
-        this.scroller.remove()
+        this.viewport.destroy()
         this.events.clear()
         this.book = null
         this.marks.clear()
@@ -468,7 +457,7 @@ export class BrowserRenderer implements Renderer {
         this.pageIndex = this.findReadablePage(Math.min(this.pageIndex, pageCount - 1), 0) ?? 0
         const contentWidth = inlineSize * columns + gap * (columns - 1)
         const contentLeft = Math.max(0, (this.scroller.clientWidth - contentWidth) / 2)
-        this.spacer.style.height = `${totalHeight}px`
+        this.viewport.setScrollExtentHeight(totalHeight)
         this.content.style.marginInline = '0'
         this.content.style.maxWidth = ''
         this.content.style.left = `${contentLeft}px`
@@ -777,7 +766,7 @@ export class BrowserRenderer implements Renderer {
     }
 
     private applyOverflowMode(): void {
-        this.scroller.style.overflow = this.layoutMode === 'paginated' ? 'hidden' : 'auto'
+        this.viewport.setOverflowForLayout(this.layoutMode)
     }
 
     private getPagePaddingBlock(pageHeight: number, margin: number): number {

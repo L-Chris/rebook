@@ -21,6 +21,12 @@ export {
     type BrowserPageSurfaceLayer,
 } from './compositor'
 export {
+    BrowserViewportHost,
+    createBrowserViewportHost,
+    type BrowserViewportHostConfig,
+    type BrowserViewportHostKind,
+} from './viewport'
+export {
     BrowserPdfCanvasRenderer,
     createBrowserPdfCanvasRenderer,
     type BrowserPdfCanvasRendererConfig,

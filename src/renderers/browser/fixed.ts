@@ -18,6 +18,7 @@ import { parseCSSPixels } from '../../core/renderer-utils'
 import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
 import { BrowserPageCompositor } from './compositor'
 import { BrowserFixedContentRenderer } from './fixed-content'
+import { BrowserViewportHost } from './viewport'
 
 interface RendererEventMap {
     load: LoadEvent
@@ -44,14 +45,14 @@ const DEFAULT_MARGIN = 32
 const DEFAULT_TEXT_COLOR = '#111111'
 
 export class BrowserFixedRenderer implements Renderer {
-    private readonly container: HTMLElement
+    private readonly viewport: BrowserViewportHost
     private readonly events = new RendererEventDispatcher<RendererEventMap>()
     private readonly marks = new ReaderMarkStore()
     private readonly beforeNavigate: RendererConfig['beforeNavigate']
     private readonly contentRenderer: BrowserFixedContentRenderer
     private readonly compositor: BrowserPageCompositor
-    private scroller: HTMLElement
-    private pageHost: HTMLElement
+    private readonly scroller: HTMLElement
+    private readonly pageHost: HTMLElement
     private book: Book | null = null
     private document: FixedDocument | null = null
     private pages: readonly FixedPageInfo[] = []
@@ -62,36 +63,21 @@ export class BrowserFixedRenderer implements Renderer {
     private renderToken = 0
 
     constructor(config: BrowserFixedRendererConfig) {
-        this.container = config.container
         this.styles = config.styles ?? {}
         this.layoutMode = config.layout ?? 'paginated'
         this.beforeNavigate = config.beforeNavigate
 
-        this.scroller = document.createElement('div')
-        this.scroller.style.cssText = `
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            position: relative;
-            box-sizing: border-box;
-            color: ${this.styles.color ?? DEFAULT_TEXT_COLOR};
-            background: ${this.styles.background ?? 'transparent'};
-        `
-
-        this.pageHost = document.createElement('div')
-        this.pageHost.style.cssText = `
-            min-height: 100%;
-            box-sizing: border-box;
-            display: flex;
-            align-items: flex-start;
-            justify-content: center;
-        `
-
-        this.scroller.append(this.pageHost)
-        this.container.append(this.scroller)
+        this.viewport = new BrowserViewportHost({
+            container: config.container,
+            kind: 'fixed',
+            styles: this.styles,
+            defaultColor: DEFAULT_TEXT_COLOR,
+        })
+        this.scroller = this.viewport.scroller
+        this.pageHost = this.viewport.scrollExtent
 
         this.compositor = config.pageCompositor ?? new BrowserPageCompositor({
-            host: this.pageHost,
+            host: this.viewport.surfaceHost,
         })
         this.contentRenderer = config.fixedContentRenderer ?? new BrowserFixedContentRenderer({
             fixedPageRenderer: config.fixedPageRenderer,
@@ -144,8 +130,7 @@ export class BrowserFixedRenderer implements Renderer {
 
     setStyles(styles: RendererStyles): void {
         this.styles = { ...this.styles, ...styles }
-        this.scroller.style.color = this.styles.color ?? DEFAULT_TEXT_COLOR
-        this.scroller.style.background = this.styles.background ?? 'transparent'
+        this.viewport.applyStyles(this.styles)
         void this.renderCurrentPage('styles')
     }
 
@@ -208,7 +193,7 @@ export class BrowserFixedRenderer implements Renderer {
         this.renderToken++
         this.compositor.destroy()
         void this.contentRenderer.destroy?.()
-        this.scroller.remove()
+        this.viewport.destroy()
         this.events.clear()
         this.marks.clear()
         this.book = null

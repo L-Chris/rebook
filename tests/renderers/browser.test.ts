@@ -10,7 +10,7 @@ import { mobi } from '../../src/parsers/mobi'
 import { CBZParser } from '../../src/parsers/cbz'
 import { PDFParser } from '../../src/parsers/pdf'
 import { withTrialLimit } from '../../src/plugins/trial-limit'
-import { createReader, BrowserPageCompositor, BrowserRenderer } from '../../src/renderers/browser'
+import { createReader, BrowserPageCompositor, BrowserRenderer, BrowserViewportHost } from '../../src/renderers/browser'
 import { makeSimplePdf } from '../fixtures/pdf-fixture'
 import { createTestCBZ } from '../fixtures/cbz-fixture'
 
@@ -134,6 +134,29 @@ beforeEach(() => {
 })
 
 describe('BrowserRenderer', () => {
+    it('provides a shared browser viewport host for surface renderers', () => {
+        const container = document.createElement('div')
+        const host = new BrowserViewportHost({
+            container,
+            kind: 'reflowable',
+            styles: { color: '#222222', background: '#fafafa' },
+        })
+
+        host.setOverflowForLayout('paginated')
+        host.setScrollExtentHeight(480)
+
+        expect(container.firstElementChild).toBe(host.scroller)
+        expect(host.scroller.dataset.rebookViewportScroller).toBe('true')
+        expect(host.scroller.style.color).toBe('#222222')
+        expect(host.scroller.style.background).toBe('#fafafa')
+        expect(host.scroller.style.overflow).toBe('hidden')
+        expect(host.scrollExtent.style.height).toBe('480px')
+        expect(host.surfaceHost.parentElement).toBe(host.scrollExtent)
+
+        host.destroy()
+        expect(container.children.length).toBe(0)
+    })
+
     it('composes page surfaces into layered browser DOM', () => {
         const host = document.createElement('div')
         const content = document.createElement('div')
