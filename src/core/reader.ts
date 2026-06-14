@@ -15,6 +15,13 @@ import type { TrialLimitController, TrialTOCAccessItem } from '../plugins/trial-
 import { registry } from './parser'
 import { applyRebookPlugins } from './plugins'
 import {
+    createSectionIndexLookup,
+    flattenTOC,
+    isSameTOCItem,
+    normalizeNavigationHref,
+    resolveTOCSectionIndex,
+} from './toc'
+import {
     searchBook,
     searchChapters as searchBookChapters,
     type ChapterSearchResult,
@@ -498,10 +505,6 @@ export class ReaderSession {
     }
 }
 
-function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
-    return items.flatMap(item => item.subitems?.length ? [item, ...flattenTOC(item.subitems)] : [item])
-}
-
 function createTOCViewTree(
     items: readonly TOCItem[],
     activeItem: TOCItem | null,
@@ -526,91 +529,7 @@ function createTOCViewTree(
     return walk(items)
 }
 
-function isSameTOCItem(item: TOCItem, activeItem: TOCItem | null): boolean {
-    if (!activeItem) return false
-    if (item === activeItem) return true
-
-    const itemHref = normalizeTOCHref(item.href)
-    const activeHref = normalizeTOCHref(activeItem.href)
-    if (!itemHref || !activeHref) return false
-    return itemHref === activeHref
-}
-
-function normalizeNavigationHref(href?: string | null): string {
-    return normalizeTOCHref(href).split('#')[0]
-}
-
-function normalizeTOCHref(href?: string | null): string {
-    return (href || '').trim()
-}
-
 function normalizeTOCViewLocation(location: RelocateEvent | null): RelocateEvent | null {
     if (location?.tocItem !== null) return location
     return { ...location, tocItem: undefined }
-}
-
-function normalizeBookPath(href?: string | null): string {
-    const path = normalizeNavigationHref(href).replace(/\\/g, '/').replace(/^\/+/, '')
-    const parts: string[] = []
-    for (const part of path.split('/')) {
-        if (!part || part === '.') continue
-        if (part === '..') parts.pop()
-        else parts.push(part)
-    }
-    return parts.join('/')
-}
-
-interface SectionIndexLookup {
-    byId: Map<string | number, number>
-    byPath: Map<string, number>
-}
-
-function createSectionIndexLookup(book: Book): SectionIndexLookup {
-    const byId = new Map<string | number, number>()
-    const byPath = new Map<string, number>()
-    for (const [index, section] of book.sections.entries()) {
-        byId.set(section.id, index)
-        byPath.set(normalizeBookPath(String(section.id ?? '')), index)
-    }
-    return { byId, byPath }
-}
-
-function findSectionIndex(lookup: SectionIndexLookup, id: string | number): number {
-    const exact = lookup.byId.get(id)
-    if (exact !== undefined) return exact
-
-    const normalized = normalizeBookPath(String(id))
-    if (!normalized) return -1
-    const byPath = lookup.byPath.get(normalized)
-    if (byPath !== undefined) return byPath
-
-    const suffix = `/${normalized}`
-    for (const [sectionPath, index] of lookup.byPath) {
-        if (sectionPath.endsWith(suffix)) return index
-    }
-    return -1
-}
-
-function resolveTOCSectionIndex(book: Book, href: string, sectionLookup = createSectionIndexLookup(book)): number {
-    const resolved = book.resolveHref?.(href)
-    if (typeof resolved?.index === 'number' && resolved.index >= 0) return resolved.index
-
-    const parts = book.splitTOCHref?.(href)
-    if (parts && Array.isArray(parts)) {
-        const [id] = parts
-        const sectionIndex = findSectionIndex(sectionLookup, id)
-        if (sectionIndex >= 0) return sectionIndex
-    }
-
-    const normalizedHref = normalizeBookPath(href)
-    if (!normalizedHref) return -1
-
-    const sectionIndex = sectionLookup.byPath.get(normalizedHref)
-    if (sectionIndex !== undefined) return sectionIndex
-
-    const suffix = `/${normalizedHref}`
-    for (const [sectionPath, index] of sectionLookup.byPath) {
-        if (sectionPath.endsWith(suffix)) return index
-    }
-    return -1
 }

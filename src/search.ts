@@ -1,4 +1,5 @@
-import type { Book, Section, TextBlock, TextSegment, TOCItem } from './core/types'
+import type { Book, Section, TextBlock, TextSegment } from './core/types'
+import { findTOCItemForSection } from './core/toc'
 
 export type SearchScope = 'book' | 'chapter'
 
@@ -186,24 +187,6 @@ function uniqueValidIndexes(book: Book, indexes: readonly number[]): number[] {
 function getChapterLabel(book: Book, sectionIndex: number, section: Section): string | undefined {
     const tocItem = findTOCItemForSection(book, sectionIndex, section)
     return tocItem?.label
-}
-
-function findTOCItemForSection(book: Book, sectionIndex: number, section: Section): TOCItem | null {
-    const items = flattenTOC(book.toc ?? [])
-    if (!items.length) return null
-
-    for (const item of items) {
-        const resolved = book.resolveHref?.(item.href)
-        if (resolved?.index === sectionIndex) return item
-        const [id] = book.splitTOCHref?.(item.href) ?? [item.href]
-        if (id === section.id) return item
-    }
-
-    return null
-}
-
-function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
-    return items.flatMap(item => item.subitems?.length ? [item, ...flattenTOC(item.subitems)] : [item])
 }
 
 function blocksToText(blocks: readonly TextBlock[]): string {

@@ -75,6 +75,18 @@ export {
     readFixedDocumentPages,
     type FixedPageSequenceConfig,
 } from './fixed-page-sequence'
+export {
+    createSectionIndexLookup,
+    findSectionIndex,
+    findTOCItemForSection,
+    flattenTOC,
+    isSameTOCItem,
+    normalizeBookPath,
+    normalizeNavigationHref,
+    normalizeTOCHref,
+    resolveTOCSectionIndex,
+    type SectionIndexLookup,
+} from './toc'
 export type {
     SearchScope,
     SearchOptions,

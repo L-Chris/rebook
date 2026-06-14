@@ -4,6 +4,7 @@
  */
 
 import type { Section, TOCItem } from '../core/types'
+import { flattenTOC } from '../core/toc'
 
 // ============================================================================
 // Section Progress
@@ -105,17 +106,6 @@ function upperBound(values: readonly number[], target: number): number {
 // ============================================================================
 // TOC Progress
 // ============================================================================
-
-/**
- * Flatten nested TOC items into a single array.
- */
-function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
-    return items.flatMap(item =>
-        item.subitems?.length
-            ? [item, ...flattenTOC(item.subitems)]
-            : [item]
-    )
-}
 
 /**
  * Tracks which TOC item corresponds to the current reading position.

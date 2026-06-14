@@ -1,6 +1,7 @@
 import type { FixedDocument, FixedPageInfo } from './fixed-document'
 import { UnsupportedFormatError } from './errors'
 import type { Book, RelocateEvent, TOCItem } from './types'
+import { flattenTOC } from './toc'
 
 export interface FixedPageSequenceConfig {
     readonly book: Book
@@ -130,8 +131,4 @@ export function clampFixedPageIndex(index: number, pageCount: number): number {
 export function parseFixedPageHref(href: string): number | null {
     const match = href.match(/^(?:[a-z][a-z0-9+.-]*:)?page:(\d+)$/i)
     return match ? Number(match[1]) : null
-}
-
-function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
-    return items.flatMap(item => item.subitems?.length ? [item, ...flattenTOC(item.subitems)] : [item])
 }

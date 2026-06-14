@@ -8,6 +8,7 @@ import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, Resol
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
 import { debugRebook } from '../../core/debug'
 import { RendererEventDispatcher } from '../../core/renderer-state'
+import { flattenTOC } from '../../core/toc'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
@@ -872,14 +873,6 @@ export class BrowserRenderer implements Renderer {
 
 export const createBrowserRenderer = (config: BrowserRendererConfig): Renderer => {
     return new BrowserRenderer(config)
-}
-
-function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
-    return items.flatMap(item =>
-        item.subitems?.length
-            ? [item, ...flattenTOC(item.subitems)]
-            : [item]
-    )
 }
 
 function compareTOCPosition(a: TOCPosition, b: TOCPosition): number {

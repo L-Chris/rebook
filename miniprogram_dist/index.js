@@ -20762,6 +20762,93 @@ class RendererEventDispatcher {
     this.listeners.clear();
   }
 }
+function flattenTOC(items) {
+  return (items != null ? items : []).flatMap((item) => {
+    var _a2;
+    return ((_a2 = item.subitems) == null ? void 0 : _a2.length) ? [item, ...flattenTOC(item.subitems)] : [item];
+  });
+}
+function normalizeTOCHref(href) {
+  return (href || "").trim();
+}
+function normalizeNavigationHref(href) {
+  return normalizeTOCHref(href).split("#")[0];
+}
+function normalizeBookPath(href) {
+  const path = normalizeNavigationHref(href).replace(/\\/g, "/").replace(/^\/+/, "");
+  const parts = [];
+  for (const part of path.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return parts.join("/");
+}
+function createSectionIndexLookup(book) {
+  var _a2;
+  const byId = /* @__PURE__ */ new Map();
+  const byPath = /* @__PURE__ */ new Map();
+  for (const [index, section] of book.sections.entries()) {
+    byId.set(section.id, index);
+    byPath.set(normalizeBookPath(String((_a2 = section.id) != null ? _a2 : "")), index);
+  }
+  return { byId, byPath };
+}
+function findSectionIndex(lookup, id) {
+  const exact = lookup.byId.get(id);
+  if (exact !== void 0) return exact;
+  const normalized = normalizeBookPath(String(id));
+  if (!normalized) return -1;
+  const byPath = lookup.byPath.get(normalized);
+  if (byPath !== void 0) return byPath;
+  const suffix = `/${normalized}`;
+  for (const [sectionPath, index] of lookup.byPath) {
+    if (sectionPath.endsWith(suffix)) return index;
+  }
+  return -1;
+}
+function resolveTOCSectionIndex(book, href, sectionLookup = createSectionIndexLookup(book)) {
+  var _a2, _b2;
+  const resolved = (_a2 = book.resolveHref) == null ? void 0 : _a2.call(book, href);
+  if (typeof (resolved == null ? void 0 : resolved.index) === "number" && resolved.index >= 0) return resolved.index;
+  const parts = (_b2 = book.splitTOCHref) == null ? void 0 : _b2.call(book, href);
+  if (parts && Array.isArray(parts)) {
+    const [id] = parts;
+    const sectionIndex2 = findSectionIndex(sectionLookup, id);
+    if (sectionIndex2 >= 0) return sectionIndex2;
+  }
+  const normalizedHref = normalizeBookPath(href);
+  if (!normalizedHref) return -1;
+  const sectionIndex = sectionLookup.byPath.get(normalizedHref);
+  if (sectionIndex !== void 0) return sectionIndex;
+  const suffix = `/${normalizedHref}`;
+  for (const [sectionPath, index] of sectionLookup.byPath) {
+    if (sectionPath.endsWith(suffix)) return index;
+  }
+  return -1;
+}
+function findTOCItemForSection(book, sectionIndex, section = book.sections[sectionIndex], sectionLookup = createSectionIndexLookup(book)) {
+  var _a2, _b2;
+  const items = flattenTOC(book.toc);
+  if (!items.length) return null;
+  for (const item of items) {
+    const index = resolveTOCSectionIndex(book, item.href, sectionLookup);
+    if (index === sectionIndex) return item;
+    if (section && index < 0) {
+      const [id] = (_b2 = (_a2 = book.splitTOCHref) == null ? void 0 : _a2.call(book, item.href)) != null ? _b2 : [item.href];
+      if (id === section.id) return item;
+    }
+  }
+  return null;
+}
+function isSameTOCItem(item, activeItem) {
+  if (!activeItem) return false;
+  if (item === activeItem) return true;
+  const itemHref = normalizeTOCHref(item.href);
+  const activeHref = normalizeTOCHref(activeItem.href);
+  if (!itemHref || !activeHref) return false;
+  return itemHref === activeHref;
+}
 class SectionProgress {
   constructor(sections, sizePerLoc = 1500) {
     __publicField(this, "sizes");
@@ -21384,7 +21471,7 @@ class WechatMiniProgramRenderer {
     var _a2, _b2, _c, _d;
     this.tocPositions = [];
     if (!((_a2 = this.book) == null ? void 0 : _a2.toc)) return;
-    for (const [order, item] of flattenTOC$2(this.book.toc).entries()) {
+    for (const [order, item] of flattenTOC(this.book.toc).entries()) {
       const resolved = (_c = (_b2 = this.book).resolveHref) == null ? void 0 : _c.call(_b2, item.href);
       const index = (_d = resolved == null ? void 0 : resolved.index) != null ? _d : this.getTOCSectionIndex(item.href);
       if (index == null || index < 0) continue;
@@ -21419,7 +21506,7 @@ class WechatMiniProgramRenderer {
   findTOCItem(href) {
     var _a2, _b2;
     if (!((_a2 = this.book) == null ? void 0 : _a2.toc)) return null;
-    return (_b2 = flattenTOC$2(this.book.toc).find((item) => item.href === href)) != null ? _b2 : null;
+    return (_b2 = flattenTOC(this.book.toc).find((item) => item.href === href)) != null ? _b2 : null;
   }
   getCurrentTOCItem() {
     var _a2;
@@ -21588,14 +21675,6 @@ class WechatMiniProgramRenderer {
 const createWechatMiniProgramRenderer = (config) => {
   return new WechatMiniProgramRenderer(config);
 };
-function flattenTOC$2(items) {
-  return items.flatMap(
-    (item) => {
-      var _a2;
-      return ((_a2 = item.subitems) == null ? void 0 : _a2.length) ? [item, ...flattenTOC$2(item.subitems)] : [item];
-    }
-  );
-}
 function compareTOCPosition(a, b) {
   return a.index - b.index || a.sourceTop - b.sourceTop || a.order - b.order;
 }
@@ -21760,24 +21839,6 @@ function getChapterLabel(book, sectionIndex, section) {
   const tocItem = findTOCItemForSection(book, sectionIndex, section);
   return tocItem == null ? void 0 : tocItem.label;
 }
-function findTOCItemForSection(book, sectionIndex, section) {
-  var _a2, _b2, _c, _d;
-  const items = flattenTOC$1((_a2 = book.toc) != null ? _a2 : []);
-  if (!items.length) return null;
-  for (const item of items) {
-    const resolved = (_b2 = book.resolveHref) == null ? void 0 : _b2.call(book, item.href);
-    if ((resolved == null ? void 0 : resolved.index) === sectionIndex) return item;
-    const [id] = (_d = (_c = book.splitTOCHref) == null ? void 0 : _c.call(book, item.href)) != null ? _d : [item.href];
-    if (id === section.id) return item;
-  }
-  return null;
-}
-function flattenTOC$1(items) {
-  return items.flatMap((item) => {
-    var _a2;
-    return ((_a2 = item.subitems) == null ? void 0 : _a2.length) ? [item, ...flattenTOC$1(item.subitems)] : [item];
-  });
-}
 function blocksToText(blocks) {
   return normalizeSearchText(blocks.map((block) => {
     var _a2, _b2, _c, _d, _e, _f;
@@ -21910,7 +21971,7 @@ class ReaderSession {
   getAllowedTOCHrefs() {
     var _a2;
     const trialLimit = this.getTrialLimit();
-    if (!trialLimit) return flattenTOC((_a2 = this.getTOC()) != null ? _a2 : []).map((item) => normalizeNavigationHref$1(item.href));
+    if (!trialLimit) return flattenTOC((_a2 = this.getTOC()) != null ? _a2 : []).map((item) => normalizeNavigationHref(item.href));
     return trialLimit.getAllowedTOCHrefs(this.getSectionFractions());
   }
   /**
@@ -22185,12 +22246,6 @@ class ReaderSession {
     return typeof this.config.parserOptions === "function" ? this.config.parserOptions() : this.config.parserOptions;
   }
 }
-function flattenTOC(items) {
-  return items.flatMap((item) => {
-    var _a2;
-    return ((_a2 = item.subitems) == null ? void 0 : _a2.length) ? [item, ...flattenTOC(item.subitems)] : [item];
-  });
-}
 function createTOCViewTree(items, activeItem, trialByItem) {
   let index = 0;
   const walk2 = (tocItems) => tocItems.map((item) => {
@@ -22209,76 +22264,9 @@ function createTOCViewTree(items, activeItem, trialByItem) {
   });
   return walk2(items);
 }
-function isSameTOCItem(item, activeItem) {
-  if (!activeItem) return false;
-  if (item === activeItem) return true;
-  const itemHref = normalizeTOCHref$1(item.href);
-  const activeHref = normalizeTOCHref$1(activeItem.href);
-  if (!itemHref || !activeHref) return false;
-  return itemHref === activeHref;
-}
-function normalizeNavigationHref$1(href) {
-  return normalizeTOCHref$1(href).split("#")[0];
-}
-function normalizeTOCHref$1(href) {
-  return (href || "").trim();
-}
 function normalizeTOCViewLocation(location) {
   if ((location == null ? void 0 : location.tocItem) !== null) return location;
   return { ...location, tocItem: void 0 };
-}
-function normalizeBookPath$1(href) {
-  const path = normalizeNavigationHref$1(href).replace(/\\/g, "/").replace(/^\/+/, "");
-  const parts = [];
-  for (const part of path.split("/")) {
-    if (!part || part === ".") continue;
-    if (part === "..") parts.pop();
-    else parts.push(part);
-  }
-  return parts.join("/");
-}
-function createSectionIndexLookup(book) {
-  var _a2;
-  const byId = /* @__PURE__ */ new Map();
-  const byPath = /* @__PURE__ */ new Map();
-  for (const [index, section] of book.sections.entries()) {
-    byId.set(section.id, index);
-    byPath.set(normalizeBookPath$1(String((_a2 = section.id) != null ? _a2 : "")), index);
-  }
-  return { byId, byPath };
-}
-function findSectionIndex(lookup, id) {
-  const exact = lookup.byId.get(id);
-  if (exact !== void 0) return exact;
-  const normalized = normalizeBookPath$1(String(id));
-  if (!normalized) return -1;
-  const byPath = lookup.byPath.get(normalized);
-  if (byPath !== void 0) return byPath;
-  const suffix = `/${normalized}`;
-  for (const [sectionPath, index] of lookup.byPath) {
-    if (sectionPath.endsWith(suffix)) return index;
-  }
-  return -1;
-}
-function resolveTOCSectionIndex(book, href, sectionLookup = createSectionIndexLookup(book)) {
-  var _a2, _b2;
-  const resolved = (_a2 = book.resolveHref) == null ? void 0 : _a2.call(book, href);
-  if (typeof (resolved == null ? void 0 : resolved.index) === "number" && resolved.index >= 0) return resolved.index;
-  const parts = (_b2 = book.splitTOCHref) == null ? void 0 : _b2.call(book, href);
-  if (parts && Array.isArray(parts)) {
-    const [id] = parts;
-    const sectionIndex2 = findSectionIndex(sectionLookup, id);
-    if (sectionIndex2 >= 0) return sectionIndex2;
-  }
-  const normalizedHref = normalizeBookPath$1(href);
-  if (!normalizedHref) return -1;
-  const sectionIndex = sectionLookup.byPath.get(normalizedHref);
-  if (sectionIndex !== void 0) return sectionIndex;
-  const suffix = `/${normalizedHref}`;
-  for (const [sectionPath, index] of sectionLookup.byPath) {
-    if (sectionPath.endsWith(suffix)) return index;
-  }
-  return -1;
 }
 var lib = {};
 var conventions = {};
@@ -29129,34 +29117,9 @@ function createTrialLimitController(book, state, options) {
     }
   };
 }
-function normalizeTOCHref(href) {
-  return (href || "").trim();
-}
-function normalizeNavigationHref(href) {
-  return normalizeTOCHref(href).split("#")[0];
-}
-function normalizeBookPath(href) {
-  const path = normalizeNavigationHref(href).replace(/\\/g, "/").replace(/^\/+/, "");
-  const parts = [];
-  for (const part of path.split("/")) {
-    if (!part || part === ".") continue;
-    if (part === "..") parts.pop();
-    else parts.push(part);
-  }
-  return parts.join("/");
-}
 function resolveBookNavigation(book, href) {
-  var _a2;
-  const resolved = (_a2 = book.resolveHref) == null ? void 0 : _a2.call(book, href);
-  if (typeof (resolved == null ? void 0 : resolved.index) === "number" && resolved.index >= 0) return resolved;
-  const normalizedHref = normalizeBookPath(href);
-  if (!normalizedHref) return null;
-  const sectionIndex = book.sections.findIndex((section) => {
-    var _a3;
-    const sectionId = normalizeBookPath(String((_a3 = section.id) != null ? _a3 : ""));
-    return sectionId === normalizedHref || sectionId.endsWith(`/${normalizedHref}`);
-  });
-  return sectionIndex >= 0 ? { index: sectionIndex } : null;
+  const index = resolveTOCSectionIndex(book, href);
+  return index >= 0 ? { index } : null;
 }
 function getTotalFraction(location, sectionFractions) {
   var _a2, _b2;

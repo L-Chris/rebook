@@ -194,6 +194,18 @@ export {
     readFixedDocumentPages,
     type FixedPageSequenceConfig,
 } from './core/fixed-page-sequence'
+export {
+    createSectionIndexLookup,
+    findSectionIndex,
+    findTOCItemForSection,
+    flattenTOC,
+    isSameTOCItem,
+    normalizeBookPath,
+    normalizeNavigationHref,
+    normalizeTOCHref,
+    resolveTOCSectionIndex,
+    type SectionIndexLookup,
+} from './core/toc'
 
 export {
     REBOOK_LOCATION_MODEL_VERSION,

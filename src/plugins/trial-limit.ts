@@ -1,4 +1,5 @@
 import type { Book, RelocateEvent, RebookPlugin, Section, TOCItem } from '../core/types'
+import { normalizeNavigationHref, normalizeTOCHref, resolveTOCSectionIndex } from '../core/toc'
 
 export interface TrialLimitOptions {
     maxPages?: number
@@ -179,37 +180,9 @@ function createTrialLimitController(
     }
 }
 
-function normalizeTOCHref(href?: string | null): string {
-    return (href || '').trim()
-}
-
-function normalizeNavigationHref(href?: string | null): string {
-    return normalizeTOCHref(href).split('#')[0]
-}
-
-function normalizeBookPath(href?: string | null): string {
-    const path = normalizeNavigationHref(href).replace(/\\/g, '/').replace(/^\/+/, '')
-    const parts: string[] = []
-    for (const part of path.split('/')) {
-        if (!part || part === '.') continue
-        if (part === '..') parts.pop()
-        else parts.push(part)
-    }
-    return parts.join('/')
-}
-
 function resolveBookNavigation(book: Book, href: string): { index: number } | null {
-    const resolved = book.resolveHref?.(href)
-    if (typeof resolved?.index === 'number' && resolved.index >= 0) return resolved
-
-    const normalizedHref = normalizeBookPath(href)
-    if (!normalizedHref) return null
-
-    const sectionIndex = book.sections.findIndex(section => {
-        const sectionId = normalizeBookPath(String(section.id ?? ''))
-        return sectionId === normalizedHref || sectionId.endsWith(`/${normalizedHref}`)
-    })
-    return sectionIndex >= 0 ? { index: sectionIndex } : null
+    const index = resolveTOCSectionIndex(book, href)
+    return index >= 0 ? { index } : null
 }
 
 function getTotalFraction(

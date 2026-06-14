@@ -9,6 +9,7 @@ import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, Resol
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from '../../core/renderer'
 import { bookPositionMatchesReflowableRange } from '../../core/location'
 import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
+import { flattenTOC } from '../../core/toc'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
@@ -916,14 +917,6 @@ export class WechatMiniProgramRenderer implements Renderer {
 
 export const createWechatMiniProgramRenderer = (config: WechatMiniProgramRendererConfig): WechatMiniProgramRenderer => {
     return new WechatMiniProgramRenderer(config)
-}
-
-function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
-    return items.flatMap(item =>
-        item.subitems?.length
-            ? [item, ...flattenTOC(item.subitems)]
-            : [item]
-    )
 }
 
 function compareTOCPosition(a: TOCPosition, b: TOCPosition): number {
