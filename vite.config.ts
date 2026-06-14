@@ -46,6 +46,7 @@ export default defineConfig({
         'renderers/browser': resolve(__dirname, 'src/renderers/browser/index.ts'),
         'renderers/browser/fixed': resolve(__dirname, 'src/renderers/browser/fixed.ts'),
         'renderers/browser/fixed-pdf-canvas': resolve(__dirname, 'src/renderers/browser/fixed-pdf-canvas.ts'),
+        'renderers/browser/fixed-pdf-webgpu': resolve(__dirname, 'src/renderers/browser/fixed-pdf-webgpu.ts'),
         'renderers/wechat-miniprogram': resolve(__dirname, 'src/renderers/wechat-miniprogram/index.ts'),
         'exporters/index': resolve(__dirname, 'src/exporters/index.ts'),
         'exporters/epub': resolve(__dirname, 'src/exporters/epub.ts'),

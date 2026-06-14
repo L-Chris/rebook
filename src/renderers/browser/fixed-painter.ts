@@ -6,6 +6,7 @@ import {
 import type { BrowserFixedVisualRenderContext } from './fixed-visual'
 import { isPdfFixedDocument } from '../../pdf/fixed-document'
 import { BrowserFixedPdfCanvasRenderer } from './fixed-pdf-canvas'
+import { BrowserFixedPdfWebGpuRenderer } from './fixed-pdf-webgpu'
 
 export type BrowserFixedPainterMatch = boolean | number
 export type BrowserFixedPainterPreference = 'canvas' | 'webgpu' | 'auto'
@@ -112,20 +113,26 @@ export class BrowserFixedWebGpuPainter implements BrowserFixedPainter {
     readonly id = 'browser-fixed-webgpu-painter'
     readonly backend = 'webgpu' as const
     private readonly canvasPainter: BrowserFixedCanvasPainter
+    private readonly pdfRenderer = new BrowserFixedPdfWebGpuRenderer({ fallbackOnUnsupported: true })
+    private readonly devicePixelRatio?: number | (() => number)
     private devicePromise: Promise<WebGpuDeviceBundle | null> | null = null
     private pipelineByFormat = new Map<string, unknown>()
 
     constructor(config: BrowserFixedWebGpuPainterConfig = {}) {
         this.canvasPainter = new BrowserFixedCanvasPainter(config)
+        this.devicePixelRatio = config.devicePixelRatio
     }
 
     match(document: FixedDocument): BrowserFixedPainterMatch {
         if (!isBrowserWebGpuSupported()) return false
+        if (isPdfFixedDocument(document)) return 20
         return this.canvasPainter.match(document) ? 10 : false
     }
 
     async paint(context: BrowserFixedVisualRenderContext): Promise<BrowserFixedPaintResult | null> {
         const start = now()
+        if (isPdfFixedDocument(context.document)) return this.paintPdfPage(context, start)
+
         const bundle = await this.getDeviceBundle()
         if (!bundle) return null
 
@@ -162,6 +169,7 @@ export class BrowserFixedWebGpuPainter implements BrowserFixedPainter {
 
     destroy(): void {
         this.pipelineByFormat.clear()
+        this.pdfRenderer.destroy()
         this.canvasPainter.destroy?.()
     }
 
@@ -186,9 +194,51 @@ export class BrowserFixedWebGpuPainter implements BrowserFixedPainter {
         }
     }
 
+    private async paintPdfPage(
+        context: BrowserFixedVisualRenderContext,
+        start: number,
+    ): Promise<BrowserFixedPaintResult | null> {
+        const canvas = document.createElement('canvas')
+        canvas.dataset.rebookFixedWebgpu = 'true'
+        canvas.dataset.rebookFixedWebgpuPdf = 'true'
+        canvas.dataset.rebookFixedPainter = this.id
+        try {
+            const result = await this.pdfRenderer.renderPage(context.document, canvas, context.page.index, {
+                scale: context.scale,
+                devicePixelRatio: this.getDevicePixelRatio(),
+                intent: 'display',
+                textLayer: false,
+            })
+            canvas.dataset.rebookFixedWebgpuOps = String(result.ops)
+            canvas.dataset.rebookFixedWebgpuDrawCalls = String(result.drawCalls)
+            canvas.dataset.rebookFixedWebgpuGlyphs = String(result.glyphs)
+            canvas.dataset.rebookFixedWebgpuPaths = String(result.paths)
+            canvas.dataset.rebookFixedWebgpuImages = String(result.images)
+            return {
+                element: canvas,
+                contentKind: 'texture',
+                paint: {
+                    id: this.id,
+                    backend: this.backend,
+                    ms: now() - start,
+                },
+                destroy() {
+                    canvas.remove()
+                },
+            }
+        } catch {
+            canvas.remove()
+            return null
+        }
+    }
+
     private getDeviceBundle(): Promise<WebGpuDeviceBundle | null> {
         this.devicePromise ??= createWebGpuDeviceBundle()
         return this.devicePromise
+    }
+
+    private getDevicePixelRatio(): number {
+        return getDevicePixelRatio(this.devicePixelRatio)
     }
 }
 

@@ -101,6 +101,12 @@ export {
     type BrowserFixedPdfCanvasRenderResult,
 } from './fixed-pdf-canvas'
 export {
+    BrowserFixedPdfWebGpuRenderer,
+    createBrowserFixedPdfWebGpuRenderer,
+    type BrowserFixedPdfWebGpuRendererConfig,
+    type BrowserFixedPdfWebGpuRenderResult,
+} from './fixed-pdf-webgpu'
+export {
     ReaderView,
     createReader,
     type BrowserConfiguredContentEngineRoute,
