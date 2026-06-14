@@ -13,7 +13,6 @@ import { flattenTOC } from '../../core/toc'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
-    getColumnCount,
     getLineHeightMultiplier,
     getLinePageIndex,
     getPagePaddingBlock,
@@ -21,6 +20,7 @@ import {
     getReadablePageCount,
     parseCSSPixels,
 } from '../../core/renderer-utils'
+import { getSpreadVisibleItemCount } from '../../core/spread-layout'
 import {
     getVisibleLines,
     installPretextMeasurementPolyfill,
@@ -488,7 +488,12 @@ export class WechatMiniProgramRenderer implements Renderer {
         const minColumnWidth = parseCSSPixels(this.styles.minColumnWidth, 320)
         const maxColumnWidth = parseCSSPixels(this.styles.maxColumnWidth ?? this.styles.maxInlineSize, 720)
         const availableWidth = Math.max(1, this.width - margin * 2)
-        const columns = getColumnCount(this.layoutMode, availableWidth, minColumnWidth, gap, this.maxColumnCount)
+        const columns = getSpreadVisibleItemCount(this.layoutMode, this.maxColumnCount, {
+            inlineSize: availableWidth,
+        }, {
+            gap,
+            minColumnWidth,
+        })
         const rawWidth = columns > 1 ? (availableWidth - gap * (columns - 1)) / columns : availableWidth
         const inlineSize = Math.max(1, Math.min(maxColumnWidth, rawWidth))
         const pageHeight = Math.max(1, this.height)

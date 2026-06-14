@@ -22,6 +22,7 @@ import type { Book, LinkEvent, LoadEvent, RelocateEvent } from '../../core/types
 import type { EventListener, LayoutMode, ReaderMark, RendererConfig, RendererStyles } from '../../core/renderer'
 import { UnsupportedFormatError } from '../../core/errors'
 import { RendererEventDispatcher } from '../../core/renderer-state'
+import { getNextSpreadIndex, getPreviousSpreadIndex, getSpreadItems } from '../../core/spread-layout'
 import type { BrowserPageCompositor, BrowserPageSurface } from './compositor'
 import {
     BrowserFixedContentRenderer,
@@ -127,17 +128,17 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
 
     async next(): Promise<void> {
         if (!await this.canNavigate('next')) return
-        const step = this.getNavigationStep()
-        const target = (this.sequence?.pageIndex ?? 0) + step
-        if (!this.sequence || target >= this.sequence.pageCount || !this.sequence.goTo(target)) return
+        if (!this.sequence) return
+        const target = getNextSpreadIndex(this.sequence.pageIndex, this.sequence.pageCount, this.visiblePageCount, 'item')
+        if (target == null || !this.sequence.goTo(target)) return
         await this.renderCurrentPage('page')
     }
 
     async prev(): Promise<void> {
         if (!await this.canNavigate('prev')) return
-        const step = this.getNavigationStep()
-        const target = Math.max(0, (this.sequence?.pageIndex ?? 0) - step)
-        if (!this.sequence || target === this.sequence.pageIndex || !this.sequence.goTo(target)) return
+        if (!this.sequence) return
+        const target = getPreviousSpreadIndex(this.sequence.pageIndex, this.sequence.pageCount, this.visiblePageCount, 'item')
+        if (target == null || !this.sequence.goTo(target)) return
         await this.renderCurrentPage('page')
     }
 
@@ -287,9 +288,9 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
 
     private getVisiblePages(sequence: FixedPageSequence): readonly FixedPageInfo[] {
         const page = sequence.currentPage
-        if (!page || this.getRequestedColumnCount() < 2) return page ? [page] : []
-        const nextPage = sequence.pages[sequence.pageIndex + 1]
-        return nextPage ? [page, nextPage] : [page]
+        const requestedPageCount = this.getRequestedColumnCount()
+        if (!page || requestedPageCount < 2) return page ? [page] : []
+        return getSpreadItems(sequence.pages, sequence.pageIndex, requestedPageCount)
     }
 
     private getRequestedColumnCount(): number {
@@ -370,9 +371,6 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         })
     }
 
-    private getNavigationStep(): number {
-        return Math.max(1, this.visiblePageCount)
-    }
 }
 
 interface FixedRenderPlan {

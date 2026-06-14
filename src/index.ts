@@ -208,6 +208,17 @@ export {
     type FixedViewportMetrics,
 } from './core/fixed-page-model'
 export {
+    clampSpreadIndex,
+    getNextSpreadIndex,
+    getPreviousSpreadIndex,
+    getSpreadItems,
+    getSpreadNavigationStep,
+    getSpreadVisibleItemCount,
+    type SpreadLayoutOptions,
+    type SpreadNavigationUnit,
+    type SpreadViewportMetrics,
+} from './core/spread-layout'
+export {
     createSectionIndexLookup,
     findSectionIndex,
     findTOCItemForSection,

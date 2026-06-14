@@ -12,13 +12,13 @@ import { flattenTOC } from '../../core/toc'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
-    getColumnCount,
     getLineHeightMultiplier,
     getPagePaddingBlock,
     getPluginPrefetchPageCount,
     getReadablePageCount,
     parseCSSPixels,
 } from '../../core/renderer-utils'
+import { getSpreadVisibleItemCount } from '../../core/spread-layout'
 import {
     clampReflowablePageIndex,
     findReadableReflowablePage,
@@ -770,7 +770,12 @@ export class BrowserRenderer implements BrowserContentEngine {
     }
 
     private getColumnCount(availableWidth: number, minColumnWidth: number, gap: number): number {
-        return getColumnCount(this.layoutMode, availableWidth, minColumnWidth, gap, this.maxColumnCount)
+        return getSpreadVisibleItemCount(this.layoutMode, this.maxColumnCount, {
+            inlineSize: availableWidth,
+        }, {
+            gap,
+            minColumnWidth,
+        })
     }
 
     private getSourceScrollTop(): number {

@@ -5,7 +5,8 @@ import {
     type FixedPageViewport,
 } from './fixed-document'
 import type { LayoutMode, RendererStyles } from './renderer'
-import { getColumnCount, parseCSSPixels } from './renderer-utils'
+import { parseCSSPixels } from './renderer-utils'
+import { getSpreadVisibleItemCount } from './spread-layout'
 
 export interface FixedViewportMetrics {
     readonly inlineSize: number
@@ -91,11 +92,14 @@ export function getFixedVisiblePageCount(
     metrics: FixedViewportMetrics,
     options: FixedPageFitOptions = {},
 ): number {
-    const margin = parseCSSPixels(options.margin, options.defaultMargin ?? 0)
-    const gap = parseCSSPixels(options.gap, options.defaultGap ?? 0)
-    const minColumnWidth = parseCSSPixels(options.minColumnWidth, options.defaultMinColumnWidth ?? 320)
-    const availableInlineSize = Math.max(1, metrics.inlineSize - margin * 2)
-    return getColumnCount(layoutMode, availableInlineSize, minColumnWidth, gap, maxColumnCount)
+    return getSpreadVisibleItemCount(layoutMode, maxColumnCount, metrics, {
+        margin: options.margin,
+        gap: options.gap,
+        minColumnWidth: options.minColumnWidth,
+        defaultMargin: options.defaultMargin,
+        defaultGap: options.defaultGap,
+        defaultMinColumnWidth: options.defaultMinColumnWidth,
+    })
 }
 
 export function resolveFixedSpreadFit(

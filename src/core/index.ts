@@ -132,6 +132,17 @@ export {
     type FixedViewportMetrics,
 } from './fixed-page-model'
 export {
+    clampSpreadIndex,
+    getNextSpreadIndex,
+    getPreviousSpreadIndex,
+    getSpreadItems,
+    getSpreadNavigationStep,
+    getSpreadVisibleItemCount,
+    type SpreadLayoutOptions,
+    type SpreadNavigationUnit,
+    type SpreadViewportMetrics,
+} from './spread-layout'
+export {
     createSectionIndexLookup,
     findSectionIndex,
     findTOCItemForSection,
