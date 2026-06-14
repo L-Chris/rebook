@@ -22,6 +22,7 @@ export default defineConfig({
         'core/fixed-text-provider': resolve(__dirname, 'src/core/fixed-text-provider.ts'),
         'core/fixed-document': resolve(__dirname, 'src/core/fixed-document.ts'),
         'core/location': resolve(__dirname, 'src/core/location.ts'),
+        'core/mark-resolver': resolve(__dirname, 'src/core/mark-resolver.ts'),
         'core/page-surface': resolve(__dirname, 'src/core/page-surface.ts'),
         'core/parser': resolve(__dirname, 'src/core/parser.ts'),
         'core/reader': resolve(__dirname, 'src/core/reader.ts'),

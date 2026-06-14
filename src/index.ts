@@ -240,6 +240,14 @@ export {
     fixedTextRunRect,
 } from './core/fixed-text-provider'
 export {
+    getLineReflowableTextRange,
+    markMatchesReflowableRange,
+    resolveFixedMarkRects,
+    resolveReflowableLineMarks,
+    type FixedMarkRectOptions,
+    type ResolvedMarkRect,
+} from './core/mark-resolver'
+export {
     createReflowableTextProvider,
     lineMatchesReflowableBookRange,
     lineToReflowableBookRange,

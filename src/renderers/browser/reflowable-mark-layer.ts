@@ -1,4 +1,4 @@
-import { bookPositionMatchesReflowableRange } from '../../core/location'
+import { resolveReflowableLineMarks } from '../../core/mark-resolver'
 import type { PageSurfaceDecorator } from '../../core/page-surface'
 import type { ReaderMark } from '../../core/renderer'
 import type { LineRange } from '../../core/pretext'
@@ -53,7 +53,7 @@ function applyLineMarks(
     sectionIndex: number,
     marks: readonly ReaderMark[],
 ): void {
-    const matching = marks.filter(mark => markMatchesLine(mark, line, sectionIndex))
+    const matching = resolveReflowableLineMarks(marks, line, sectionIndex)
     if (!matching.length) return
     element.dataset.markIds = matching.map(mark => mark.id).join(' ')
     element.dataset.markKinds = matching.map(mark => mark.kind).filter(Boolean).join(' ')
@@ -61,16 +61,6 @@ function applyLineMarks(
         element.classList.add(...getBrowserMarkClassNames(mark))
         applyBrowserMarkDataset(element, mark)
     }
-}
-
-function markMatchesLine(mark: ReaderMark, line: LineRange, sectionIndex: number): boolean {
-    return bookPositionMatchesReflowableRange(mark.location, {
-        sectionIndex,
-        blockId: line.block?.id,
-        startOffset: line.start?.cursor.graphemeIndex,
-        endOffset: line.end?.cursor.graphemeIndex,
-        offsetsReliable: (line.block?.segments.length ?? 0) === 1,
-    })
 }
 
 export const createBrowserReflowableMarkLayerDecorator = (

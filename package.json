@@ -24,6 +24,9 @@
       "core/location": [
         "dist/core/location.d.ts"
       ],
+      "core/mark-resolver": [
+        "dist/core/mark-resolver.d.ts"
+      ],
       "core/page-surface": [
         "dist/core/page-surface.d.ts"
       ],
@@ -131,6 +134,10 @@
     "./core/location": {
       "types": "./dist/core/location.d.ts",
       "import": "./dist/core/location.js"
+    },
+    "./core/mark-resolver": {
+      "types": "./dist/core/mark-resolver.d.ts",
+      "import": "./dist/core/mark-resolver.js"
     },
     "./core/page-surface": {
       "types": "./dist/core/page-surface.d.ts",

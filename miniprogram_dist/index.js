@@ -20702,6 +20702,23 @@ function reflowableLocationMatchesBlock(location, range, endOffset = location.of
   if (markEnd === markStart) return rangeStart <= markStart && markStart < rangeEnd;
   return rangeStart < markEnd && rangeEnd > markStart;
 }
+function getLineReflowableTextRange(line, sectionIndex) {
+  var _a2, _b2, _c, _d, _e;
+  return {
+    sectionIndex,
+    blockId: (_a2 = line.block) == null ? void 0 : _a2.id,
+    startOffset: (_b2 = line.start) == null ? void 0 : _b2.cursor.graphemeIndex,
+    endOffset: (_c = line.end) == null ? void 0 : _c.cursor.graphemeIndex,
+    offsetsReliable: ((_e = (_d = line.block) == null ? void 0 : _d.segments.length) != null ? _e : 0) === 1
+  };
+}
+function markMatchesReflowableRange(mark, range) {
+  return bookPositionMatchesReflowableRange(mark.location, range);
+}
+function resolveReflowableLineMarks(marks, line, sectionIndex) {
+  const range = getLineReflowableTextRange(line, sectionIndex);
+  return marks.filter((mark) => markMatchesReflowableRange(mark, range));
+}
 class ReaderMarkStore {
   constructor() {
     __publicField(this, "marks", /* @__PURE__ */ new Map());
@@ -21402,7 +21419,7 @@ class WechatMiniProgramRenderer {
   }
   getLineMarks(line) {
     if (this.currentIndex < 0) return [];
-    return this.marks.getAll().filter((mark) => markMatchesLine(mark, line, this.currentIndex));
+    return resolveReflowableLineMarks(this.marks.getAll(), line, this.currentIndex);
   }
   publishPosition(reason) {
     this.publishSnapshot();
@@ -21677,16 +21694,6 @@ const createWechatMiniProgramRenderer = (config) => {
 };
 function compareTOCPosition(a, b) {
   return a.index - b.index || a.sourceTop - b.sourceTop || a.order - b.order;
-}
-function markMatchesLine(mark, line, sectionIndex) {
-  var _a2, _b2, _c, _d, _e;
-  return bookPositionMatchesReflowableRange(mark.location, {
-    sectionIndex,
-    blockId: (_a2 = line.block) == null ? void 0 : _a2.id,
-    startOffset: (_b2 = line.start) == null ? void 0 : _b2.cursor.graphemeIndex,
-    endOffset: (_c = line.end) == null ? void 0 : _c.cursor.graphemeIndex,
-    offsetsReliable: ((_e = (_d = line.block) == null ? void 0 : _d.segments.length) != null ? _e : 0) === 1
-  });
 }
 function getLineMarkSnapshot(marks) {
   if (!marks.length) return {};

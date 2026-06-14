@@ -1,4 +1,4 @@
-import { getFixedPositionRects, type Rect } from '../../core/location'
+import { resolveFixedMarkRects, type ResolvedMarkRect } from '../../core/mark-resolver'
 import type { PageSurfaceDecorator } from '../../core/page-surface'
 import type { ReaderMark } from '../../core/renderer'
 import type { BrowserPageSurface, BrowserPageSurfaceLayer } from './compositor'
@@ -10,11 +10,6 @@ import {
 
 export interface BrowserFixedMarkLayerDecoratorConfig {
     readonly getMarks: () => readonly ReaderMark[]
-}
-
-interface PageMarkRect {
-    readonly mark: ReaderMark
-    readonly rect: Rect
 }
 
 export class BrowserFixedMarkLayerDecorator implements PageSurfaceDecorator<BrowserPageSurface> {
@@ -84,31 +79,19 @@ function createMarkLayer(surface: BrowserPageSurface, marks: readonly ReaderMark
     }
 }
 
-function getPageMarkRects(surface: BrowserPageSurface, marks: readonly ReaderMark[]): PageMarkRect[] {
+function getPageMarkRects(surface: BrowserPageSurface, marks: readonly ReaderMark[]): ResolvedMarkRect[] {
     const format = surface.location?.type === 'fixed' ? surface.location.format : undefined
     const pageIndex = surface.pageIndex
     if (format === undefined || pageIndex === undefined) return getImagePageMarkRects(surface, marks)
 
-    const output: PageMarkRect[] = []
-    for (const mark of marks) {
-        for (const rect of getFixedPositionRects(mark.location, { format, pageIndex })) {
-            output.push({ mark, rect })
-        }
-    }
-    return output
+    return resolveFixedMarkRects(marks, { format, pageIndex })
 }
 
-function getImagePageMarkRects(surface: BrowserPageSurface, marks: readonly ReaderMark[]): PageMarkRect[] {
+function getImagePageMarkRects(surface: BrowserPageSurface, marks: readonly ReaderMark[]): ResolvedMarkRect[] {
     const pageIndex = surface.location?.type === 'image' ? surface.location.pageIndex : surface.pageIndex
     if (pageIndex === undefined) return []
 
-    const output: PageMarkRect[] = []
-    for (const mark of marks) {
-        for (const rect of getFixedPositionRects(mark.location, { format: '', pageIndex })) {
-            output.push({ mark, rect })
-        }
-    }
-    return output
+    return resolveFixedMarkRects(marks, { pageIndex })
 }
 
 export const createBrowserFixedMarkLayerDecorator = (

@@ -7,7 +7,7 @@
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from '../../core/renderer'
-import { bookPositionMatchesReflowableRange } from '../../core/location'
+import { resolveReflowableLineMarks } from '../../core/mark-resolver'
 import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
 import { flattenTOC } from '../../core/toc'
 import { SectionProgress } from '../../utils/progress'
@@ -613,7 +613,7 @@ export class WechatMiniProgramRenderer implements Renderer {
 
     private getLineMarks(line: LineRange): ReaderMark[] {
         if (this.currentIndex < 0) return []
-        return this.marks.getAll().filter(mark => markMatchesLine(mark, line, this.currentIndex))
+        return resolveReflowableLineMarks(this.marks.getAll(), line, this.currentIndex)
     }
 
     private publishPosition(reason: string): void {
@@ -923,16 +923,6 @@ function compareTOCPosition(a: TOCPosition, b: TOCPosition): number {
     return a.index - b.index
         || a.sourceTop - b.sourceTop
         || a.order - b.order
-}
-
-function markMatchesLine(mark: ReaderMark, line: LineRange, sectionIndex: number): boolean {
-    return bookPositionMatchesReflowableRange(mark.location, {
-        sectionIndex,
-        blockId: line.block?.id,
-        startOffset: line.start?.cursor.graphemeIndex,
-        endOffset: line.end?.cursor.graphemeIndex,
-        offsetsReliable: (line.block?.segments.length ?? 0) === 1,
-    })
 }
 
 function getLineMarkSnapshot(marks: ReaderMark[]): Pick<WechatMiniProgramLineBase, 'className' | 'markIds' | 'markKinds' | 'markData'> {

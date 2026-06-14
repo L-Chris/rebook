@@ -76,6 +76,14 @@ export {
     fixedTextRunRect,
 } from './fixed-text-provider'
 export {
+    getLineReflowableTextRange,
+    markMatchesReflowableRange,
+    resolveFixedMarkRects,
+    resolveReflowableLineMarks,
+    type FixedMarkRectOptions,
+    type ResolvedMarkRect,
+} from './mark-resolver'
+export {
     createReflowableTextProvider,
     lineMatchesReflowableBookRange,
     lineToReflowableBookRange,
