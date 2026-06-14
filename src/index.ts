@@ -187,6 +187,13 @@ export {
     type FixedPageViewport,
     type FixedPageViewportOptions,
 } from './core/fixed-document'
+export {
+    FixedPageSequence,
+    clampFixedPageIndex,
+    parseFixedPageHref,
+    readFixedDocumentPages,
+    type FixedPageSequenceConfig,
+} from './core/fixed-page-sequence'
 
 export {
     REBOOK_LOCATION_MODEL_VERSION,

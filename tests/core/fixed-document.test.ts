@@ -5,6 +5,7 @@ import {
     isFixedDocument,
     type FixedDocument,
 } from '../../src/core/fixed-document'
+import { FixedPageSequence, parseFixedPageHref } from '../../src/core/fixed-page-sequence'
 
 describe('fixed document core', () => {
     it('identifies fixed document implementations', () => {
@@ -63,5 +64,84 @@ describe('fixed document core', () => {
         expect(() => createFixedPageViewport({ index: -1, width: 600, height: 800 })).toThrow(RangeError)
         expect(() => createFixedPageViewport({ index: 0, width: 600, height: 800 }, { scale: 0 })).toThrow(RangeError)
         expect(() => createFixedPageViewport({ index: 0, width: 600, height: 800 }, { rotation: 45 as 0 })).toThrow(RangeError)
+    })
+
+    it('tracks fixed page sequence progress and location metadata', async () => {
+        const book = {
+            sections: [],
+            pageList: [
+                { label: 'i', href: 'pdf:page:0' },
+                { label: '1', href: 'pdf:page:1' },
+                { label: '2', href: 'pdf:page:2' },
+            ],
+            toc: [
+                { label: 'Cover', href: 'pdf:page:0' },
+                { label: 'Chapter', href: 'pdf:page:2' },
+            ],
+            fixedDocument: {
+                kind: 'fixed-document' as const,
+                format: 'pdf' as const,
+                pageCount: 3,
+                getPage: (index: number) => ({ index, width: 600, height: 800 }),
+            },
+            resolveHref: (href: string) => {
+                const index = parseFixedPageHref(href)
+                return index == null ? null : { index }
+            },
+        }
+        const sequence = await FixedPageSequence.fromBook(book)
+
+        expect(sequence.currentPage?.index).toBe(0)
+        expect(sequence.getSectionFractions()).toEqual([0, 0.5, 1])
+        expect(sequence.goTo('pdf:page:2')).toBe(true)
+        expect(sequence.getLocation('goto')).toMatchObject({
+            index: 2,
+            fraction: 1,
+            totalFraction: 1,
+            pageItem: { label: '2', href: 'pdf:page:2' },
+            tocItem: { label: 'Chapter', href: 'pdf:page:2' },
+            reason: 'goto',
+        })
+        expect(sequence.goToFraction(0.5)).toBe(true)
+        expect(sequence.currentPage?.index).toBe(1)
+        expect(sequence.next()).toBe(true)
+        expect(sequence.next()).toBe(false)
+    })
+
+    it('resolves fixed page sequence targets through book href handlers', async () => {
+        const book = {
+            sections: [],
+            toc: [
+                { label: 'page001.jpg', href: 'page001.jpg' },
+                { label: 'page002.jpg', href: 'page002.jpg' },
+            ],
+            pageList: [
+                { label: 'page001.jpg', href: 'page001.jpg' },
+                { label: 'page002.jpg', href: 'page002.jpg' },
+            ],
+            fixedDocument: {
+                kind: 'fixed-document' as const,
+                format: 'cbz' as const,
+                pageCount: 2,
+                getPages: () => [
+                    { index: 0, width: 320, height: 480 },
+                    { index: 1, width: 320, height: 480 },
+                ],
+                getPage: (index: number) => ({ index, width: 320, height: 480 }),
+            },
+            resolveHref: (href: string) => {
+                const index = href === 'page001.jpg' ? 0 : href === 'page002.jpg' ? 1 : -1
+                return index >= 0 ? { index } : null
+            },
+        }
+        const sequence = await FixedPageSequence.fromBook(book)
+
+        expect(sequence.goTo('page002.jpg')).toBe(true)
+        expect(sequence.getLocation('goto')).toMatchObject({
+            index: 1,
+            fraction: 1,
+            pageItem: { label: 'page002.jpg', href: 'page002.jpg' },
+            tocItem: { label: 'page002.jpg', href: 'page002.jpg' },
+        })
     })
 })

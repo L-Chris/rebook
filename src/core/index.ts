@@ -68,6 +68,13 @@ export {
     searchTextChunks,
     type StaticTextProviderOptions,
 } from './text-provider'
+export {
+    FixedPageSequence,
+    clampFixedPageIndex,
+    parseFixedPageHref,
+    readFixedDocumentPages,
+    type FixedPageSequenceConfig,
+} from './fixed-page-sequence'
 export type {
     SearchScope,
     SearchOptions,

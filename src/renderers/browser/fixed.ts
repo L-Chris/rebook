@@ -6,12 +6,9 @@
  * content, text, annotation, and overlay layers.
  */
 
-import type {
-    FixedDocument,
-    FixedPageInfo,
-    FixedPageRenderer,
-} from '../../core/fixed-document'
-import type { Book, LinkEvent, LoadEvent, RelocateEvent, TOCItem } from '../../core/types'
+import type { FixedPageInfo, FixedPageRenderer } from '../../core/fixed-document'
+import { FixedPageSequence } from '../../core/fixed-page-sequence'
+import type { Book, LinkEvent, LoadEvent, RelocateEvent } from '../../core/types'
 import type { EventListener, LayoutMode, ReaderMark, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
 import { UnsupportedFormatError } from '../../core/errors'
 import { parseCSSPixels } from '../../core/renderer-utils'
@@ -55,12 +52,9 @@ export class BrowserFixedRenderer implements Renderer {
     private readonly surfacePipeline: BrowserSurfacePipeline<BrowserFixedContentRenderContext>
     private readonly scroller: HTMLElement
     private readonly pageHost: HTMLElement
-    private book: Book | null = null
-    private document: FixedDocument | null = null
-    private pages: readonly FixedPageInfo[] = []
+    private sequence: FixedPageSequence | null = null
     private styles: RendererStyles
     private layoutMode: LayoutMode
-    private pageIndex = 0
     private lastLocation: RelocateEvent | null = null
 
     constructor(config: BrowserFixedRendererConfig) {
@@ -98,41 +92,29 @@ export class BrowserFixedRenderer implements Renderer {
             throw new UnsupportedFormatError('BrowserFixedRenderer requires a fixedDocument book')
         }
 
-        this.book = book
-        this.document = book.fixedDocument
-        this.pages = await readFixedPages(book.fixedDocument)
-        this.pageIndex = 0
+        this.sequence = await FixedPageSequence.fromBook(book)
         await this.renderCurrentPage('open')
     }
 
     async goTo(target: number | string): Promise<void> {
-        if (!this.document) return
-        const pageIndex = typeof target === 'number'
-            ? target
-            : this.book?.resolveHref?.(target)?.index ?? parsePageHref(target)
-        if (pageIndex == null) return
-        this.pageIndex = clampPageIndex(pageIndex, this.pages.length)
+        if (!this.sequence?.goTo(target)) return
         await this.renderCurrentPage('goto')
     }
 
     async next(): Promise<void> {
         if (!await this.canNavigate('next')) return
-        if (this.pageIndex >= this.pages.length - 1) return
-        this.pageIndex++
+        if (!this.sequence?.next()) return
         await this.renderCurrentPage('page')
     }
 
     async prev(): Promise<void> {
         if (!await this.canNavigate('prev')) return
-        if (this.pageIndex <= 0) return
-        this.pageIndex--
+        if (!this.sequence?.prev()) return
         await this.renderCurrentPage('page')
     }
 
     async goToFraction(fraction: number): Promise<void> {
-        if (!this.pages.length) return
-        const safe = Math.max(0, Math.min(1, fraction))
-        this.pageIndex = clampPageIndex(Math.round(safe * (this.pages.length - 1)), this.pages.length)
+        if (!this.sequence?.goToFraction(fraction)) return
         await this.renderCurrentPage('fraction')
     }
 
@@ -180,9 +162,7 @@ export class BrowserFixedRenderer implements Renderer {
     }
 
     getSectionFractions(): number[] {
-        if (!this.pages.length) return []
-        if (this.pages.length === 1) return [0, 1]
-        return this.pages.map((_, index) => index / (this.pages.length - 1))
+        return this.sequence?.getSectionFractions() ?? []
     }
 
     async refresh(): Promise<void> {
@@ -205,21 +185,19 @@ export class BrowserFixedRenderer implements Renderer {
         this.surfacePipeline.destroy()
         this.host.destroy({ compositor: false })
         this.events.clear()
-        this.book = null
-        this.document = null
-        this.pages = []
+        this.sequence = null
     }
 
     private async renderCurrentPage(reason: string): Promise<void> {
-        const fixedDocument = this.document
-        const page = this.pages[this.pageIndex]
-        if (!fixedDocument || !page) return
+        const sequence = this.sequence
+        const page = sequence?.currentPage
+        if (!sequence || !page) return
 
         const margin = parseCSSPixels(this.styles.margin, DEFAULT_MARGIN)
         const scale = this.getPageScale(page, margin)
         this.pageHost.style.padding = `${margin}px`
         const rendered = await this.surfacePipeline.render({
-            document: fixedDocument,
+            document: sequence.document,
             page,
             scale,
             styles: this.styles,
@@ -239,29 +217,10 @@ export class BrowserFixedRenderer implements Renderer {
     }
 
     private emitRelocate(reason: string): void {
-        if (!this.pages.length) return
-        const fraction = this.pages.length > 1 ? this.pageIndex / (this.pages.length - 1) : 0
-        const pageItem = this.book?.pageList?.[this.pageIndex] ?? null
-        const event: RelocateEvent = {
-            index: this.pageIndex,
-            fraction,
-            totalFraction: fraction,
-            pageItem,
-            tocItem: this.getCurrentTOCItem(),
-            reason,
-        }
+        const event = this.sequence?.getLocation(reason)
+        if (!event) return
         this.lastLocation = event
         this.emit('relocate', event)
-    }
-
-    private getCurrentTOCItem(): TOCItem | null {
-        const items = flattenTOC(this.book?.toc ?? [])
-        let current: TOCItem | null = null
-        for (const item of items) {
-            const index = this.book?.resolveHref?.(item.href)?.index
-            if (typeof index === 'number' && index <= this.pageIndex) current = item
-        }
-        return current
     }
 
     private emit<K extends keyof RendererEventMap>(event: K, payload: RendererEventMap[K]): void
@@ -277,25 +236,3 @@ export class BrowserFixedRenderer implements Renderer {
 
 export const createBrowserFixedRenderer = (config: BrowserFixedRendererConfig): BrowserFixedRenderer =>
     new BrowserFixedRenderer(config)
-
-async function readFixedPages(document: FixedDocument): Promise<readonly FixedPageInfo[]> {
-    if (document.getPages) return document.getPages()
-    const pages: FixedPageInfo[] = []
-    for (let index = 0; index < document.pageCount; index++) {
-        pages.push(await document.getPage(index))
-    }
-    return pages
-}
-
-function parsePageHref(href: string): number | null {
-    const match = href.match(/^pdf:page:(\d+)$/)
-    return match ? Number(match[1]) : null
-}
-
-function clampPageIndex(index: number, pageCount: number): number {
-    return Math.max(0, Math.min(Math.max(0, pageCount - 1), Math.trunc(index)))
-}
-
-function flattenTOC(items: readonly TOCItem[]): TOCItem[] {
-    return items.flatMap(item => item.subitems?.length ? [item, ...flattenTOC(item.subitems)] : [item])
-}
