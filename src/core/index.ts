@@ -119,6 +119,14 @@ export {
     type FixedPageSequenceConfig,
 } from './fixed-page-sequence'
 export {
+    createFixedPageContentRenderContext,
+    resolveFixedPageFit,
+    type FixedPageContentRenderContext,
+    type FixedPageFit,
+    type FixedPageFitOptions,
+    type FixedViewportMetrics,
+} from './fixed-page-model'
+export {
     createSectionIndexLookup,
     findSectionIndex,
     findTOCItemForSection,

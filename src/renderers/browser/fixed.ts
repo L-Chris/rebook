@@ -6,12 +6,16 @@
  * content, text, annotation, and overlay layers.
  */
 
-import type { FixedPageInfo, FixedPageRenderer } from '../../core/fixed-document'
+import type { FixedPageRenderer } from '../../core/fixed-document'
 import { FixedPageSequence } from '../../core/fixed-page-sequence'
+import {
+    createFixedPageContentRenderContext,
+    resolveFixedPageFit,
+    type FixedViewportMetrics,
+} from '../../core/fixed-page-model'
 import type { Book, LinkEvent, LoadEvent, RelocateEvent } from '../../core/types'
 import type { EventListener, LayoutMode, ReaderMark, RendererConfig, RendererStyles } from '../../core/renderer'
 import { UnsupportedFormatError } from '../../core/errors'
-import { parseCSSPixels } from '../../core/renderer-utils'
 import { RendererEventDispatcher } from '../../core/renderer-state'
 import type { BrowserPageCompositor, BrowserPageSurface } from './compositor'
 import { BrowserFixedContentRenderer, type BrowserFixedContentRenderContext, type BrowserFixedVisualRenderer } from './fixed-content'
@@ -57,11 +61,13 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     private styles: RendererStyles
     private layoutMode: LayoutMode
     private lastLocation: RelocateEvent | null = null
+    private readonly devicePixelRatio?: number | (() => number)
 
     constructor(config: BrowserFixedRendererConfig) {
         this.styles = config.styles ?? {}
         this.layoutMode = config.layout ?? 'paginated'
         this.beforeNavigate = config.beforeNavigate
+        this.devicePixelRatio = config.devicePixelRatio
 
         this.host = new BrowserSurfaceHost({
             container: config.container,
@@ -194,15 +200,16 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         const page = sequence?.currentPage
         if (!sequence || !page) return
 
-        const margin = parseCSSPixels(this.styles.margin, DEFAULT_MARGIN)
-        const scale = this.getPageScale(page, margin)
-        this.pageHost.style.padding = `${margin}px`
-        const rendered = await this.surfacePipeline.render({
-            document: sequence.document,
-            page,
-            scale,
-            styles: this.styles,
+        const fit = resolveFixedPageFit(page, this.getViewportMetrics(), {
+            margin: this.styles.margin,
+            maxInlineSize: this.styles.maxInlineSize,
+            defaultMargin: DEFAULT_MARGIN,
+            devicePixelRatio: this.getDevicePixelRatio(),
         })
+        this.pageHost.style.padding = `${fit.margin}px`
+        const rendered = await this.surfacePipeline.render(
+            createFixedPageContentRenderContext(sequence.document, page, this.styles, fit),
+        )
         if (!rendered) return
 
         this.scroller.scrollTop = 0
@@ -210,11 +217,20 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         this.emitRelocate(reason)
     }
 
-    private getPageScale(page: FixedPageInfo, margin: number): number {
-        const availableWidth = Math.max(1, this.scroller.clientWidth - margin * 2)
-        const maxInline = parseCSSPixels(this.styles.maxInlineSize, availableWidth)
-        const targetWidth = Math.max(1, Math.min(availableWidth, maxInline))
-        return targetWidth / Math.max(1, page.width)
+    private getViewportMetrics(): FixedViewportMetrics {
+        return {
+            inlineSize: this.scroller.clientWidth,
+            blockSize: this.scroller.clientHeight,
+        }
+    }
+
+    private getDevicePixelRatio(): number {
+        const value = typeof this.devicePixelRatio === 'function'
+            ? this.devicePixelRatio()
+            : this.devicePixelRatio
+        const fallback = globalThis.devicePixelRatio
+        const resolved = value ?? (typeof fallback === 'number' ? fallback : 1)
+        return Number.isFinite(resolved) && resolved > 0 ? resolved : 1
     }
 
     private emitRelocate(reason: string): void {

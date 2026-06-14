@@ -19,6 +19,7 @@ export default defineConfig({
       entry: {
         index: resolve(__dirname, 'src/index.ts'),
         'core/content-engine-router': resolve(__dirname, 'src/core/content-engine-router.ts'),
+        'core/fixed-page-model': resolve(__dirname, 'src/core/fixed-page-model.ts'),
         'core/fixed-text-provider': resolve(__dirname, 'src/core/fixed-text-provider.ts'),
         'core/fixed-document': resolve(__dirname, 'src/core/fixed-document.ts'),
         'core/location': resolve(__dirname, 'src/core/location.ts'),

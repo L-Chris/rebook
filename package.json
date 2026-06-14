@@ -18,6 +18,9 @@
       "core/fixed-document": [
         "dist/core/fixed-document.d.ts"
       ],
+      "core/fixed-page-model": [
+        "dist/core/fixed-page-model.d.ts"
+      ],
       "core/fixed-text-provider": [
         "dist/core/fixed-text-provider.d.ts"
       ],
@@ -129,6 +132,10 @@
     "./core/fixed-document": {
       "types": "./dist/core/fixed-document.d.ts",
       "import": "./dist/core/fixed-document.js"
+    },
+    "./core/fixed-page-model": {
+      "types": "./dist/core/fixed-page-model.d.ts",
+      "import": "./dist/core/fixed-page-model.js"
     },
     "./core/fixed-text-provider": {
       "types": "./dist/core/fixed-text-provider.d.ts",

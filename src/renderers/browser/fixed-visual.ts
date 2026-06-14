@@ -1,17 +1,12 @@
-import type { FixedDocument, FixedPageInfo, FixedPageRenderer } from '../../core/fixed-document'
-import type { RendererStyles } from '../../core/renderer'
+import type { FixedDocument, FixedPageRenderer } from '../../core/fixed-document'
+import type { FixedPageContentRenderContext } from '../../core/fixed-page-model'
 import { isPdfFixedDocument } from '../../pdf/fixed-document'
 import type { BrowserPageSurfaceLayer } from './compositor'
 import { BrowserPdfCanvasRenderer } from './pdf-canvas'
 
 export type BrowserFixedVisualRendererMatch = boolean | number
 
-export interface BrowserFixedVisualRenderContext {
-    readonly document: FixedDocument
-    readonly page: FixedPageInfo
-    readonly scale: number
-    readonly styles: RendererStyles
-}
+export interface BrowserFixedVisualRenderContext extends FixedPageContentRenderContext {}
 
 export interface BrowserFixedVisualRenderer {
     readonly id: string
