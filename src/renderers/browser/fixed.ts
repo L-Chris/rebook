@@ -17,7 +17,7 @@ import { UnsupportedFormatError } from '../../core/errors'
 import { parseCSSPixels } from '../../core/renderer-utils'
 import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
 import type { BrowserPageCompositor } from './compositor'
-import { BrowserFixedContentRenderer } from './fixed-content'
+import { BrowserFixedContentRenderer, type BrowserFixedVisualRenderer } from './fixed-content'
 import { BrowserSurfaceHost } from './surface-host'
 
 interface RendererEventMap {
@@ -37,6 +37,8 @@ export interface BrowserFixedRendererConfig extends RendererConfig {
      */
     fixedPageRenderer?: FixedPageRenderer<HTMLCanvasElement>
     fixedContentRenderer?: BrowserFixedContentRenderer
+    /** Custom fixed-page visual renderers evaluated before built-in image/PDF renderers. */
+    fixedVisualRenderers?: readonly BrowserFixedVisualRenderer[]
     pageCompositor?: BrowserPageCompositor
     devicePixelRatio?: number | (() => number)
 }
@@ -77,6 +79,7 @@ export class BrowserFixedRenderer implements Renderer {
         this.pageHost = this.host.scrollExtent
         this.contentRenderer = config.fixedContentRenderer ?? new BrowserFixedContentRenderer({
             fixedPageRenderer: config.fixedPageRenderer,
+            visualRenderers: config.fixedVisualRenderers,
             devicePixelRatio: config.devicePixelRatio,
         })
     }

@@ -2,9 +2,16 @@ export { BrowserRenderer, createBrowserRenderer, type BrowserRendererConfig } fr
 export { BrowserFixedRenderer, createBrowserFixedRenderer, type BrowserFixedRendererConfig } from './fixed'
 export {
     BrowserFixedContentRenderer,
+    BrowserFixedCanvasVisualRenderer,
+    BrowserFixedImageVisualRenderer,
     createBrowserFixedContentRenderer,
+    selectFixedVisualRenderer,
+    type BrowserFixedCanvasVisualRendererConfig,
     type BrowserFixedContentRenderContext,
     type BrowserFixedContentRendererConfig,
+    type BrowserFixedVisualRenderContext,
+    type BrowserFixedVisualRenderer,
+    type BrowserFixedVisualRendererMatch,
 } from './fixed-content'
 export {
     BrowserReflowableContentRenderer,
@@ -37,4 +44,10 @@ export {
     type BrowserPdfCanvasRendererConfig,
     type BrowserPdfCanvasRenderResult,
 } from './pdf-canvas'
-export { ReaderView, createReader, type ReaderConfig } from './view'
+export {
+    ReaderView,
+    createReader,
+    type BrowserRendererRoute,
+    type BrowserRendererRouteContext,
+    type ReaderConfig,
+} from './view'

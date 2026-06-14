@@ -380,6 +380,72 @@ describe('BrowserRenderer', () => {
         reader.destroy()
     })
 
+    it('routes reflowable books to the configured reflowable renderer', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '72')
+        document.body.appendChild(container)
+
+        const reflowableRenderer = new FakeFixedRenderer()
+        const book: Book = {
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 22,
+                format: 'xhtml',
+                load: () => '<p>Route me</p>',
+            }],
+        }
+
+        const reader = createReader({
+            container,
+            createReflowableRenderer: () => reflowableRenderer,
+        })
+        await reader.openBook(book)
+
+        expect(reflowableRenderer.opened).toBe(1)
+        expect(reflowableRenderer.book).toBe(book)
+        expect(container.children.length).toBe(0)
+
+        reader.destroy()
+    })
+
+    it('lets custom browser renderer routes override default format routes', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '72')
+        document.body.appendChild(container)
+
+        const routedRenderer = new FakeFixedRenderer()
+        const book: Book = {
+            metadata: { renderer: 'custom-route' },
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 24,
+                format: 'xhtml',
+                load: () => '<p>Custom route</p>',
+            }],
+        }
+
+        const reader = createReader({
+            container,
+            rendererRoutes: [{
+                id: 'custom-route',
+                match: item => item.metadata?.renderer === 'custom-route' ? 100 : false,
+                createRenderer: ({ hooks }) => {
+                    expect(typeof hooks?.beforeNavigate).toBe('function')
+                    return routedRenderer
+                },
+            }],
+        })
+        await reader.openBook(book)
+
+        expect(routedRenderer.opened).toBe(1)
+        expect(routedRenderer.book).toBe(book)
+        expect(container.children.length).toBe(0)
+
+        reader.destroy()
+    })
+
     it('renders fixed-document books with the built-in browser fixed renderer', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
@@ -457,6 +523,65 @@ describe('BrowserRenderer', () => {
         expect(container.textContent).toContain('Fixed page 2')
         expect(reader.getLocation()?.pageItem?.label).toBe('2')
         expect(container.querySelector('[data-rebook-annotation="true"]')).toBeNull()
+
+        reader.destroy()
+    })
+
+    it('renders custom fixed formats through injected visual content renderers', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '160')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [],
+            fixedDocument: {
+                kind: 'fixed-document',
+                format: 'diagram',
+                pageCount: 1,
+                getPage: () => ({ index: 0, width: 240, height: 120 }),
+                getPageText: () => ({
+                    pageIndex: 0,
+                    width: 240,
+                    height: 120,
+                    text: 'Diagram text',
+                    runs: [{
+                        text: 'Diagram text',
+                        transform: [16, 0, 0, 16, 20, 40],
+                        fontSize: 16,
+                    }],
+                }),
+            },
+        }
+
+        const reader = createReader({
+            container,
+            fixedVisualRenderers: [{
+                id: 'diagram-visual',
+                match: document => document.format === 'diagram',
+                renderLayer: () => {
+                    const element = document.createElement('div')
+                    element.dataset.diagramVisual = 'true'
+                    element.textContent = 'Diagram visual'
+                    return {
+                        id: 'content',
+                        kind: 'content',
+                        contentKind: 'dom',
+                        content: element,
+                        selectable: false,
+                        pointerEvents: 'none',
+                    }
+                },
+            }],
+        })
+        await reader.openBook(book)
+
+        expect(container.querySelector('[data-diagram-visual="true"]')).toBeTruthy()
+        expect(container.querySelector('[data-rebook-surface-kind="fixed-page"]')).toBeTruthy()
+        expect(container.querySelector('[data-rebook-surface-layer="text"]')).toBeTruthy()
+        expect((container.querySelector('[data-rebook-fixed-text-layer="true"] span') as HTMLElement | null)?.style.color).toBe('transparent')
+        expect(container.textContent).toContain('Diagram visual')
+        expect(container.textContent).toContain('Diagram text')
 
         reader.destroy()
     })

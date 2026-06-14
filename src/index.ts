@@ -380,12 +380,28 @@ export type {
 
 // Browser renderer
 export {
+    BrowserFixedCanvasVisualRenderer,
+    BrowserFixedContentRenderer,
+    BrowserFixedImageVisualRenderer,
     BrowserRenderer,
     createBrowserRenderer,
+    createBrowserFixedContentRenderer,
     ReaderView,
     createReader,
+    selectFixedVisualRenderer,
 } from './renderers/browser'
-export type { BrowserRendererConfig, ReaderConfig } from './renderers/browser'
+export type {
+    BrowserFixedCanvasVisualRendererConfig,
+    BrowserFixedContentRenderContext,
+    BrowserFixedContentRendererConfig,
+    BrowserFixedVisualRenderContext,
+    BrowserFixedVisualRenderer,
+    BrowserFixedVisualRendererMatch,
+    BrowserRendererConfig,
+    BrowserRendererRoute,
+    BrowserRendererRouteContext,
+    ReaderConfig,
+} from './renderers/browser'
 
 // WeChat Mini Program renderer
 export {

@@ -12,10 +12,21 @@ import {
     createRendererRouter,
     matchesFixedDocument,
     matchesReflowableBook,
+    type RendererRoute,
 } from '../../core/renderer-router'
 import { BrowserDOMAdapter, BrowserURLFactory } from '../../adapters/browser'
 import { BrowserRenderer, type BrowserRendererConfig } from './renderer'
-import { BrowserFixedRenderer } from './fixed'
+import { BrowserFixedRenderer, type BrowserFixedRendererConfig } from './fixed'
+
+export interface BrowserRendererRouteContext {
+    readonly hooks?: RendererNavigationHooks
+}
+
+export interface BrowserRendererRoute {
+    readonly id: string
+    match: RendererRoute['match']
+    createRenderer(context: BrowserRendererRouteContext): Renderer
+}
 
 export interface ReaderConfig extends BrowserRendererConfig {
     /** Parser options */
@@ -27,6 +38,22 @@ export interface ReaderConfig extends BrowserRendererConfig {
      * ReaderView uses BrowserFixedRenderer.
      */
     createFixedRenderer?: (hooks?: RendererNavigationHooks) => Renderer
+    fixedPageRenderer?: BrowserFixedRendererConfig['fixedPageRenderer']
+    fixedContentRenderer?: BrowserFixedRendererConfig['fixedContentRenderer']
+    /** Custom fixed-page visual renderers evaluated before built-in image/PDF renderers. */
+    fixedVisualRenderers?: BrowserFixedRendererConfig['fixedVisualRenderers']
+    devicePixelRatio?: BrowserFixedRendererConfig['devicePixelRatio']
+    /**
+     * Renderer factory override for reflowable books. When omitted, ReaderView
+     * uses BrowserRenderer.
+     */
+    createReflowableRenderer?: (hooks?: RendererNavigationHooks) => Renderer
+    /**
+     * Additional browser renderer routes, evaluated before the default fixed
+     * and reflowable routes. Use this to register new content renderers without
+     * branching in application code.
+     */
+    rendererRoutes?: readonly BrowserRendererRoute[]
 }
 
 /**
@@ -52,28 +79,43 @@ function createBrowserReaderSessionConfig(config: ReaderConfig): ReaderSessionCo
                 ...hooks,
                 beforeNavigate,
             }
-            return createRendererRouter([
-                {
-                    id: 'fixed-document',
-                    match: matchesFixedDocument,
-                    createRenderer: () => config.createFixedRenderer
-                        ? config.createFixedRenderer(rendererHooks)
-                        : new BrowserFixedRenderer({
-                            ...config,
-                            beforeNavigate,
-                        }),
-                },
-                {
-                    id: 'reflowable-browser',
-                    match: matchesReflowableBook,
-                    createRenderer: () => new BrowserRenderer({
-                        ...config,
-                        beforeNavigate,
-                    }),
-                },
-            ])
+            return createRendererRouter(createBrowserRendererRoutes(config, rendererHooks))
         },
     }
+}
+
+function createBrowserRendererRoutes(
+    config: ReaderConfig,
+    hooks: RendererNavigationHooks,
+): RendererRoute[] {
+    const context: BrowserRendererRouteContext = { hooks }
+    return [
+        ...(config.rendererRoutes ?? []).map((route): RendererRoute => ({
+            id: route.id,
+            match: route.match,
+            createRenderer: () => route.createRenderer(context),
+        })),
+        {
+            id: 'fixed-document',
+            match: matchesFixedDocument,
+            createRenderer: () => config.createFixedRenderer
+                ? config.createFixedRenderer(hooks)
+                : new BrowserFixedRenderer({
+                    ...config,
+                    beforeNavigate: hooks.beforeNavigate,
+                }),
+        },
+        {
+            id: 'reflowable-browser',
+            match: matchesReflowableBook,
+            createRenderer: () => config.createReflowableRenderer
+                ? config.createReflowableRenderer(hooks)
+                : new BrowserRenderer({
+                    ...config,
+                    beforeNavigate: hooks.beforeNavigate,
+                }),
+        },
+    ]
 }
 
 function createBeforeNavigate(
