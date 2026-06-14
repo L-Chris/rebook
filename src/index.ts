@@ -208,6 +208,12 @@ export type {
     TextSearchResult,
 } from './core/location'
 
+export {
+    createStaticTextProvider,
+    searchTextChunks,
+    type StaticTextProviderOptions,
+} from './core/text-provider'
+
 export { REBOOK_PAGE_SURFACE_MODEL_VERSION } from './core/page-surface'
 export type {
     ContentRenderer,

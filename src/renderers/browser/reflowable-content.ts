@@ -1,7 +1,8 @@
 import type { ContentRenderer } from '../../core/page-surface'
 import type { LayoutMode, ReaderMark, RendererStyles } from '../../core/renderer'
-import { bookPositionMatchesReflowableRange } from '../../core/location'
+import { bookPositionMatchesReflowableRange, type BookRange, type Rect, type TextChunk, type TextProvider } from '../../core/location'
 import { parseCSSPixels } from '../../core/renderer-utils'
+import { searchTextChunks } from '../../core/text-provider'
 import {
     getVisibleLines,
     type LineRange,
@@ -94,6 +95,7 @@ export class BrowserReflowableContentRenderer implements ContentRenderer<Browser
                 range: window,
                 sectionIndex: context.sectionIndex,
             },
+            textProvider: createReflowableTextProvider(context, window.lines),
             destroy() {
                 for (const layer of layers) layer.destroy?.()
             },
@@ -390,6 +392,88 @@ function applyLineMarks(element: HTMLElement, line: LineRange, context: BrowserR
 function getLineMarks(line: LineRange, context: BrowserReflowableContentRenderContext): ReaderMark[] {
     if (context.sectionIndex < 0) return []
     return context.marks.filter(mark => markMatchesLine(mark, line, context.sectionIndex))
+}
+
+interface ReflowableTextChunkRecord {
+    readonly chunk: TextChunk
+    readonly range: BookRange
+    readonly line: LineRange
+}
+
+function createReflowableTextProvider(
+    context: BrowserReflowableContentRenderContext,
+    lines: readonly LineRange[],
+): TextProvider {
+    const getRecords = (range?: BookRange) =>
+        lines
+            .filter(line => line.text)
+            .filter(line => !range || lineMatchesBookRange(line, context.sectionIndex, range))
+            .map(line => lineToTextChunkRecord(line, context))
+
+    return {
+        getText(range?: BookRange) {
+            return getRecords(range).map(record => record.chunk)
+        },
+        search(query: string, range?: BookRange) {
+            const records = getRecords(range)
+            return searchTextChunks(
+                records.map(record => record.chunk),
+                query,
+                (_chunk, index) => records[index]?.range,
+            )
+        },
+    }
+}
+
+function lineToTextChunkRecord(line: LineRange, context: BrowserReflowableContentRenderContext): ReflowableTextChunkRecord {
+    const range = lineToBookRange(line, context.sectionIndex)
+    const position = getRenderedLinePosition(line, context.layout, context.layoutMode)
+    const rect: Rect = {
+        x: position.left + (line.inlineOffset ?? 0),
+        y: position.top,
+        width: Math.max(1, line.width),
+        height: line.height,
+    }
+    return {
+        line,
+        range,
+        chunk: {
+            id: `reflowable:${context.sectionIndex}:line:${line.index}`,
+            text: line.text,
+            location: range.start,
+            rects: [rect],
+        },
+    }
+}
+
+function lineToBookRange(line: LineRange, sectionIndex: number): BookRange {
+    const blockId = line.block?.id
+    const startOffset = line.start?.cursor.graphemeIndex
+    const endOffset = line.end?.cursor.graphemeIndex ?? startOffset
+    return {
+        start: {
+            type: 'reflowable',
+            sectionIndex,
+            ...(blockId ? { blockId } : {}),
+            ...(startOffset !== undefined ? { offset: startOffset } : {}),
+        },
+        end: {
+            type: 'reflowable',
+            sectionIndex,
+            ...(blockId ? { blockId } : {}),
+            ...(endOffset !== undefined ? { offset: endOffset } : {}),
+        },
+    }
+}
+
+function lineMatchesBookRange(line: LineRange, sectionIndex: number, range: BookRange): boolean {
+    return bookPositionMatchesReflowableRange(range, {
+        sectionIndex,
+        blockId: line.block?.id,
+        startOffset: line.start?.cursor.graphemeIndex,
+        endOffset: line.end?.cursor.graphemeIndex,
+        offsetsReliable: (line.block?.segments.length ?? 0) === 1,
+    })
 }
 
 function getRenderedLinePosition(

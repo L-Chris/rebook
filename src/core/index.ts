@@ -63,6 +63,11 @@ export {
     searchChapters,
     getSectionSearchText,
 } from '../search'
+export {
+    createStaticTextProvider,
+    searchTextChunks,
+    type StaticTextProviderOptions,
+} from './text-provider'
 export type {
     SearchScope,
     SearchOptions,

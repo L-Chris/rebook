@@ -7,7 +7,8 @@ import type {
 } from '../../core/fixed-document'
 import type { ContentRenderer } from '../../core/page-surface'
 import type { ReaderMark, RendererStyles } from '../../core/renderer'
-import { getFixedPositionRects, type Rect } from '../../core/location'
+import { getBookPositionLocations, getFixedPositionRects, type BookLocation, type BookRange, type Rect, type TextChunk, type TextProvider } from '../../core/location'
+import { createStaticTextProvider } from '../../core/text-provider'
 import { isPdfFixedDocument } from '../../pdf/fixed-document'
 import { BrowserPdfCanvasRenderer } from './pdf-canvas'
 import type { BrowserPageSurface, BrowserPageSurfaceLayer } from './compositor'
@@ -89,6 +90,7 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
                 textLayer: text,
                 visualRendered: visual !== null,
             },
+            textProvider: createFixedPageTextProvider(text, context.document.format),
             destroy() {
                 for (const layer of layers) layer.destroy?.()
             },
@@ -372,6 +374,54 @@ function emptyTextLayer(page: FixedPageInfo): FixedPageTextLayer {
         runs: [],
         text: '',
     }
+}
+
+function createFixedPageTextProvider(layer: FixedPageTextLayer, format: string): TextProvider {
+    return createStaticTextProvider(
+        () => fixedTextChunks(layer, format),
+        {
+            filterChunk: (chunk, range) => fixedTextChunkMatchesRange(chunk, range, format, layer.pageIndex),
+        },
+    )
+}
+
+function fixedTextChunks(layer: FixedPageTextLayer, format: string): TextChunk[] {
+    return layer.runs
+        .map((run, index): TextChunk | null => {
+            if (!run.text) return null
+            const rect = fixedTextRunRect(run)
+            const location: BookLocation = format === 'cbz'
+                ? { type: 'image', pageIndex: layer.pageIndex, rect }
+                : { type: 'fixed', format, pageIndex: layer.pageIndex, rect }
+            return {
+                id: `${format}:${layer.pageIndex}:text:${index}`,
+                text: run.text,
+                location,
+                rects: [rect],
+            }
+        })
+        .filter((chunk): chunk is TextChunk => chunk !== null)
+}
+
+function fixedTextRunRect(run: FixedPageTextRun): Rect {
+    const matrix = run.transform
+    const fontSize = run.fontSize ?? Math.max(Math.abs(matrix[0]), Math.abs(matrix[3]), 1)
+    const height = run.height ?? fontSize
+    return {
+        x: matrix[4],
+        y: matrix[5] - height,
+        width: run.width ?? Math.max(fontSize, run.text.length * fontSize * 0.5),
+        height,
+    }
+}
+
+function fixedTextChunkMatchesRange(_chunk: TextChunk, range: BookRange, format: string, pageIndex: number): boolean {
+    if (getFixedPositionRects(range, { format, pageIndex }).length > 0) return true
+    return getBookPositionLocations(range).some(location => {
+        if (location.type !== 'fixed' && location.type !== 'image') return false
+        if (location.pageIndex !== pageIndex) return false
+        return location.type !== 'fixed' || !location.format || location.format === format
+    })
 }
 
 function createCanvasFontAscentRatioMeasurer(): ((fontSize: number, fontFamily: string, fontStyle?: string, fontWeight?: string) => number) | undefined {

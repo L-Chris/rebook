@@ -4,13 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Book, RelocateEvent } from '../../src/core/types'
 import type { EventListener, LayoutMode, ReaderMark, Renderer, RendererStyles } from '../../src/core/renderer'
 import type { TOCViewItem } from '../../src/core/reader'
+import type { LineRange } from '../../src/core/pretext'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import { epub } from '../../src/parsers/epub'
 import { mobi } from '../../src/parsers/mobi'
 import { CBZParser } from '../../src/parsers/cbz'
 import { PDFParser } from '../../src/parsers/pdf'
 import { withTrialLimit } from '../../src/plugins/trial-limit'
-import { createReader, BrowserPageCompositor, BrowserRenderer, BrowserSurfaceHost, BrowserViewportHost } from '../../src/renderers/browser'
+import { createReader, BrowserFixedContentRenderer, BrowserPageCompositor, BrowserRenderer, BrowserReflowableContentRenderer, BrowserSurfaceHost, BrowserViewportHost } from '../../src/renderers/browser'
 import { makeSimplePdf } from '../fixtures/pdf-fixture'
 import { createTestCBZ } from '../fixtures/cbz-fixture'
 
@@ -221,6 +222,123 @@ describe('BrowserRenderer', () => {
 
         compositor.destroy()
         expect(host.children.length).toBe(0)
+    })
+
+    it('exposes fixed page text through PageSurface text providers', async () => {
+        const renderer = new BrowserFixedContentRenderer({
+            visualRenderers: [{
+                id: 'fixed-test-visual',
+                match: () => true,
+                renderLayer: () => {
+                    const content = document.createElement('div')
+                    content.dataset.fixedVisual = 'true'
+                    return { id: 'content', kind: 'content', contentKind: 'dom', content }
+                },
+            }],
+        })
+        const surface = await renderer.renderSurface({
+            document: {
+                kind: 'fixed-document',
+                format: 'pdf',
+                pageCount: 1,
+                getPage: () => ({ index: 0, width: 300, height: 144 }),
+                getPageText: () => ({
+                    pageIndex: 0,
+                    width: 300,
+                    height: 144,
+                    text: 'Surface text provider',
+                    runs: [{
+                        text: 'Surface text provider',
+                        transform: [18, 0, 0, 18, 48, 72],
+                        fontSize: 18,
+                        width: 180,
+                    }],
+                }),
+            },
+            page: { index: 0, width: 300, height: 144 },
+            scale: 1,
+            styles: {},
+        })
+
+        const chunks = await surface.textProvider!.getText()
+        const results = await surface.textProvider!.search!('provider')
+
+        expect(chunks[0]).toMatchObject({
+            text: 'Surface text provider',
+            location: { type: 'fixed', format: 'pdf', pageIndex: 0 },
+        })
+        expect(chunks[0].rects?.[0]).toMatchObject({ x: 48, y: 54, width: 180, height: 18 })
+        expect(results[0].range.start).toMatchObject({ type: 'fixed', format: 'pdf', pageIndex: 0 })
+        expect(await surface.textProvider!.getText({
+            start: { type: 'fixed', format: 'pdf', pageIndex: 1 },
+        })).toHaveLength(0)
+
+        surface.destroy?.()
+        renderer.destroy()
+    })
+
+    it('exposes reflowable page text through PageSurface text providers', async () => {
+        const renderer = new BrowserReflowableContentRenderer()
+        const line: LineRange = {
+            index: 0,
+            kind: 'text',
+            block: {
+                id: 'p1',
+                type: 'paragraph',
+                segments: [{ text: 'Reader core text provider' }],
+            },
+            start: { segmentIndex: 0, cursor: { segmentIndex: 0, graphemeIndex: 0 } },
+            end: { segmentIndex: 0, cursor: { segmentIndex: 0, graphemeIndex: 25 } },
+            text: 'Reader core text provider',
+            width: 180,
+            top: 12,
+            height: 24,
+            segments: [],
+        }
+        const surface = renderer.renderSurface({
+            sectionIndex: 2,
+            pageIndex: 0,
+            layoutMode: 'paginated',
+            layout: {
+                margin: 16,
+                gap: 24,
+                columnWidth: 260,
+                columns: 1,
+                pageHeight: 120,
+                columnHeight: 88,
+                pagePaddingBlock: 16,
+                totalHeight: 120,
+                pageCount: 1,
+            },
+            lines: [line],
+            prepared: null,
+            styles: {},
+            marks: [],
+            baseTextStyle: { fontFamily: 'serif', fontSize: 16, lineHeight: 1.5 },
+            lineHeightPixels: 24,
+            sourceScrollTop: 0,
+            sourceViewportHeight: 120,
+            surfaceWidth: 260,
+            surfaceHeight: 120,
+        })
+
+        const chunks = await surface.textProvider!.getText()
+        const scoped = await surface.textProvider!.getText({
+            start: { type: 'reflowable', sectionIndex: 2, blockId: 'p1', offset: 4 },
+            end: { type: 'reflowable', sectionIndex: 2, blockId: 'p1', offset: 10 },
+        })
+        const results = await surface.textProvider!.search!('core')
+
+        expect(chunks[0]).toMatchObject({
+            id: 'reflowable:2:line:0',
+            text: 'Reader core text provider',
+            location: { type: 'reflowable', sectionIndex: 2, blockId: 'p1', offset: 0 },
+        })
+        expect(chunks[0].rects?.[0]).toMatchObject({ x: 0, y: 28, width: 180, height: 24 })
+        expect(scoped).toHaveLength(1)
+        expect(results[0].range.start).toMatchObject({ type: 'reflowable', sectionIndex: 2, blockId: 'p1' })
+
+        surface.destroy?.()
     })
 
     it('renders only visible Pretext line ranges into minimal DOM rows', async () => {
