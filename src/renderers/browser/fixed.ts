@@ -26,6 +26,8 @@ import { getNextSpreadIndex, getPreviousSpreadIndex, getSpreadItems } from '../.
 import type { BrowserPageCompositor, BrowserPageSurface } from './compositor'
 import {
     BrowserFixedContentRenderer,
+    type BrowserFixedPainter,
+    type BrowserFixedPainterPreference,
     type BrowserFixedContentRenderContext,
     type BrowserFixedSpreadPageRenderContext,
     type BrowserFixedVisualRenderer,
@@ -52,6 +54,10 @@ export interface BrowserFixedRendererConfig extends RendererConfig {
      */
     fixedPageRenderer?: FixedPageRenderer<HTMLCanvasElement>
     fixedContentRenderer?: BrowserFixedContentRenderer
+    /** Built-in fixed visual painter preference. Defaults to auto, preferring WebGPU when available. */
+    fixedPainter?: BrowserFixedPainterPreference
+    /** Custom fixed-page painters evaluated by the built-in painter visual renderer. */
+    fixedPainters?: readonly BrowserFixedPainter[]
     /** Custom fixed-page visual renderers evaluated before built-in image/PDF renderers. */
     fixedVisualRenderers?: readonly BrowserFixedVisualRenderer[]
     pageCompositor?: BrowserPageCompositor
@@ -97,6 +103,8 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         this.pageHost = this.host.scrollExtent
         const contentRenderer = config.fixedContentRenderer ?? new BrowserFixedContentRenderer({
             fixedPageRenderer: config.fixedPageRenderer,
+            fixedPainter: config.fixedPainter,
+            fixedPainters: config.fixedPainters,
             visualRenderers: config.fixedVisualRenderers,
             devicePixelRatio: config.devicePixelRatio,
         })

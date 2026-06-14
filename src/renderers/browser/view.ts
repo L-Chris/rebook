@@ -40,7 +40,9 @@ export interface ReaderConfig extends BrowserRendererConfig {
     createFixedContentEngine?: (hooks?: RendererNavigationHooks) => BrowserContentEngine
     fixedPageRenderer?: BrowserFixedRendererConfig['fixedPageRenderer']
     fixedContentRenderer?: BrowserFixedRendererConfig['fixedContentRenderer']
-    /** Custom fixed-page visual renderers evaluated before built-in image/PDF renderers. */
+    fixedPainter?: BrowserFixedRendererConfig['fixedPainter']
+    fixedPainters?: BrowserFixedRendererConfig['fixedPainters']
+    /** Custom fixed-page visual renderers evaluated before the built-in fixed-page painter renderer. */
     fixedVisualRenderers?: BrowserFixedRendererConfig['fixedVisualRenderers']
     devicePixelRatio?: BrowserFixedRendererConfig['devicePixelRatio']
     /**

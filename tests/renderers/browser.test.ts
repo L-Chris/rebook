@@ -1024,8 +1024,11 @@ describe('BrowserRenderer', () => {
 
         expect(container.querySelector('[data-rebook-fixed-page="true"]')).toBeTruthy()
         expect(container.querySelector('[data-rebook-fixed-canvas="true"]')).toBeTruthy()
+        expect((container.querySelector('[data-rebook-fixed-canvas="true"]') as HTMLElement | null)?.dataset.rebookFixedPainterBackend).toBe('canvas2d')
         expect((container.querySelector('[data-rebook-fixed-text-layer="true"] span') as HTMLElement | null)?.style.color).toBe('transparent')
         expect(container.textContent).toContain('Hello Rebook PDF')
+        expect((reader.getCurrentSurface()?.metadata?.paint as { backend?: string; ms?: number } | undefined))
+            .toMatchObject({ backend: 'canvas2d' })
 
         reader.destroy()
     })
@@ -1073,8 +1076,11 @@ describe('BrowserRenderer', () => {
         expect(book.fixedDocument?.format).toBe('cbz')
         expect(container.querySelector('[data-rebook-page-surface="true"]')).toBeTruthy()
         expect(container.querySelector('[data-rebook-surface-kind="image-page"]')).toBeTruthy()
-        expect(container.querySelector('[data-rebook-fixed-image="true"]')).toBeTruthy()
-        expect((container.querySelector('[data-rebook-fixed-image="true"]') as HTMLImageElement | null)?.src).toContain('data:image/')
+        expect(container.querySelector('[data-rebook-fixed-canvas="true"]')).toBeTruthy()
+        expect(container.querySelector('[data-rebook-fixed-canvas-image="true"]')).toBeTruthy()
+        expect((container.querySelector('[data-rebook-fixed-canvas="true"]') as HTMLElement | null)?.dataset.rebookFixedPainterBackend).toBe('canvas2d')
+        expect((reader.getCurrentSurface()?.metadata?.paint as { backend?: string; ms?: number } | undefined))
+            .toMatchObject({ backend: 'canvas2d' })
 
         reader.setMark({
             id: 'comic-panel',
@@ -1091,6 +1097,25 @@ describe('BrowserRenderer', () => {
         expect(container.querySelector('[data-rebook-annotation-layer="true"]')).toBeTruthy()
         expect(annotation?.dataset.markId).toBe('comic-panel')
         expect(annotation?.classList.contains('rebook-mark-panel')).toBe(true)
+
+        reader.destroy()
+    })
+
+    it('falls back to the canvas painter when WebGPU is preferred but unavailable', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '160')
+        document.body.appendChild(container)
+
+        const input = await createTestCBZ({ pages: 1 })
+        const book = await new CBZParser().parse(input, { domAdapter: new NodeDOMAdapter() })
+        const reader = createReader({ container, fixedPainter: 'webgpu' })
+        await reader.openBook(book)
+
+        expect(container.querySelector('[data-rebook-fixed-webgpu="true"]')).toBeNull()
+        expect((container.querySelector('[data-rebook-fixed-canvas="true"]') as HTMLElement | null)?.dataset.rebookFixedPainterBackend).toBe('canvas2d')
+        expect((reader.getCurrentSurface()?.metadata?.paint as { backend?: string; ms?: number } | undefined))
+            .toMatchObject({ backend: 'canvas2d' })
 
         reader.destroy()
     })

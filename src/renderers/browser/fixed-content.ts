@@ -13,8 +13,12 @@ import type { BrowserPageSurface, BrowserPageSurfaceLayer, BrowserSpreadPageSurf
 import {
     createDefaultFixedVisualRenderers,
     selectFixedVisualRenderer,
+    type BrowserFixedPainter,
+    type BrowserFixedPainterPreference,
+    type BrowserFixedPaintMetric,
     type BrowserFixedVisualRenderer,
     type BrowserFixedVisualRenderContext,
+    type BrowserFixedVisualLayer,
 } from './fixed-visual'
 
 export interface BrowserFixedSpreadPageRenderContext {
@@ -35,7 +39,9 @@ export interface BrowserFixedSpreadContentRenderContext {
 export interface BrowserFixedContentRendererConfig {
     readonly fixedPageRenderer?: FixedPageRenderer<HTMLCanvasElement>
     readonly devicePixelRatio?: number | (() => number)
-    /** Custom visual renderers evaluated before the built-in image/PDF renderers. */
+    readonly fixedPainter?: BrowserFixedPainterPreference
+    readonly fixedPainters?: readonly BrowserFixedPainter[]
+    /** Custom visual renderers evaluated before the built-in fixed-page painter renderer. */
     readonly visualRenderers?: readonly BrowserFixedVisualRenderer[]
 }
 
@@ -71,7 +77,8 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
         const text = context.document.getPageText
             ? await context.document.getPageText(context.page.index)
             : emptyFixedPageTextLayer(context.page)
-        const visual = await this.renderContentLayer(context)
+        const visualResult = await this.renderContentLayer(context)
+        const visual = visualResult?.layer ?? null
         const textLayer = this.createTextLayer(text, context.styles, visual !== null)
         const layers: BrowserPageSurfaceLayer[] = []
 
@@ -94,6 +101,7 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
             metadata: {
                 textLayer: text,
                 visualRendered: visual !== null,
+                ...(visualResult?.paint ? { paint: visualResult.paint } : {}),
             },
             textProvider: createFixedPageTextProvider(text, context.document.format),
             destroy() {
@@ -134,9 +142,10 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
         }
     }
 
-    private async renderContentLayer(context: BrowserFixedVisualRenderContext): Promise<BrowserPageSurfaceLayer | null> {
+    private async renderContentLayer(context: BrowserFixedVisualRenderContext): Promise<BrowserFixedRenderedContent | null> {
         const renderer = selectFixedVisualRenderer(context.document, this.visualRenderers)
-        return await renderer?.renderLayer(context) ?? null
+        const layer = await renderer?.renderLayer(context) ?? null
+        return layer ? { layer, paint: layer.paint } : null
     }
 
     private createTextLayer(text: FixedPageTextLayer, styles: RendererStyles, visualRendered: boolean): BrowserPageSurfaceLayer {
@@ -166,14 +175,30 @@ export const createBrowserFixedContentRenderer = (config?: BrowserFixedContentRe
     new BrowserFixedContentRenderer(config)
 
 export {
-    BrowserFixedCanvasVisualRenderer,
-    BrowserFixedImageVisualRenderer,
+    BrowserFixedCanvasPainter,
+    BrowserFixedPainterVisualRenderer,
+    BrowserFixedWebGpuPainter,
+    createDefaultFixedPainters,
+    isBrowserWebGpuSupported,
     selectFixedVisualRenderer,
-    type BrowserFixedCanvasVisualRendererConfig,
+    type BrowserFixedCanvasPainterConfig,
+    type BrowserFixedPainter,
+    type BrowserFixedPainterConfig,
+    type BrowserFixedPainterPreference,
+    type BrowserFixedPaintMetric,
+    type BrowserFixedPaintResult,
+    type BrowserFixedPainterVisualRendererConfig,
     type BrowserFixedVisualRenderContext,
+    type BrowserFixedVisualLayer,
     type BrowserFixedVisualRenderer,
     type BrowserFixedVisualRendererMatch,
+    type BrowserFixedWebGpuPainterConfig,
 } from './fixed-visual'
+
+interface BrowserFixedRenderedContent {
+    readonly layer: BrowserFixedVisualLayer
+    readonly paint?: BrowserFixedPaintMetric
+}
 
 interface TextLayerRenderOptions {
     color: string

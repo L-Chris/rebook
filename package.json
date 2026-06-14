@@ -252,7 +252,8 @@
     "verify:package": "node scripts/check-package.mjs",
     "verify:pdf": "npm run verify:package && npm run verify:pdf:perf",
     "verify:pdf:perf": "npm run build && node scripts/benchmark-fixed-document.mjs",
-    "benchmark:pdfjs": "npm run build && node scripts/compare-pdfjs.mjs"
+    "benchmark:pdfjs": "npm run build && node scripts/compare-pdfjs.mjs",
+    "benchmark:fixed-painters": "npm run build && node scripts/benchmark-fixed-painters.mjs"
   },
   "keywords": [
     "ebook",
