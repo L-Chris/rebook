@@ -156,7 +156,11 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify": "npm run typecheck && npm test -- --run && npm run verify:package && npm run verify:pdf:perf",
+    "verify:package": "node scripts/check-package.mjs",
+    "verify:pdf": "npm run verify:package && npm run verify:pdf:perf",
+    "verify:pdf:perf": "npm run build && node scripts/benchmark-fixed-document.mjs"
   },
   "keywords": [
     "ebook",
