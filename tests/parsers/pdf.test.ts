@@ -34,6 +34,11 @@ describe('PDFParser', () => {
             fontSize: 18,
             transform: [18, 0, 0, 18, 48, 48],
         })
+
+        const displayList = await (book.fixedDocument as typeof book.fixedDocument & {
+            getPageDisplayList(pageIndex: number): Promise<{ ops: unknown[] }>
+        }).getPageDisplayList(0)
+        expect(displayList.ops.some(op => (op as { type?: string }).type === 'text')).toBe(true)
     })
 
     it('decodes compressed page content without external runtime dependencies', async () => {

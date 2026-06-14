@@ -1,18 +1,24 @@
 /**
  * Browser renderer for page-native fixed documents.
  *
- * This renderer is intentionally small: it renders the fixed text layer with
- * page-accurate coordinates and leaves vector/image display-list painting to
- * the next PDF renderer layer. It still gives real ReaderView behavior for
- * native PDF parsing: open, page navigation, progress, TOC/page list events,
- * and selectable text.
+ * This renderer owns browser page layout and layer composition. A format-aware
+ * FixedPageRenderer can paint the visual page into canvas while the DOM text
+ * layer stays available for selection and copying.
  */
 
-import type { FixedDocument, FixedPageInfo, FixedPageTextLayer, FixedPageTextRun } from '../../core/fixed-document'
+import type {
+    FixedDocument,
+    FixedPageInfo,
+    FixedPageRenderer,
+    FixedPageTextLayer,
+    FixedPageTextRun,
+} from '../../core/fixed-document'
 import type { Book, LinkEvent, LoadEvent, RelocateEvent, TOCItem } from '../../core/types'
 import type { EventListener, LayoutMode, ReaderMark, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
 import { UnsupportedFormatError } from '../../core/errors'
 import { parseCSSPixels } from '../../core/renderer-utils'
+import { isPdfFixedDocument } from '../../pdf/fixed-document'
+import { BrowserPdfCanvasRenderer } from './pdf-canvas'
 
 interface RendererEventMap {
     load: LoadEvent
@@ -25,6 +31,12 @@ type Listener<T> = (event: T) => void
 export interface BrowserFixedRendererConfig extends RendererConfig {
     /** The browser element to render into. */
     container: HTMLElement
+    /**
+     * Optional visual page renderer. When omitted, PDF fixed documents use the
+     * built-in 2D canvas renderer and other formats render their text layer only.
+     */
+    fixedPageRenderer?: FixedPageRenderer<HTMLCanvasElement>
+    devicePixelRatio?: number | (() => number)
 }
 
 const DEFAULT_MARGIN = 32
@@ -38,6 +50,9 @@ export class BrowserFixedRenderer implements Renderer {
     private readonly listeners = new Map<string, Set<Listener<unknown>>>()
     private readonly marks = new Map<string, ReaderMark>()
     private readonly beforeNavigate: RendererConfig['beforeNavigate']
+    private readonly configuredFixedPageRenderer?: FixedPageRenderer<HTMLCanvasElement>
+    private readonly defaultPdfPageRenderer = new BrowserPdfCanvasRenderer()
+    private readonly devicePixelRatio?: number | (() => number)
     private scroller: HTMLElement
     private pageHost: HTMLElement
     private book: Book | null = null
@@ -56,6 +71,8 @@ export class BrowserFixedRenderer implements Renderer {
         this.styles = config.styles ?? {}
         this.layoutMode = config.layout ?? 'paginated'
         this.beforeNavigate = config.beforeNavigate
+        this.configuredFixedPageRenderer = config.fixedPageRenderer
+        this.devicePixelRatio = config.devicePixelRatio
 
         this.scroller = document.createElement('div')
         this.scroller.style.cssText = `
@@ -206,14 +223,8 @@ export class BrowserFixedRenderer implements Renderer {
         if (!fixedDocument || !page) return
 
         const token = ++this.renderToken
-        const text = fixedDocument.getPageText ? await fixedDocument.getPageText(page.index) : emptyTextLayer(page)
-        if (token !== this.renderToken) return
-
-        this.pageHost.replaceChildren()
         const margin = parseCSSPixels(this.styles.margin, DEFAULT_MARGIN)
         const scale = this.getPageScale(page, margin)
-        this.pageHost.style.padding = `${margin}px`
-
         const frame = document.createElement('div')
         frame.dataset.pageIndex = String(page.index)
         frame.dataset.rebookFixedPage = 'true'
@@ -227,6 +238,16 @@ export class BrowserFixedRenderer implements Renderer {
             flex: 0 0 auto;
         `
 
+        const textPromise = fixedDocument.getPageText
+            ? fixedDocument.getPageText(page.index)
+            : Promise.resolve(emptyTextLayer(page))
+        const visualPromise = this.renderVisualLayer(fixedDocument, frame, page, scale)
+        const [text, visualRendered] = await Promise.all([textPromise, visualPromise])
+        if (token !== this.renderToken) return
+
+        this.pageHost.replaceChildren()
+        this.pageHost.style.padding = `${margin}px`
+
         const layer = document.createElement('div')
         layer.dataset.rebookFixedTextLayer = 'true'
         layer.style.cssText = `
@@ -238,10 +259,11 @@ export class BrowserFixedRenderer implements Renderer {
             transform: scale(${scale});
             transform-origin: 0 0;
             user-select: text;
+            z-index: 1;
         `
 
         renderTextLayer(layer, text, {
-            color: this.styles.color ?? DEFAULT_TEXT_COLOR,
+            color: visualRendered ? 'transparent' : this.styles.color ?? DEFAULT_TEXT_COLOR,
             fontFamily: this.styles.fontFamily,
             measureTextWidth: this.measureTextWidth,
             measureFontAscentRatio: this.measureFontAscentRatio,
@@ -252,6 +274,53 @@ export class BrowserFixedRenderer implements Renderer {
         this.scroller.scrollTop = 0
         this.emit('load', { doc: text, index: page.index })
         this.emitRelocate(reason)
+    }
+
+    private async renderVisualLayer(
+        fixedDocument: FixedDocument,
+        frame: HTMLElement,
+        page: FixedPageInfo,
+        scale: number,
+    ): Promise<boolean> {
+        const renderer = this.getFixedPageRenderer(fixedDocument)
+        if (!renderer) return false
+
+        const canvas = document.createElement('canvas')
+        canvas.dataset.rebookFixedCanvas = 'true'
+        canvas.style.cssText = `
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: ${page.width * scale}px;
+            height: ${page.height * scale}px;
+            z-index: 0;
+        `
+        frame.append(canvas)
+        try {
+            await renderer.renderPage(fixedDocument, canvas, page.index, {
+                scale,
+                devicePixelRatio: this.getDevicePixelRatio(),
+                intent: 'display',
+                textLayer: false,
+            })
+            return true
+        } catch {
+            canvas.remove()
+            return false
+        }
+    }
+
+    private getFixedPageRenderer(fixedDocument: FixedDocument): FixedPageRenderer<HTMLCanvasElement> | undefined {
+        if (this.configuredFixedPageRenderer) return this.configuredFixedPageRenderer
+        return isPdfFixedDocument(fixedDocument) ? this.defaultPdfPageRenderer : undefined
+    }
+
+    private getDevicePixelRatio(): number {
+        const configured = typeof this.devicePixelRatio === 'function'
+            ? this.devicePixelRatio()
+            : this.devicePixelRatio
+        const ratio = configured ?? globalThis.devicePixelRatio ?? 1
+        return Number.isFinite(ratio) && ratio > 0 ? ratio : 1
     }
 
     private getPageScale(page: FixedPageInfo, margin: number): number {

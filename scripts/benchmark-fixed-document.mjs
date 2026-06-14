@@ -1,4 +1,6 @@
 import { performance } from 'node:perf_hooks'
+import { access, readFile } from 'node:fs/promises'
+import { basename } from 'node:path'
 import {
   createFixedPageViewport,
   isFixedDocument,
@@ -14,6 +16,9 @@ const pages = integerArg('pages', 20_000)
 const maxMs = numberArg('max-ms', 1_000)
 const pdfPages = integerArg('pdf-pages', 500)
 const maxPdfMs = numberArg('max-pdf-ms', 1_500)
+const realPdfPath = stringArg('real-pdf') ?? stringArg('pdf') ?? 'data/四千周.pdf'
+const realPdfPages = nonNegativeIntegerArg('real-pdf-pages', 0)
+const maxRealPdfMs = numberArg('max-real-pdf-ms', 3_000)
 
 class BenchmarkRenderer {
   async open() {}
@@ -101,6 +106,39 @@ console.log(`pdf limit: ${maxPdfMs.toFixed(1)} ms ${pdfOk ? 'OK' : 'OVER LIMIT'}
 
 if (!pdfOk) process.exitCode = 1
 
+await runRealPdfBenchmark()
+
+async function runRealPdfBenchmark() {
+  if (!await fileExists(realPdfPath)) {
+    console.log(`real PDF parse/text benchmark: skipped; ${realPdfPath} not found`)
+    console.log('place local PDFs under data/ or pass --real-pdf=<path>; data/ is intentionally git-ignored')
+    return
+  }
+
+  const bytes = await readFile(realPdfPath)
+  const parser = new PDFParser()
+  const realPdfStart = performance.now()
+  const parsed = await parser.parse(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+  const totalPages = parsed.fixedDocument.pageCount
+  const measuredPages = realPdfPages > 0 ? Math.min(realPdfPages, totalPages) : totalPages
+  let textLength = 0
+  for (let index = 0; index < measuredPages; index++) {
+    const text = await parsed.fixedDocument.getPageText(index)
+    textLength += text.text.length
+  }
+  const realPdfElapsed = performance.now() - realPdfStart
+  const realPdfOk = realPdfElapsed <= maxRealPdfMs
+  const pageLabel = measuredPages === totalPages
+    ? `${totalPages.toLocaleString('en-US')} pages`
+    : `${measuredPages.toLocaleString('en-US')} / ${totalPages.toLocaleString('en-US')} pages`
+
+  console.log(`real PDF parse/text benchmark: ${basename(realPdfPath)} ${pageLabel} in ${realPdfElapsed.toFixed(1)} ms`)
+  console.log(`real PDF text: ${textLength.toLocaleString('en-US')} chars`)
+  console.log(`real PDF limit: ${maxRealPdfMs.toFixed(1)} ms ${realPdfOk ? 'OK' : 'OVER LIMIT'}`)
+
+  if (!realPdfOk) process.exitCode = 1
+}
+
 function makeBenchmarkPdf(pageCount) {
   const objects = [
     '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
@@ -142,9 +180,27 @@ function integerArg(name, fallback) {
   return Math.max(1, Math.trunc(numberArg(name, fallback)))
 }
 
+function nonNegativeIntegerArg(name, fallback) {
+  return Math.max(0, Math.trunc(numberArg(name, fallback)))
+}
+
 function numberArg(name, fallback) {
   const prefix = `--${name}=`
   const raw = process.argv.find((arg) => arg.startsWith(prefix))?.slice(prefix.length)
   const value = raw ? Number(raw) : fallback
   return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function stringArg(name) {
+  const prefix = `--${name}=`
+  return process.argv.find((arg) => arg.startsWith(prefix))?.slice(prefix.length)
+}
+
+async function fileExists(path) {
+  try {
+    await access(path)
+    return true
+  } catch {
+    return false
+  }
 }

@@ -27,6 +27,9 @@
       "renderers/browser/fixed": [
         "dist/renderers/browser/fixed.d.ts"
       ],
+      "renderers/browser/pdf-canvas": [
+        "dist/renderers/browser/pdf-canvas.d.ts"
+      ],
       "renderers/wechat-miniprogram": [
         "dist/renderers/wechat-miniprogram/index.d.ts"
       ],
@@ -100,6 +103,10 @@
     "./renderers/browser/fixed": {
       "types": "./dist/renderers/browser/fixed.d.ts",
       "import": "./dist/renderers/browser/fixed.js"
+    },
+    "./renderers/browser/pdf-canvas": {
+      "types": "./dist/renderers/browser/pdf-canvas.d.ts",
+      "import": "./dist/renderers/browser/pdf-canvas.js"
     },
     "./renderers/wechat-miniprogram": {
       "types": "./dist/renderers/wechat-miniprogram/index.d.ts",

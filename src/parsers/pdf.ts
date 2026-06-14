@@ -7,12 +7,14 @@
  */
 
 import type { Book, BookMetadata, TOCItem } from '../core/types'
-import type { FixedDocument, FixedPageInfo, FixedPageTextLayer, FixedPageTextRun } from '../core/fixed-document'
+import type { FixedPageInfo, FixedPageTextLayer, FixedPageTextRun } from '../core/fixed-document'
 import type { Parser, ParserInput, ParserOptions } from '../core/parser'
 import { ParseError, UnsupportedInputError } from '../core/errors'
 import { getInputName, isBlobLike } from '../core/binary'
 import { RebookPdfDocument } from '../pdf/engine/document'
-import type { PdfMatrix, PdfOutlineItem, PdfPageInfo, PdfPageText, PdfTextRun } from '../pdf/types'
+import type { PdfFixedDocument } from '../pdf/fixed-document'
+import { getBrowserPdfRuntime } from '../pdf/platform/browser'
+import type { PdfMatrix, PdfOutlineItem, PdfPageInfo, PdfPageText, PdfRuntime, PdfTextRun } from '../pdf/types'
 
 const PDF_HEADER = '%PDF-'
 
@@ -22,6 +24,8 @@ export interface PDFParserOptions extends ParserOptions {
      * readers often revisit visible pages while scrolling or selecting text.
      */
     cache?: boolean
+    runtime?: PdfRuntime
+    embeddedFonts?: boolean
 }
 
 export class PDFParser implements Parser {
@@ -53,7 +57,9 @@ export class PDFParser implements Parser {
         try {
             const bytes = await readInputBytes(input)
             const document = await RebookPdfDocument.load(bytes, {
+                runtime: options?.runtime ?? getBrowserPdfRuntime(),
                 cache: options?.cache ?? true,
+                embeddedFonts: options?.embeddedFonts ?? true,
             })
             const fixedDocument = createPdfFixedDocument(document)
             const pageLabels = await document.getPageLabels()
@@ -98,7 +104,7 @@ export class PDFParser implements Parser {
 
 export const pdf = (): PDFParser => new PDFParser()
 
-function createPdfFixedDocument(document: RebookPdfDocument): FixedDocument {
+function createPdfFixedDocument(document: RebookPdfDocument): PdfFixedDocument {
     const pageInfoCache = new Map<number, FixedPageInfo>()
 
     return {
@@ -129,6 +135,10 @@ function createPdfFixedDocument(document: RebookPdfDocument): FixedDocument {
         async getPageText(pageIndex) {
             assertPageIndex(document, pageIndex)
             return pdfTextToFixedTextLayer(await document.getPageText(pageIndex))
+        },
+        getPageDisplayList(pageIndex) {
+            assertPageIndex(document, pageIndex)
+            return document.getPageDisplayList(pageIndex)
         },
         destroy() {
             pageInfoCache.clear()

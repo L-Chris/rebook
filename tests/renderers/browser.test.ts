@@ -17,6 +17,62 @@ class MockResizeObserver {
     disconnect() {}
 }
 
+interface TestCanvasLike {
+    width: number
+    height: number
+}
+
+function createTestCanvasContext(canvas: TestCanvasLike) {
+    const gradient = { addColorStop() {} }
+    const context = {
+        canvas,
+        font: '16px serif',
+        fillStyle: '#000000',
+        strokeStyle: '#000000',
+        globalAlpha: 1,
+        globalCompositeOperation: 'source-over',
+        lineWidth: 1,
+        lineCap: 'butt',
+        lineJoin: 'miter',
+        miterLimit: 10,
+        lineDashOffset: 0,
+        save() {},
+        restore() {},
+        clearRect() {},
+        fillRect() {},
+        setTransform() {},
+        transform() {},
+        scale() {},
+        translate() {},
+        rotate() {},
+        beginPath() {},
+        moveTo() {},
+        lineTo() {},
+        bezierCurveTo() {},
+        closePath() {},
+        rect() {},
+        clip() {},
+        fill() {},
+        stroke() {},
+        setLineDash() {},
+        drawImage() {},
+        putImageData() {},
+        fillText() {},
+        strokeText() {},
+        createLinearGradient: () => gradient,
+        createRadialGradient: () => gradient,
+        measureText(text: string) {
+            const fontSize = Number(context.font.match(/([\d.]+)px/)?.[1] ?? 16)
+            return {
+                width: Array.from(text).length * fontSize * 0.54,
+                fontBoundingBoxAscent: fontSize * 0.8,
+                fontBoundingBoxDescent: fontSize * 0.2,
+            }
+        },
+    }
+    return context
+}
+
 beforeEach(() => {
     const { window } = parseHTML('<!doctype html><html><body></body></html>')
     vi.stubGlobal('window', window)
@@ -24,15 +80,38 @@ beforeEach(() => {
     vi.stubGlobal('HTMLElement', window.HTMLElement)
     vi.stubGlobal('ResizeObserver', MockResizeObserver)
     vi.stubGlobal('OffscreenCanvas', class {
-        getContext() {
-            return {
-                font: '16px serif',
-                measureText(text: string) {
-                    const fontSize = Number(this.font.match(/([\d.]+)px/)?.[1] ?? 16)
-                    return { width: Array.from(text).length * fontSize * 0.54 }
-                },
-            }
+        width: number
+        height: number
+
+        constructor(width = 1, height = 1) {
+            this.width = width
+            this.height = height
         }
+
+        getContext(type: string) {
+            return type === '2d' ? createTestCanvasContext(this) : null
+        }
+    })
+    vi.stubGlobal('ImageData', class {
+        data: Uint8ClampedArray
+        width: number
+        height: number
+
+        constructor(data: Uint8ClampedArray, width: number, height: number) {
+            this.data = data
+            this.width = width
+            this.height = height
+        }
+    })
+
+    const canvasPrototype = Object.getPrototypeOf(window.document.createElement('canvas')) as {
+        getContext?: (type: string) => unknown
+    }
+    Object.defineProperty(canvasPrototype, 'getContext', {
+        configurable: true,
+        value(this: TestCanvasLike, type: string) {
+            return type === '2d' ? createTestCanvasContext(this) : null
+        },
     })
 
     Object.defineProperty(window.HTMLElement.prototype, 'clientWidth', {
@@ -271,6 +350,8 @@ describe('BrowserRenderer', () => {
         await reader.openBook(book)
 
         expect(container.querySelector('[data-rebook-fixed-page="true"]')).toBeTruthy()
+        expect(container.querySelector('[data-rebook-fixed-canvas="true"]')).toBeTruthy()
+        expect((container.querySelector('[data-rebook-fixed-text-layer="true"] span') as HTMLElement | null)?.style.color).toBe('transparent')
         expect(container.textContent).toContain('Hello Rebook PDF')
 
         reader.destroy()
