@@ -74,6 +74,24 @@ The Mini Program renderer uses the same `TextBlock -> Pretext -> LineRange` pipe
 
 This is the main performance boundary: normal page turns do not reparse XHTML, do not rebuild a full chapter DOM, and do not ask the browser to fragment a large document with CSS columns. They update the current page index, select a small visible line window, and render that window. Relayout is reserved for section loads, style changes, layout changes, and resizes.
 
+### Fixed/Page-Based Formats
+
+PDF and other page-native formats should not be forced through the reflowable `Section XHTML -> Pretext -> LineRange` path. Parsers can return a normal `Book` with `rendition.layout: 'pre-paginated'` and attach a `fixedDocument` payload defined in `src/core/fixed-document.ts`.
+
+```text
+PDF / CBZ / image sequence
+  -> parser
+  -> Book { fixedDocument, toc, pageList, metadata }
+  -> renderer router
+  -> platform fixed-page renderer
+```
+
+The fixed document contract stores page geometry, text runs, and text transforms in CSS pixel coordinates with a top-left origin. Browser renderers should use `createFixedPageViewport()` to keep CSS page size separate from canvas backing-store size: selectable text stays in CSS coordinates, while the canvas uses `pixelWidth`, `pixelHeight`, `pixelScaleX`, and `pixelScaleY` for high-DPI rendering. This boundary is what keeps text selection aligned with the visual page while avoiding blurry canvas output.
+
+`RendererRouter` keeps the high-level reader API stable. `ReaderSession` still owns one `Renderer`, but that renderer can choose a concrete engine after parsing, based on `Book.fixedDocument` and other Book capabilities. Browser `ReaderView` uses this router by default: reflowable books go to the existing `BrowserRenderer`, and fixed/page-native books require a fixed renderer instead of silently falling back to the text-flow renderer.
+
+`rebook-pdf` was a prototype for learning the PDF rendering path. It should not become a dependency of `rebook`; the production PDF engine should live behind this `rebook` core contract and share platform renderer patterns with browser, Mini Program, and future hosts.
+
 ### Plugins Are Book Middleware
 
 Plugins run after parsing and before rendering. They wrap `Book` rather than a platform renderer, which keeps official plugins usable in browser, Mini Program, and future hosts.
@@ -213,8 +231,10 @@ The zip loader has layered recovery for real-world damaged EPUBs:
 src/
   core/
     types.ts          Book, Section, DocumentNode, text block contracts
+    fixed-document.ts fixed-layout page geometry and renderer contracts
     parser.ts         Parser interface and registry
     renderer.ts       Renderer interface
+    renderer-router.ts renderer selection by Book capability
     renderer-utils.ts shared renderer math and anchor helpers
     exporter.ts       Exporter interface and registry
     document.ts       immutable document model

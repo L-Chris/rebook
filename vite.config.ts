@@ -18,8 +18,10 @@ export default defineConfig({
     lib: {
       entry: {
         index: resolve(__dirname, 'src/index.ts'),
+        'core/fixed-document': resolve(__dirname, 'src/core/fixed-document.ts'),
         'core/parser': resolve(__dirname, 'src/core/parser.ts'),
         'core/reader': resolve(__dirname, 'src/core/reader.ts'),
+        'core/renderer-router': resolve(__dirname, 'src/core/renderer-router.ts'),
         'parsers/epub': resolve(__dirname, 'src/parsers/epub.ts'),
         'parsers/cbz': resolve(__dirname, 'src/parsers/cbz.ts'),
         'parsers/fb2': resolve(__dirname, 'src/parsers/fb2.ts'),

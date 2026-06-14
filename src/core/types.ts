@@ -398,6 +398,13 @@ export interface Book {
     readonly rendition?: Rendition
 
     /**
+     * Optional page-native payload for fixed-layout formats such as PDF.
+     * Renderers that support fixed documents use this instead of converting
+     * pages into the reflowable Section text pipeline.
+     */
+    readonly fixedDocument?: import('./fixed-document').FixedDocument
+
+    /**
      * Resolve an href string to a navigation target.
      * Used for internal link handling.
      */

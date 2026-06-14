@@ -5,9 +5,14 @@
  */
 
 import type { ParserOptions } from '../../core/parser'
-import type { NavigationDirection, RendererNavigationHooks } from '../../core/renderer'
+import type { NavigationDirection, Renderer, RendererNavigationHooks } from '../../core/renderer'
 import type { RebookPlugin } from '../../core/types'
 import { ReaderSession, type ReaderSessionConfig } from '../../core/reader'
+import {
+    createRendererRouter,
+    matchesFixedDocument,
+    matchesReflowableBook,
+} from '../../core/renderer-router'
 import { BrowserDOMAdapter, BrowserURLFactory } from '../../adapters/browser'
 import { BrowserRenderer, type BrowserRendererConfig } from './renderer'
 
@@ -16,6 +21,12 @@ export interface ReaderConfig extends BrowserRendererConfig {
     parserOptions?: ParserOptions
     /** Plugins to transform the book before rendering */
     plugins?: readonly RebookPlugin[]
+    /**
+     * Renderer factory for fixed/page-native books. When omitted, opening a
+     * Book with fixedDocument fails explicitly instead of falling back to the
+     * reflowable text renderer.
+     */
+    createFixedRenderer?: (hooks?: RendererNavigationHooks) => Renderer
 }
 
 /**
@@ -35,10 +46,30 @@ function createBrowserReaderSessionConfig(config: ReaderConfig): ReaderSessionCo
             ...config.parserOptions,
         }),
         plugins: config.plugins,
-        createRenderer: hooks => new BrowserRenderer({
-            ...config,
-            beforeNavigate: createBeforeNavigate(config.beforeNavigate, hooks?.beforeNavigate),
-        }),
+        createRenderer: hooks => {
+            const beforeNavigate = createBeforeNavigate(config.beforeNavigate, hooks?.beforeNavigate)
+            const rendererHooks = {
+                ...hooks,
+                beforeNavigate,
+            }
+            return createRendererRouter([
+                ...(config.createFixedRenderer
+                    ? [{
+                        id: 'fixed-document',
+                        match: matchesFixedDocument,
+                        createRenderer: () => config.createFixedRenderer!(rendererHooks),
+                    }]
+                    : []),
+                {
+                    id: 'reflowable-browser',
+                    match: matchesReflowableBook,
+                    createRenderer: () => new BrowserRenderer({
+                        ...config,
+                        beforeNavigate,
+                    }),
+                },
+            ])
+        },
     }
 }
 

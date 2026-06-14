@@ -12,8 +12,14 @@
       "core/parser": [
         "dist/core/parser.d.ts"
       ],
+      "core/fixed-document": [
+        "dist/core/fixed-document.d.ts"
+      ],
       "core/reader": [
         "dist/core/reader.d.ts"
+      ],
+      "core/renderer-router": [
+        "dist/core/renderer-router.d.ts"
       ],
       "renderers/browser": [
         "dist/renderers/browser/index.d.ts"
@@ -72,9 +78,17 @@
       "types": "./dist/core/parser.d.ts",
       "import": "./dist/core/parser.js"
     },
+    "./core/fixed-document": {
+      "types": "./dist/core/fixed-document.d.ts",
+      "import": "./dist/core/fixed-document.js"
+    },
     "./core/reader": {
       "types": "./dist/core/reader.d.ts",
       "import": "./dist/core/reader.js"
+    },
+    "./core/renderer-router": {
+      "types": "./dist/core/renderer-router.d.ts",
+      "import": "./dist/core/renderer-router.js"
     },
     "./renderers/browser": {
       "types": "./dist/renderers/browser/index.d.ts",

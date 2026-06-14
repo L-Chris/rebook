@@ -169,6 +169,37 @@ export {
     type ImageDimensions,
 } from './core/image-size'
 
+export {
+    assertFixedPageIndex,
+    createFixedPageViewport,
+    isFixedDocument,
+    type FixedDocument,
+    type FixedDocumentFormat,
+    type FixedPageInfo,
+    type FixedPageRenderIntent,
+    type FixedPageRenderer,
+    type FixedPageRenderOptions,
+    type FixedPageRenderResult,
+    type FixedPageRotation,
+    type FixedPageTextDirection,
+    type FixedPageTextLayer,
+    type FixedPageTextRun,
+    type FixedPageTransform,
+    type FixedPageViewport,
+    type FixedPageViewportOptions,
+} from './core/fixed-document'
+
+export {
+    RendererRouter,
+    createRendererRouter,
+    matchesFixedDocument,
+    matchesReflowableBook,
+    selectRendererRoute,
+    type RendererRoute,
+    type RendererRouteMatch,
+    type RendererRouterConfig,
+} from './core/renderer-router'
+
 // Search
 export {
     searchBook,

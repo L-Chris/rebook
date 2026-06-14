@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises'
 import { parseHTML } from 'linkedom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Book } from '../../src/core/types'
+import type { Book, RelocateEvent } from '../../src/core/types'
+import type { EventListener, LayoutMode, ReaderMark, Renderer, RendererStyles } from '../../src/core/renderer'
 import type { TOCViewItem } from '../../src/core/reader'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import { epub } from '../../src/parsers/epub'
@@ -165,6 +166,37 @@ describe('BrowserRenderer', () => {
 
         expect(container.querySelector('[data-block-type="chapter"]')).toBeDefined()
         expect(container.querySelector('iframe')).toBeNull()
+
+        reader.destroy()
+    })
+
+    it('routes fixed books to the configured fixed renderer', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '72')
+        document.body.appendChild(container)
+
+        const fixedRenderer = new FakeFixedRenderer()
+        const book: Book = {
+            sections: [],
+            rendition: { layout: 'pre-paginated' },
+            fixedDocument: {
+                kind: 'fixed-document',
+                format: 'pdf',
+                pageCount: 1,
+                getPage: () => ({ index: 0, width: 600, height: 800 }),
+            },
+        }
+
+        const reader = createReader({
+            container,
+            createFixedRenderer: () => fixedRenderer,
+        })
+        await reader.openBook(book)
+
+        expect(fixedRenderer.opened).toBe(1)
+        expect(fixedRenderer.book).toBe(book)
+        expect(container.children.length).toBe(0)
 
         reader.destroy()
     })
@@ -1479,6 +1511,43 @@ describe('BrowserRenderer', () => {
         book.destroy?.()
     })
 })
+
+class FakeFixedRenderer implements Renderer {
+    opened = 0
+    book: Book | null = null
+    private marks = new Map<string, ReaderMark>()
+
+    async open(book: Book): Promise<void> {
+        this.opened += 1
+        this.book = book
+    }
+
+    async goTo(): Promise<void> {}
+    async next(): Promise<void> {}
+    async prev(): Promise<void> {}
+    async goToFraction(): Promise<void> {}
+    setStyles(_styles: RendererStyles): void {}
+    setLayout(_mode: LayoutMode): void {}
+    setSpread(_maxColumns: number): void {}
+    setMark(mark: ReaderMark): void { this.marks.set(mark.id, mark) }
+    removeMark(id: string): void { this.marks.delete(id) }
+    clearMarks(kind?: string): void {
+        if (kind) {
+            for (const [id, mark] of this.marks) {
+                if (mark.kind === kind) this.marks.delete(id)
+            }
+        } else {
+            this.marks.clear()
+        }
+    }
+    getMarks(): ReaderMark[] { return Array.from(this.marks.values()) }
+    getLocation(): RelocateEvent | null { return null }
+    getSectionFractions(): number[] { return [] }
+    async refresh(): Promise<void> {}
+    on(_event: string, _listener: EventListener): void {}
+    off(_event: string, _listener: EventListener): void {}
+    destroy(): void {}
+}
 
 function flattenTestTOC(items: NonNullable<Book['toc']>): NonNullable<Book['toc']>[number][] {
     return items.flatMap(item =>
