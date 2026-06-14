@@ -6,6 +6,7 @@ const requiredFiles = [
   'dist/index.js',
   'dist/core/fixed-document.js',
   'dist/core/renderer-router.js',
+  'dist/parsers/pdf.js',
   'dist/renderers/browser.js',
   'miniprogram_dist/index.js',
   'package.json',

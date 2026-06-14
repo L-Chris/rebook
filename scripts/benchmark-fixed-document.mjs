@@ -8,9 +8,12 @@ import {
   matchesFixedDocument,
   matchesReflowableBook,
 } from '../dist/core/renderer-router.js'
+import { PDFParser } from '../dist/parsers/pdf.js'
 
 const pages = integerArg('pages', 20_000)
 const maxMs = numberArg('max-ms', 1_000)
+const pdfPages = integerArg('pdf-pages', 500)
+const maxPdfMs = numberArg('max-pdf-ms', 1_500)
 
 class BenchmarkRenderer {
   async open() {}
@@ -79,6 +82,61 @@ console.log(`throughput: ${Math.round(pagesPerSecond).toLocaleString('en-US')} p
 console.log(`limit: ${maxMs.toFixed(1)} ms ${ok ? 'OK' : 'OVER LIMIT'}`)
 
 if (!ok) process.exitCode = 1
+
+const pdfBytes = makeBenchmarkPdf(pdfPages)
+const parser = new PDFParser()
+const pdfStart = performance.now()
+const parsed = await parser.parse(pdfBytes.buffer.slice(pdfBytes.byteOffset, pdfBytes.byteOffset + pdfBytes.byteLength))
+let textLength = 0
+for (let index = 0; index < parsed.fixedDocument.pageCount; index++) {
+  const text = await parsed.fixedDocument.getPageText(index)
+  textLength += text.text.length
+}
+const pdfElapsed = performance.now() - pdfStart
+const pdfOk = pdfElapsed <= maxPdfMs
+
+console.log(`pdf parse/text benchmark: ${pdfPages.toLocaleString('en-US')} pages in ${pdfElapsed.toFixed(1)} ms`)
+console.log(`pdf text: ${textLength.toLocaleString('en-US')} chars`)
+console.log(`pdf limit: ${maxPdfMs.toFixed(1)} ms ${pdfOk ? 'OK' : 'OVER LIMIT'}`)
+
+if (!pdfOk) process.exitCode = 1
+
+function makeBenchmarkPdf(pageCount) {
+  const objects = [
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+    `2 0 obj\n<< /Type /Pages /MediaBox [0 0 300 144] /Resources << /Font << /F1 3 0 R >> >> /Kids [${Array.from({ length: pageCount }, (_, index) => `${4 + index * 2} 0 R`).join(' ')}] /Count ${pageCount} >>\nendobj\n`,
+    '3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+  ]
+  for (let index = 0; index < pageCount; index++) {
+    const pageObject = 4 + index * 2
+    const contentObject = pageObject + 1
+    objects.push(`${pageObject} 0 obj\n<< /Type /Page /Parent 2 0 R /Contents ${contentObject} 0 R >>\nendobj\n`)
+    objects.push(makeContentStream(contentObject, `BT /F1 12 Tf 48 96 Td (Benchmark PDF page ${index + 1}) Tj ET`))
+  }
+  return buildClassicXrefPdf(objects)
+}
+
+function makeContentStream(objectNumber, content) {
+  const bytes = new TextEncoder().encode(content)
+  return `${objectNumber} 0 obj\n<< /Length ${bytes.byteLength} >>\nstream\n${content}\nendstream\nendobj\n`
+}
+
+function buildClassicXrefPdf(objects) {
+  let source = '%PDF-1.7\n'
+  const offsets = [0]
+  for (const object of objects) {
+    offsets.push(source.length)
+    source += object
+  }
+  const xrefOffset = source.length
+  source += `xref\n0 ${objects.length + 1}\n`
+  source += '0000000000 65535 f \n'
+  for (const offset of offsets.slice(1)) {
+    source += `${String(offset).padStart(10, '0')} 00000 n \n`
+  }
+  source += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`
+  return new TextEncoder().encode(source)
+}
 
 function integerArg(name, fallback) {
   return Math.max(1, Math.trunc(numberArg(name, fallback)))

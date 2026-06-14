@@ -12,6 +12,7 @@ import { EPUBParser } from './parsers/epub'
 import { MOBIParser } from './parsers/mobi'
 import { FB2Parser } from './parsers/fb2'
 import { CBZParser } from './parsers/cbz'
+import { PDFParser } from './parsers/pdf'
 import { getSectionSearchText, searchBook } from './search'
 
 const SERVER_VERSION = '0.2.1'
@@ -137,6 +138,7 @@ function getParserForPath(filePath: string): Parser {
     if (lower.endsWith('.mobi') || lower.endsWith('.azw3')) return new MOBIParser()
     if (lower.endsWith('.fb2')) return new FB2Parser()
     if (lower.endsWith('.cbz') || lower.endsWith('.zip')) return new CBZParser()
+    if (lower.endsWith('.pdf')) return new PDFParser()
     throw new Error(`Unsupported e-book format: ${filePath}`)
 }
 

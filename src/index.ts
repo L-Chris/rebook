@@ -289,6 +289,18 @@ export { epub, EPUBParser } from './parsers/epub'
 export { cbz, CBZParser } from './parsers/cbz'
 export { fb2, FB2Parser } from './parsers/fb2'
 export { mobi, MOBIParser } from './parsers/mobi'
+export { pdf, PDFParser } from './parsers/pdf'
+export { RebookPdfDocument } from './pdf/engine/document'
+export type {
+    PdfAnnotation,
+    PdfLoadOptions,
+    PdfOutlineItem,
+    PdfPageAnnotations,
+    PdfPageDisplayList,
+    PdfPageInfo,
+    PdfPageText,
+    PdfTextRun,
+} from './pdf/types'
 
 // Loaders
 export { createZipLoader, isZipFile } from './loaders'

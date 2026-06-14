@@ -26,6 +26,7 @@ export default defineConfig({
         'parsers/cbz': resolve(__dirname, 'src/parsers/cbz.ts'),
         'parsers/fb2': resolve(__dirname, 'src/parsers/fb2.ts'),
         'parsers/mobi': resolve(__dirname, 'src/parsers/mobi.ts'),
+        'parsers/pdf': resolve(__dirname, 'src/parsers/pdf.ts'),
         'adapters/index': resolve(__dirname, 'src/adapters/index.ts'),
         'adapters/browser': resolve(__dirname, 'src/adapters/browser.ts'),
         'adapters/node': resolve(__dirname, 'src/adapters/node.ts'),
