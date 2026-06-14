@@ -328,6 +328,10 @@ export class BrowserRenderer implements Renderer {
         return this.lastLocation
     }
 
+    getCurrentSurface(): BrowserPageSurface | null {
+        return this.surfaceController.getCurrentSurface()
+    }
+
     getSectionFractions(): number[] {
         return this.progress?.getFractions() ?? []
     }

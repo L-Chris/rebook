@@ -14,6 +14,7 @@ import type {
     Renderer,
     RendererStyles,
 } from '../../src/core/renderer'
+import type { PageSurface } from '../../src/core/page-surface'
 
 describe('RendererRouter', () => {
     it('selects fixed-document renderers before reflowable renderers', () => {
@@ -64,6 +65,27 @@ describe('RendererRouter', () => {
         expect(fixed.marks.get('m1')).toEqual(mark)
     })
 
+    it('forwards the active renderer current surface', async () => {
+        const fixed = new FakeRenderer()
+        const surface: PageSurface = {
+            id: 'surface-1',
+            kind: 'fixed-page',
+            width: 100,
+            height: 120,
+            scale: 1,
+            layers: [],
+        }
+        fixed.surface = surface
+        const router = createRendererRouter([
+            { id: 'fixed', match: matchesFixedDocument, createRenderer: () => fixed },
+        ])
+
+        expect(router.getCurrentSurface()).toBeNull()
+        await router.open(createFixedBook())
+
+        expect(router.getCurrentSurface()).toBe(surface)
+    })
+
     it('throws a clear error when no renderer can handle the book', async () => {
         const router = createRendererRouter([
             { id: 'flow', match: matchesReflowableBook, createRenderer: () => new FakeRenderer() },
@@ -108,6 +130,7 @@ class FakeRenderer implements Renderer {
     styles: RendererStyles | null = null
     layout: LayoutMode | null = null
     spread: number | null = null
+    surface: PageSurface | null = null
     marks = new Map<string, ReaderMark>()
     listeners = new Map<string, Set<EventListener>>()
 
@@ -161,6 +184,10 @@ class FakeRenderer implements Renderer {
 
     getLocation(): RelocateEvent | null {
         return null
+    }
+
+    getCurrentSurface(): PageSurface | null {
+        return this.surface
     }
 
     getSectionFractions(): number[] {

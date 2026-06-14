@@ -22050,6 +22050,35 @@ class ReaderSession {
     return activeItem;
   }
   /**
+   * Get the currently composed page surface, when the active renderer exposes one.
+   */
+  getCurrentSurface() {
+    var _a2, _b2, _c;
+    return (_c = (_b2 = (_a2 = this.renderer).getCurrentSurface) == null ? void 0 : _b2.call(_a2)) != null ? _c : null;
+  }
+  /**
+   * Get a text provider for the currently composed surface.
+   */
+  getCurrentTextProvider() {
+    var _a2, _b2;
+    return (_b2 = (_a2 = this.getCurrentSurface()) == null ? void 0 : _a2.textProvider) != null ? _b2 : null;
+  }
+  /**
+   * Get visible/current surface text through the unified surface model.
+   */
+  async getCurrentText(range) {
+    var _a2, _b2;
+    return (_b2 = await ((_a2 = this.getCurrentTextProvider()) == null ? void 0 : _a2.getText(range))) != null ? _b2 : [];
+  }
+  /**
+   * Search visible/current surface text through the unified surface model.
+   */
+  async searchCurrentText(query, range) {
+    const provider = this.getCurrentTextProvider();
+    if (!(provider == null ? void 0 : provider.search)) return [];
+    return await provider.search(query, range);
+  }
+  /**
    * Update styles.
    */
   setStyles(styles) {

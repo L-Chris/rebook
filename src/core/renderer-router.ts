@@ -17,6 +17,7 @@ import type {
     RendererStyles,
 } from './renderer'
 import { ReaderMarkStore, RendererEventDispatcher } from './renderer-state'
+import type { PageSurface } from './page-surface'
 
 export type RendererRouteMatch = boolean | number
 
@@ -112,6 +113,10 @@ export class RendererRouter implements Renderer {
 
     getLocation() {
         return this.active?.getLocation() ?? null
+    }
+
+    getCurrentSurface(): PageSurface | null {
+        return this.active?.getCurrentSurface?.() ?? null
     }
 
     getSectionFractions(): number[] {

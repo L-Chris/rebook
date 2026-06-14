@@ -23,6 +23,7 @@ describe('PageSurfaceController', () => {
         const result = controller.render({ surface })
 
         expect(result).toEqual({ surface, result: 'composed:surface-1' })
+        expect(controller.getCurrentSurface()).toBe(surface)
     })
 
     it('destroys stale asynchronous surfaces instead of composing them', async () => {
@@ -49,12 +50,14 @@ describe('PageSurfaceController', () => {
 
         pending.get('second')?.(createSurface('second'))
         await expect(second).resolves.toMatchObject({ result: 'composed:second' })
+        expect(controller.getCurrentSurface()?.id).toBe('second')
 
         pending.get('first')?.(createSurface('first', destroyed))
         await expect(first).resolves.toBeNull()
 
         expect(composed).toEqual(['second'])
         expect(destroyed).toHaveBeenCalledTimes(1)
+        expect(controller.getCurrentSurface()?.id).toBe('second')
     })
 
     it('clears the compositor and cancels pending surface renders', async () => {
@@ -82,6 +85,7 @@ describe('PageSurfaceController', () => {
         expect(clear).toHaveBeenCalledTimes(1)
         expect(compositor.compose).not.toHaveBeenCalled()
         expect(destroyed).toHaveBeenCalledTimes(1)
+        expect(controller.getCurrentSurface()).toBeNull()
     })
 })
 

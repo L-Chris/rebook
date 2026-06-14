@@ -463,6 +463,13 @@ describe('BrowserRenderer', () => {
         expect(container.querySelector('[data-rebook-surface-kind="reflowable-page"]')).toBeTruthy()
         expect(container.querySelector('[data-block-type="chapter"]')).toBeDefined()
         expect(container.querySelector('iframe')).toBeNull()
+        expect(reader.getCurrentSurface()).toMatchObject({ kind: 'reflowable-page', pageIndex: 0 })
+        expect((await reader.getCurrentText())[0]).toMatchObject({
+            text: 'Hello browser',
+            location: { type: 'reflowable', sectionIndex: 0, blockId: 'chapter-heading' },
+        })
+        expect((await reader.searchCurrentText('browser'))[0].range.start)
+            .toMatchObject({ type: 'reflowable', sectionIndex: 0, blockId: 'chapter-heading' })
 
         reader.destroy()
     })
@@ -615,6 +622,13 @@ describe('BrowserRenderer', () => {
         expect(container.querySelector('[data-rebook-fixed-text-layer="true"]')).toBeTruthy()
         expect(container.textContent).toContain('Fixed page 1')
         expect(location?.pageItem?.label).toBe('1')
+        expect(reader.getCurrentSurface()).toMatchObject({ kind: 'fixed-page', pageIndex: 0 })
+        expect((await reader.getCurrentText())[0]).toMatchObject({
+            text: 'Fixed page 1',
+            location: { type: 'fixed', format: 'pdf', pageIndex: 0 },
+        })
+        expect((await reader.searchCurrentText('page 1'))[0].range.start)
+            .toMatchObject({ type: 'fixed', format: 'pdf', pageIndex: 0 })
 
         reader.setMark({
             id: 'fixed-highlight',
@@ -640,6 +654,11 @@ describe('BrowserRenderer', () => {
         await reader.next()
         expect(container.textContent).toContain('Fixed page 2')
         expect(reader.getLocation()?.pageItem?.label).toBe('2')
+        expect(reader.getCurrentSurface()).toMatchObject({ kind: 'fixed-page', pageIndex: 1 })
+        expect((await reader.getCurrentText())[0]).toMatchObject({
+            text: 'Fixed page 2',
+            location: { type: 'fixed', format: 'pdf', pageIndex: 1 },
+        })
         expect(container.querySelector('[data-rebook-annotation="true"]')).toBeNull()
 
         reader.destroy()

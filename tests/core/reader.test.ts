@@ -3,12 +3,15 @@ import { describe, expect, it } from 'vitest'
 import { ReaderSession, type TOCViewItem } from '../../src/core/reader'
 import type { Book, RelocateEvent } from '../../src/core/types'
 import type { LayoutMode, ReaderMark, Renderer, RendererStyles } from '../../src/core/renderer'
+import type { PageSurface } from '../../src/core/page-surface'
+import { createStaticTextProvider } from '../../src/core/text-provider'
 import { EPUBParser } from '../../src/parsers/epub'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 
 class FakeRenderer implements Renderer {
     private book: Book | null = null
     private location: RelocateEvent | null = null
+    private surface: PageSurface | null = null
 
     async open(book: Book): Promise<void> {
         this.book = book
@@ -27,6 +30,7 @@ class FakeRenderer implements Renderer {
     clearMarks(_kind?: string): void {}
     getMarks(): ReaderMark[] { return [] }
     getLocation(): RelocateEvent | null { return this.location }
+    getCurrentSurface(): PageSurface | null { return this.surface }
     getSectionFractions(): number[] {
         const count = this.book?.sections.length ?? 0
         return Array.from({ length: count + 1 }, (_, index) => count > 0 ? index / count : 0)
@@ -37,6 +41,10 @@ class FakeRenderer implements Renderer {
 
     setLocation(location: RelocateEvent): void {
         this.location = location
+    }
+
+    setSurface(surface: PageSurface | null): void {
+        this.surface = surface
     }
 }
 
@@ -146,6 +154,41 @@ describe('ReaderSession', () => {
 
         book.destroy?.()
     }, 10000)
+
+    it('exposes current surface text through the reader core', async () => {
+        const renderer = new FakeRenderer()
+        const reader = new ReaderSession({ createRenderer: () => renderer })
+        await reader.openBook({ sections: [] })
+
+        const chunk = {
+            id: 'current-text',
+            text: 'current surface provider',
+            location: { type: 'fixed' as const, format: 'pdf', pageIndex: 0 },
+        }
+        const surface: PageSurface = {
+            id: 'surface-1',
+            kind: 'fixed-page',
+            width: 100,
+            height: 120,
+            scale: 1,
+            layers: [],
+            textProvider: createStaticTextProvider([chunk]),
+        }
+        renderer.setSurface(surface)
+
+        expect(reader.getCurrentSurface()).toBe(surface)
+        expect(reader.getCurrentTextProvider()).toBe(surface.textProvider)
+        expect(await reader.getCurrentText()).toEqual([chunk])
+        expect(await reader.searchCurrentText('provider')).toEqual([{
+            chunk,
+            range: { start: chunk.location },
+            score: 1,
+        }])
+
+        renderer.setSurface(null)
+        expect(await reader.getCurrentText()).toEqual([])
+        expect(await reader.searchCurrentText('provider')).toEqual([])
+    })
 })
 
 function flattenTOCItems(items: readonly NonNullable<Book['toc']>[number][]): NonNullable<Book['toc']>[number][] {

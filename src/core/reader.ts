@@ -8,6 +8,8 @@
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, RebookPlugin, TOCItem } from './types'
 import type { ParserInput, ParserOptions } from './parser'
+import type { BookRange, TextChunk, TextProvider, TextSearchResult } from './location'
+import type { PageSurface } from './page-surface'
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from './renderer'
 import type { TrialLimitController, TrialTOCAccessItem } from '../plugins/trial-limit'
 import { registry } from './parser'
@@ -332,6 +334,36 @@ export class ReaderSession {
             checkItem(item)
         }
         return activeItem
+    }
+
+    /**
+     * Get the currently composed page surface, when the active renderer exposes one.
+     */
+    getCurrentSurface(): PageSurface | null {
+        return this.renderer.getCurrentSurface?.() ?? null
+    }
+
+    /**
+     * Get a text provider for the currently composed surface.
+     */
+    getCurrentTextProvider(): TextProvider | null {
+        return this.getCurrentSurface()?.textProvider ?? null
+    }
+
+    /**
+     * Get visible/current surface text through the unified surface model.
+     */
+    async getCurrentText(range?: BookRange): Promise<readonly TextChunk[]> {
+        return await this.getCurrentTextProvider()?.getText(range) ?? []
+    }
+
+    /**
+     * Search visible/current surface text through the unified surface model.
+     */
+    async searchCurrentText(query: string, range?: BookRange): Promise<readonly TextSearchResult[]> {
+        const provider = this.getCurrentTextProvider()
+        if (!provider?.search) return []
+        return await provider.search(query, range)
     }
 
     /**

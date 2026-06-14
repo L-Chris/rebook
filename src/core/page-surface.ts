@@ -87,6 +87,7 @@ export class PageSurfaceController<
     private readonly contentRenderer: ContentRenderer<TContext, TSurface>
     private readonly compositor: PageCompositor<TSurface, TTarget, TResult>
     private sequence = 0
+    private currentSurface: TSurface | null = null
 
     constructor(config: PageSurfaceControllerConfig<TContext, TSurface, TTarget, TResult>) {
         this.contentRenderer = config.contentRenderer
@@ -109,12 +110,17 @@ export class PageSurfaceController<
         return this.composeCurrent(token, surface, target)
     }
 
+    getCurrentSurface(): TSurface | null {
+        return this.currentSurface
+    }
+
     cancelPending(): void {
         this.sequence++
     }
 
     clear(): void {
         this.cancelPending()
+        this.currentSurface = null
         this.compositor.clear?.()
     }
 
@@ -140,10 +146,13 @@ export class PageSurfaceController<
         }
 
         if (isPromiseLike(result)) {
-            return result.then(composed => (
-                token === this.sequence ? { surface, result: composed } : null
-            ))
+            return result.then(composed => {
+                if (token !== this.sequence) return null
+                this.currentSurface = surface
+                return { surface, result: composed }
+            })
         }
+        this.currentSurface = surface
         return { surface, result }
     }
 }

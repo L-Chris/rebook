@@ -7,6 +7,7 @@
 
 import type { Book, RelocateEvent, LoadEvent } from './types'
 import type { BookPosition } from './location'
+import type { PageSurface } from './page-surface'
 
 /**
  * Style options for the renderer.
@@ -156,6 +157,11 @@ export interface Renderer {
      * Get the current reading location.
      */
     getLocation(): RelocateEvent | null
+
+    /**
+     * Get the currently composed page surface when the renderer is surface-backed.
+     */
+    getCurrentSurface?(): PageSurface | null
 
     /**
      * Get section progress fractions (for progress bar tick marks).

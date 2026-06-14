@@ -176,6 +176,10 @@ export class BrowserFixedRenderer implements Renderer {
         return this.lastLocation
     }
 
+    getCurrentSurface(): BrowserPageSurface | null {
+        return this.surfaceController.getCurrentSurface()
+    }
+
     getSectionFractions(): number[] {
         if (!this.pages.length) return []
         if (this.pages.length === 1) return [0, 1]
