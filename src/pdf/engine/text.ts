@@ -1,7 +1,8 @@
 import { bytesToLatin1 } from './bytes'
-import { ContentDictToken, ContentNameToken, ContentTokenizer, ContentToken, isContentString } from './content'
-import { identityFontDecoder, PdfFontDecoder, PdfFontMap, PdfTextAdvanceOptions } from './fonts'
+import { ContentTokenizer, ContentToken, isContentString } from './content'
+import { PdfFontDecoder, PdfFontMap } from './fonts'
 import { decodePdfTextString } from './strings'
+import { advancePdfText, contentTextValue, currentPdfFont, isContentDict, isContentName, pdfFontRunStyle, PdfTextState } from './text-state'
 import { PdfFontSource, PdfMatrix, PdfPageText, PdfTextRun } from '../types'
 
 export interface PdfTextResources {
@@ -148,7 +149,7 @@ class TextInterpreter {
         this.charSpacing = this.popNumber()
         this.wordSpacing = this.popNumber()
         this.nextLine()
-        this.showText(textValue(text))
+        this.showText(contentTextValue(text))
         break
       }
       case 'TJ': {
@@ -189,7 +190,7 @@ class TextInterpreter {
     const advance = this.advanceText(text, font)
     const width = this.displayTextAdvance(advance, this.textMatrix)
     const actualText = this.currentActualText()
-    const runStyle = fontRunStyle(font)
+    const runStyle = pdfFontRunStyle(font)
     if (actualText) {
       if (!actualText.seenText) {
         const point = this.textLayerPoint(positionMatrix)
@@ -222,7 +223,7 @@ class TextInterpreter {
 
   private showTextParts(parts: ContentToken[]): void {
     for (const part of parts) {
-      if (isContentString(part) || typeof part === 'string') this.showText(textValue(part))
+      if (isContentString(part) || typeof part === 'string') this.showText(contentTextValue(part))
       else if (typeof part === 'number') this.adjustText(part)
     }
   }
@@ -322,7 +323,7 @@ class TextInterpreter {
   }
 
   private popText(): string {
-    return textValue(this.stack.pop())
+    return contentTextValue(this.stack.pop())
   }
 
   private textLayerPoint(matrix: PdfMatrix, overrideX?: number, overrideY?: number): { x: number; y: number } {
@@ -368,14 +369,14 @@ class TextInterpreter {
   }
 
   private currentFont(): PdfFontDecoder {
-    return (this.fontName ? this.resources.fonts?.get(this.fontName) : undefined) ?? identityFontDecoder
+    return currentPdfFont(this.fontName, this.resources.fonts)
   }
 
   private advanceText(text: string, font: PdfFontDecoder): number {
-    return font.advanceWidth?.(text, this.advanceOptions()) ?? identityFontDecoder.advanceWidth?.(text, this.advanceOptions()) ?? 0
+    return advancePdfText(text, font, this.textState())
   }
 
-  private advanceOptions(): PdfTextAdvanceOptions {
+  private textState(): PdfTextState {
     return {
       fontSize: this.fontSize,
       charSpacing: this.charSpacing,
@@ -459,15 +460,6 @@ const multiplyMatrix = (left: PdfMatrix, right: PdfMatrix): PdfMatrix => [
   left[1] * right[4] + left[3] * right[5] + left[5],
 ]
 
-const isContentName = (token: ContentToken | undefined): token is ContentNameToken =>
-  Boolean(token && typeof token === 'object' && !Array.isArray(token) && token.type === 'name')
-
-const isContentDict = (token: ContentToken | undefined): token is ContentDictToken =>
-  Boolean(token && typeof token === 'object' && !Array.isArray(token) && token.type === 'dict')
-
-const textValue = (token: ContentToken | undefined): string =>
-  isContentString(token) ? token.value : typeof token === 'string' ? token : ''
-
 const canAppendTextRun = (previous: PdfTextRun, next: PdfTextRun): boolean => {
   if (previous.fontName !== next.fontName) return false
   if (previous.fontFamily !== next.fontFamily || previous.fontWeight !== next.fontWeight || previous.fontStyle !== next.fontStyle) return false
@@ -488,7 +480,7 @@ const textRunWidth = (run: PdfTextRun): number =>
 const actualText = (token: ContentToken | undefined): string | undefined => {
   if (!isContentDict(token)) return undefined
   const value = token.entries.get('ActualText')
-  return isContentString(value) || typeof value === 'string' ? decodePdfTextString(textValue(value)) : undefined
+  return isContentString(value) || typeof value === 'string' ? decodePdfTextString(contentTextValue(value)) : undefined
 }
 
 interface MarkedContentState {
@@ -503,15 +495,4 @@ interface MarkedContentState {
   fontWeight?: string
   fontStyle?: 'normal' | 'italic' | 'oblique'
   fontSource?: PdfFontSource
-}
-
-const fontRunStyle = (font: PdfFontDecoder): Partial<PdfTextRun> => {
-  const style = font.style
-  if (!style) return {}
-  return {
-    fontFamily: style.family,
-    ...(style.weight ? { fontWeight: style.weight } : {}),
-    ...(style.style ? { fontStyle: style.style } : {}),
-    ...(style.source ? { fontSource: style.source } : {}),
-  }
 }

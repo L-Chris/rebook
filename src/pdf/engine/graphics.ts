@@ -1,8 +1,9 @@
 import { bytesToLatin1 } from './bytes'
-import { ContentInlineImageToken, ContentNameToken, ContentTokenizer, ContentToken, isContentString } from './content'
+import { ContentInlineImageToken, ContentTokenizer, ContentToken, isContentString } from './content'
 import { decodeAscii85, decodeAsciiHex, decodeRunLength } from './filters'
-import { identityFontDecoder, PdfFontDecoder, PdfFontMap, PdfTextAdvanceOptions } from './fonts'
+import { PdfFontDecoder, PdfFontMap } from './fonts'
 import { colorizeImageMask, imageMaskSamplesToRgba, imageSamplesToRgba, readImageColorSpace, readImageDecode, readOptionalDeviceColorSpace, supportsImageBits } from './images'
+import { advancePdfText, contentTextValue, currentPdfFont, isContentName, pdfFontRunStyle, PdfTextState } from './text-state'
 import { isDict, isName, isStream, PdfBlendMode, PdfColor, PdfDeviceColorSpace, PdfDisplayOp, PdfError, PdfImageColorSpace, PdfImageData, PdfLineCap, PdfLineJoin, PdfMatrix, PdfPageDisplayList, PdfPathPaint, PdfPathSegment, PdfPrimitive, PdfRect, PdfShading, PdfShadingColorStop, PdfShadingPattern, PdfTextRenderingMode, PdfTextRun } from '../types'
 
 export interface PdfType0Function {
@@ -552,7 +553,7 @@ class GraphicsInterpreter {
         this.charSpacing = this.popNumber()
         this.wordSpacing = this.popNumber()
         this.nextTextLine()
-        this.showText(textValue(text))
+        this.showText(contentTextValue(text))
         break
       }
       case 'TJ': {
@@ -579,7 +580,7 @@ class GraphicsInterpreter {
       fontSize: this.fontSize,
       ...(width !== undefined ? { width } : {}),
       fontName: this.fontName,
-      ...fontRunStyle(font),
+      ...pdfFontRunStyle(font),
       fillColor: this.fillColor,
       strokeColor: this.strokeColor,
       renderingMode: this.textRenderingMode,
@@ -597,7 +598,7 @@ class GraphicsInterpreter {
 
   private showTextParts(parts: ContentToken[]): void {
     for (const part of parts) {
-      if (isContentString(part) || typeof part === 'string') this.showText(textValue(part))
+      if (isContentString(part) || typeof part === 'string') this.showText(contentTextValue(part))
       else if (typeof part === 'number') this.adjustText(part)
     }
   }
@@ -756,11 +757,11 @@ class GraphicsInterpreter {
   }
 
   private currentFont(): PdfFontDecoder {
-    return (this.fontName ? this.resources.fonts?.get(this.fontName) : undefined) ?? identityFontDecoder
+    return currentPdfFont(this.fontName, this.resources.fonts)
   }
 
   private advanceText(text: string, font: PdfFontDecoder): number {
-    return font.advanceWidth?.(text, this.advanceOptions()) ?? identityFontDecoder.advanceWidth?.(text, this.advanceOptions()) ?? 0
+    return advancePdfText(text, font, this.textState())
   }
 
   private textRunWidth(advance: number): number | undefined {
@@ -769,7 +770,7 @@ class GraphicsInterpreter {
     return horizontalScale > 1e-9 ? advance / horizontalScale : advance
   }
 
-  private advanceOptions(): PdfTextAdvanceOptions {
+  private textState(): PdfTextState {
     return {
       fontSize: this.fontSize,
       charSpacing: this.charSpacing,
@@ -792,7 +793,7 @@ class GraphicsInterpreter {
   }
 
   private popText(): string {
-    return textValue(this.stack.pop())
+    return contentTextValue(this.stack.pop())
   }
 
   private popColor(space: PdfGraphicsColorSpace): PdfColor {
@@ -1159,17 +1160,6 @@ const textRenderingMode = (value: number): PdfTextRenderingMode => {
   return 'fill'
 }
 
-const fontRunStyle = (font: PdfFontDecoder): Partial<PdfTextRun> => {
-  const style = font.style
-  if (!style) return {}
-  return {
-    fontFamily: style.family,
-    ...(style.weight ? { fontWeight: style.weight } : {}),
-    ...(style.style ? { fontStyle: style.style } : {}),
-    ...(style.source ? { fontSource: style.source } : {}),
-  }
-}
-
 const paintsPathFill = (paint: PdfPathPaint): boolean =>
   paint === 'fill' || paint === 'fillEvenOdd' || paint === 'fillStroke' || paint === 'fillStrokeEvenOdd'
 
@@ -1404,12 +1394,6 @@ interface GraphicsPaintState {
   strokeColorSpace: PdfGraphicsColorSpace
   fillColorSpace: PdfGraphicsColorSpace
 }
-
-const isContentName = (token: ContentToken | undefined): token is ContentNameToken =>
-  Boolean(token && typeof token === 'object' && !Array.isArray(token) && token.type === 'name')
-
-const textValue = (token: ContentToken | undefined): string =>
-  isContentString(token) ? token.value : typeof token === 'string' ? token : ''
 
 const isInlineImage = (token: ContentToken): token is ContentInlineImageToken =>
   Boolean(token && typeof token === 'object' && !Array.isArray(token) && token.type === 'inlineImage')
