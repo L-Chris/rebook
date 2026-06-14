@@ -46,7 +46,7 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
         const text = context.document.getPageText
             ? await context.document.getPageText(context.page.index)
             : emptyTextLayer(context.page)
-        const visual = await this.renderVisualLayer(context)
+        const visual = await this.renderContentLayer(context)
         const textLayer = this.createTextLayer(text, context.styles, visual !== null)
         const layers: BrowserPageSurfaceLayer[] = []
 
@@ -55,7 +55,7 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
 
         return {
             id: `${context.document.format}:${context.page.index}`,
-            kind: context.document.format === 'cbz' ? 'image-page' : 'fixed-page',
+            kind: context.document.getPageImage ? 'image-page' : 'fixed-page',
             pageIndex: context.page.index,
             width: context.page.width,
             height: context.page.height,
@@ -76,7 +76,11 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
         }
     }
 
-    private async renderVisualLayer(context: BrowserFixedContentRenderContext): Promise<BrowserPageSurfaceLayer | null> {
+    private async renderContentLayer(context: BrowserFixedContentRenderContext): Promise<BrowserPageSurfaceLayer | null> {
+        if (context.document.getPageImage) {
+            return this.renderImageLayer(context)
+        }
+
         const renderer = this.getFixedPageRenderer(context.document)
         if (!renderer) return null
 
@@ -101,6 +105,28 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
         } catch {
             canvas.remove()
             return null
+        }
+    }
+
+    private async renderImageLayer(context: BrowserFixedContentRenderContext): Promise<BrowserPageSurfaceLayer | null> {
+        const image = await context.document.getPageImage?.(context.page.index)
+        if (!image) return null
+
+        const element = document.createElement('img')
+        element.dataset.rebookFixedImage = 'true'
+        element.src = image.src
+        element.alt = image.alt ?? ''
+        element.style.display = 'block'
+        element.style.objectFit = 'contain'
+
+        return {
+            id: 'content',
+            kind: 'content',
+            contentKind: 'image',
+            content: element,
+            zIndex: 0,
+            selectable: false,
+            pointerEvents: 'none',
         }
     }
 

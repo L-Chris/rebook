@@ -2,19 +2,21 @@
  * CBZ (Comic Book Zip) parser.
  *
  * Parses zip archives containing images (typically .cbz files).
- * Each image becomes a section. Metadata is read from ComicInfo.xml
- * (Anansi standard) or ComicBookInfo (JSON in zip comment).
+ * Each image becomes a page-native fixedDocument page. Metadata is read from
+ * ComicInfo.xml (Anansi standard) or ComicBookInfo (JSON in zip comment).
  */
 
-import type { Book, BookMetadata, Section, TOCItem } from '../core/types'
+import type { Book, BookMetadata, TOCItem } from '../core/types'
 import type { Parser, ParserInput, ParserOptions } from '../core/parser'
 import type { Loader } from '../core/loader'
 import type { DOMAdapter } from '../core/dom-adapter'
+import type { FixedDocument, FixedPageImage, FixedPageInfo } from '../core/fixed-document'
 import { createZipLoader, isZipFile } from '../loaders/zip-loader'
 import { UnsupportedInputError, ParseError, AdapterRequiredError } from '../core/errors'
 import { normalizeContributors } from '../core/metadata'
 import { getMimeTypeFromPath } from '../core/utils'
 import { getInputName } from '../core/binary'
+import { readRasterImageDimensions } from '../core/image-size'
 
 // ============================================================================
 // Image extensions
@@ -212,63 +214,36 @@ export class CBZParser implements Parser {
             }
         }
 
-        // Data URI cache for lazy loading
-        const dataCache = new Map<string, string>()
-
-        // Helper to convert Blob to data URI
-        const blobToDataURI = async (blob: Blob, mimeType: string): Promise<string> => {
-            const buffer = await blob.arrayBuffer()
-            const bytes = new Uint8Array(buffer)
-            let binary = ''
-            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
-            return `data:${mimeType};base64,${btoa(binary)}`
-        }
-
-        // Build sections
-        const sections: Section[] = imageFiles.map(filename => ({
-            id: filename,
-            size: loader.getSize(filename),
-            format: 'image' as const,
-            load: async () => {
-                if (dataCache.has(filename)) {
-                    return dataCache.get(filename)!
-                }
-                const blob = await loader.loadBlob(filename)
-                if (!blob) throw new ParseError(`Failed to load ${filename}`, 'cbz')
-                const dataURI = await blobToDataURI(blob, getMimeTypeFromPath(filename))
-                dataCache.set(filename, dataURI)
-                return dataURI
-            },
-            unload: () => {
-                dataCache.delete(filename)
-            },
-            // Images don't have a document model
-            getDocument: async () => null,
-        }))
-
         // Build TOC (flat list of images)
         const toc: TOCItem[] = imageFiles.map(filename => ({
             label: filename,
             href: filename,
         }))
-        const sectionIndexByHref = new Map(sections.map((section, index) => [String(section.id), index]))
+        const pageIndexByHref = new Map(imageFiles.map((filename, index) => [filename, index]))
+        const fixedDocument = createCBZFixedDocument(loader, imageFiles)
 
         // Build Book
         const book: Book = {
-            sections,
+            sections: [],
             toc,
+            pageList: toc,
             metadata,
             rendition: { layout: 'pre-paginated' },
+            fixedDocument,
             getCover: async () => {
                 if (imageFiles.length === 0) return null
                 return loader.loadBlob(imageFiles[0])
             },
             resolveHref: (href: string) => {
-                const index = sectionIndexByHref.get(href) ?? -1
+                const index = pageIndexByHref.get(href) ?? -1
                 return index >= 0 ? { index } : null
             },
+            splitTOCHref(href) {
+                const index = pageIndexByHref.get(href)
+                return [index ?? href, null]
+            },
             destroy: () => {
-                dataCache.clear()
+                fixedDocument.destroy?.()
             },
         }
 
@@ -277,3 +252,81 @@ export class CBZParser implements Parser {
 }
 
 export const cbz = () => new CBZParser()
+
+interface CachedCBZImage {
+    readonly page: FixedPageInfo
+    readonly image: FixedPageImage
+}
+
+function createCBZFixedDocument(loader: Loader, imageFiles: readonly string[]): FixedDocument {
+    const imageCache = new Map<number, Promise<CachedCBZImage>>()
+
+    const readImage = async (pageIndex: number): Promise<CachedCBZImage> => {
+        assertCBZPageIndex(imageFiles, pageIndex)
+
+        let cached = imageCache.get(pageIndex)
+        if (!cached) {
+            cached = readCBZImage(loader, imageFiles[pageIndex], pageIndex)
+            imageCache.set(pageIndex, cached)
+        }
+        return cached
+    }
+
+    return {
+        kind: 'fixed-document',
+        format: 'cbz',
+        pageCount: imageFiles.length,
+        async getPage(pageIndex) {
+            return (await readImage(pageIndex)).page
+        },
+        async getPages() {
+            const pages: FixedPageInfo[] = []
+            for (let index = 0; index < imageFiles.length; index++) {
+                pages.push((await readImage(index)).page)
+            }
+            return pages
+        },
+        async getPageImage(pageIndex) {
+            return (await readImage(pageIndex)).image
+        },
+        destroy() {
+            imageCache.clear()
+        },
+    }
+}
+
+async function readCBZImage(loader: Loader, filename: string, pageIndex: number): Promise<CachedCBZImage> {
+    const mimeType = getMimeTypeFromPath(filename)
+    const blob = await loader.loadBlob(filename, mimeType)
+    if (!blob) throw new ParseError(`Failed to load ${filename}`, 'cbz')
+
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    const dimensions = readRasterImageDimensions(bytes) ?? { width: 1000, height: 1414 }
+    const page = {
+        index: pageIndex,
+        width: dimensions.width,
+        height: dimensions.height,
+        label: filename,
+    }
+    const image = {
+        pageIndex,
+        width: dimensions.width,
+        height: dimensions.height,
+        src: bytesToDataURI(bytes, mimeType),
+        mimeType,
+        alt: filename,
+    }
+    return { page, image }
+}
+
+function bytesToDataURI(bytes: Uint8Array, mimeType: string): string {
+    let binary = ''
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+    return `data:${mimeType};base64,${btoa(binary)}`
+}
+
+function assertCBZPageIndex(imageFiles: readonly string[], pageIndex: number): void {
+    if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= imageFiles.length) {
+        throw new RangeError(`Invalid CBZ page index ${pageIndex}`)
+    }
+}

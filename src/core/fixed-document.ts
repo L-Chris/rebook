@@ -58,6 +58,15 @@ export interface FixedPageTextLayer {
     readonly text?: string
 }
 
+export interface FixedPageImage {
+    readonly pageIndex: number
+    readonly width: number
+    readonly height: number
+    readonly src: string
+    readonly mimeType?: string
+    readonly alt?: string
+}
+
 export type FixedPageRenderIntent = 'display' | 'print' | 'thumbnail'
 
 export interface FixedPageViewportOptions {
@@ -102,6 +111,7 @@ export interface FixedDocument {
 
     getPage(pageIndex: number): Promise<FixedPageInfo> | FixedPageInfo
     getPages?(): Promise<readonly FixedPageInfo[]> | readonly FixedPageInfo[]
+    getPageImage?(pageIndex: number): Promise<FixedPageImage> | FixedPageImage
     getPageText?(pageIndex: number): Promise<FixedPageTextLayer> | FixedPageTextLayer
     destroy?(): Promise<void> | void
 }

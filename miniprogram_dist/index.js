@@ -18557,61 +18557,107 @@ class CBZParser {
         }
       };
     }
-    const dataCache = /* @__PURE__ */ new Map();
-    const blobToDataURI = async (blob, mimeType) => {
-      const buffer = await blob.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      let binary = "";
-      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-      return `data:${mimeType};base64,${btoa(binary)}`;
-    };
-    const sections = imageFiles.map((filename) => ({
-      id: filename,
-      size: loader.getSize(filename),
-      format: "image",
-      load: async () => {
-        if (dataCache.has(filename)) {
-          return dataCache.get(filename);
-        }
-        const blob = await loader.loadBlob(filename);
-        if (!blob) throw new ParseError(`Failed to load ${filename}`, "cbz");
-        const dataURI = await blobToDataURI(blob, getMimeTypeFromPath(filename));
-        dataCache.set(filename, dataURI);
-        return dataURI;
-      },
-      unload: () => {
-        dataCache.delete(filename);
-      },
-      // Images don't have a document model
-      getDocument: async () => null
-    }));
     const toc = imageFiles.map((filename) => ({
       label: filename,
       href: filename
     }));
-    const sectionIndexByHref = new Map(sections.map((section, index) => [String(section.id), index]));
+    const pageIndexByHref = new Map(imageFiles.map((filename, index) => [filename, index]));
+    const fixedDocument = createCBZFixedDocument(loader, imageFiles);
     const book = {
-      sections,
+      sections: [],
       toc,
+      pageList: toc,
       metadata,
       rendition: { layout: "pre-paginated" },
+      fixedDocument,
       getCover: async () => {
         if (imageFiles.length === 0) return null;
         return loader.loadBlob(imageFiles[0]);
       },
       resolveHref: (href) => {
         var _a2;
-        const index = (_a2 = sectionIndexByHref.get(href)) != null ? _a2 : -1;
+        const index = (_a2 = pageIndexByHref.get(href)) != null ? _a2 : -1;
         return index >= 0 ? { index } : null;
       },
+      splitTOCHref(href) {
+        const index = pageIndexByHref.get(href);
+        return [index != null ? index : href, null];
+      },
       destroy: () => {
-        dataCache.clear();
+        var _a2;
+        (_a2 = fixedDocument.destroy) == null ? void 0 : _a2.call(fixedDocument);
       }
     };
     return book;
   }
 }
 const cbz = () => new CBZParser();
+function createCBZFixedDocument(loader, imageFiles) {
+  const imageCache = /* @__PURE__ */ new Map();
+  const readImage = async (pageIndex) => {
+    assertCBZPageIndex(imageFiles, pageIndex);
+    let cached = imageCache.get(pageIndex);
+    if (!cached) {
+      cached = readCBZImage(loader, imageFiles[pageIndex], pageIndex);
+      imageCache.set(pageIndex, cached);
+    }
+    return cached;
+  };
+  return {
+    kind: "fixed-document",
+    format: "cbz",
+    pageCount: imageFiles.length,
+    async getPage(pageIndex) {
+      return (await readImage(pageIndex)).page;
+    },
+    async getPages() {
+      const pages = [];
+      for (let index = 0; index < imageFiles.length; index++) {
+        pages.push((await readImage(index)).page);
+      }
+      return pages;
+    },
+    async getPageImage(pageIndex) {
+      return (await readImage(pageIndex)).image;
+    },
+    destroy() {
+      imageCache.clear();
+    }
+  };
+}
+async function readCBZImage(loader, filename, pageIndex) {
+  var _a2;
+  const mimeType = getMimeTypeFromPath(filename);
+  const blob = await loader.loadBlob(filename, mimeType);
+  if (!blob) throw new ParseError(`Failed to load ${filename}`, "cbz");
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const dimensions = (_a2 = readRasterImageDimensions(bytes)) != null ? _a2 : { width: 1e3, height: 1414 };
+  const page2 = {
+    index: pageIndex,
+    width: dimensions.width,
+    height: dimensions.height,
+    label: filename
+  };
+  const image = {
+    pageIndex,
+    width: dimensions.width,
+    height: dimensions.height,
+    src: bytesToDataURI(bytes, mimeType),
+    mimeType,
+    alt: filename
+  };
+  return { page: page2, image };
+}
+function bytesToDataURI(bytes, mimeType) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return `data:${mimeType};base64,${btoa(binary)}`;
+}
+function assertCBZPageIndex(imageFiles, pageIndex) {
+  if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= imageFiles.length) {
+    throw new RangeError(`Invalid CBZ page index ${pageIndex}`);
+  }
+}
 const XLINK_NS$1 = "http://www.w3.org/1999/xlink";
 const MIME_SVG$1 = "image/svg+xml";
 const textEncoder = new TextEncoder();

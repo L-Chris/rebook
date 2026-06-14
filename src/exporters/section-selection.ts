@@ -18,11 +18,30 @@ export function selectSections(book: Book, selection: ExportSelection): Selected
         throw new Error(`Unsupported export unit: ${selection.unit}`)
     }
 
+    const sections = getSelectableSections(book)
     const labels = buildSectionLabels(book)
-    return book.sections
+    return sections
         .map((section, sourceIndex) => ({ section, sourceIndex, title: labels.get(sourceIndex) }))
         .filter(entry => selection.includeNonLinear || entry.section.linear !== 'no')
         .slice(0, selection.count)
+}
+
+function getSelectableSections(book: Book): readonly Section[] {
+    if (book.sections.length > 0) return book.sections
+    const fixedDocument = book.fixedDocument
+    if (!fixedDocument?.getPageImage) return book.sections
+
+    return Array.from({ length: fixedDocument.pageCount }, (_, pageIndex): Section => {
+        const href = book.pageList?.[pageIndex]?.href ?? `${fixedDocument.format}:page:${pageIndex}`
+        return {
+            id: href,
+            size: 0,
+            format: 'image',
+            load: async () => (await fixedDocument.getPageImage!(pageIndex)).src,
+            loadText: async () => `[${book.pageList?.[pageIndex]?.label ?? `Page ${pageIndex + 1}`}]`,
+            getDocument: async () => null,
+        }
+    })
 }
 
 function buildSectionLabels(book: Book): Map<number, string> {

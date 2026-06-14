@@ -77,7 +77,10 @@ describe('CBZParser', () => {
             const book = await parser.parse(buffer, options())
 
             expect(book).toBeDefined()
-            expect(book.sections).toHaveLength(3)
+            expect(book.sections).toHaveLength(0)
+            expect(book.fixedDocument?.kind).toBe('fixed-document')
+            expect(book.fixedDocument?.format).toBe('cbz')
+            expect(book.fixedDocument?.pageCount).toBe(3)
             expect(book.metadata?.title).toBe('Test Comic')
             // author is normalized to Contributor[]
             const authors = book.metadata?.author
@@ -93,7 +96,8 @@ describe('CBZParser', () => {
             const book = await parser.parse(buffer, options())
 
             expect(book).toBeDefined()
-            expect(book.sections).toHaveLength(2)
+            expect(book.sections).toHaveLength(0)
+            expect(book.fixedDocument?.pageCount).toBe(2)
             // No metadata from ComicInfo.xml
             expect(book.metadata?.title).toBeUndefined()
         })
@@ -118,35 +122,34 @@ describe('CBZParser', () => {
             const buffer = await createTestCBZ({ pages: 3 })
             const book = await parser.parse(buffer, options())
 
-            const ids = book.sections.map(s => s.id)
-            expect(ids).toEqual(['page001.jpg', 'page002.jpg', 'page003.jpg'])
+            const labels = (await book.fixedDocument!.getPages!()).map(page => page.label)
+            expect(labels).toEqual(['page001.jpg', 'page002.jpg', 'page003.jpg'])
         })
 
-        it('should load section content as data URI', async () => {
+        it('should load fixed page images as data URI surfaces', async () => {
             const opts = options()
             const buffer = await createTestCBZ({ pages: 1 })
             const book = await parser.parse(buffer, opts)
 
-            const content = await book.sections[0].load()
-            expect(content).toBeDefined()
-            expect(typeof content).toBe('string')
+            const page = await book.fixedDocument!.getPage(0)
+            const image = await book.fixedDocument!.getPageImage!(0)
+            expect(page.width).toBe(1)
+            expect(page.height).toBe(1)
             // Should be a data URI for image format
-            expect(content.startsWith('data:image/')).toBe(true)
-            expect(book.sections[0].format).toBe('image')
+            expect(image.src.startsWith('data:image/')).toBe(true)
+            expect(image.width).toBe(1)
+            expect(image.height).toBe(1)
         })
 
-        it('should unload section and clear cache', async () => {
+        it('should cache fixed page images until destroy', async () => {
             const buffer = await createTestCBZ({ pages: 1 })
             const book = await parser.parse(buffer, options())
 
-            const dataURI = await book.sections[0].load()
-            expect(dataURI).toBeDefined()
+            const image = await book.fixedDocument!.getPageImage!(0)
+            const image2 = await book.fixedDocument!.getPageImage!(0)
+            expect(image2).toBe(image)
 
-            book.sections[0].unload?.()
-            // After unload, loading again should re-create the data URI
-            const dataURI2 = await book.sections[0].load()
-            // Same content (deterministic), but freshly loaded
-            expect(dataURI2).toBe(dataURI)
+            book.destroy?.()
         })
 
         it('should return cover as first image blob', async () => {
@@ -177,8 +180,8 @@ describe('CBZParser', () => {
             const buffer = await createTestCBZ({ pages: 2 })
             const book = await parser.parse(buffer, options())
 
-            await book.sections[0].load()
-            await book.sections[1].load()
+            await book.fixedDocument!.getPageImage!(0)
+            await book.fixedDocument!.getPageImage!(1)
 
             // Should not throw
             book.destroy?.()
@@ -213,7 +216,7 @@ describe('CBZParser', () => {
         it('should work with only domAdapter (urlFactory not required)', async () => {
             const buffer = await createTestCBZ({ pages: 1 })
             const book = await parser.parse(buffer, { domAdapter })
-            expect(book.sections.length).toBeGreaterThan(0)
+            expect(book.fixedDocument?.pageCount).toBeGreaterThan(0)
         })
     })
 

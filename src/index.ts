@@ -175,6 +175,7 @@ export {
     type FixedDocument,
     type FixedDocumentFormat,
     type FixedPageInfo,
+    type FixedPageImage,
     type FixedPageRenderIntent,
     type FixedPageRenderer,
     type FixedPageRenderOptions,

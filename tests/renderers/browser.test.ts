@@ -7,10 +7,12 @@ import type { TOCViewItem } from '../../src/core/reader'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import { epub } from '../../src/parsers/epub'
 import { mobi } from '../../src/parsers/mobi'
+import { CBZParser } from '../../src/parsers/cbz'
 import { PDFParser } from '../../src/parsers/pdf'
 import { withTrialLimit } from '../../src/plugins/trial-limit'
 import { createReader, BrowserPageCompositor, BrowserRenderer } from '../../src/renderers/browser'
 import { makeSimplePdf } from '../fixtures/pdf-fixture'
+import { createTestCBZ } from '../fixtures/cbz-fixture'
 
 class MockResizeObserver {
     observe() {}
@@ -388,6 +390,27 @@ describe('BrowserRenderer', () => {
         expect(container.querySelector('[data-rebook-fixed-canvas="true"]')).toBeTruthy()
         expect((container.querySelector('[data-rebook-fixed-text-layer="true"] span') as HTMLElement | null)?.style.color).toBe('transparent')
         expect(container.textContent).toContain('Hello Rebook PDF')
+
+        reader.destroy()
+    })
+
+    it('renders parsed CBZ books as fixed image page surfaces', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '160')
+        document.body.appendChild(container)
+
+        const input = await createTestCBZ({ pages: 2 })
+        const book = await new CBZParser().parse(input, { domAdapter: new NodeDOMAdapter() })
+        const reader = createReader({ container })
+        await reader.openBook(book)
+
+        expect(book.sections).toHaveLength(0)
+        expect(book.fixedDocument?.format).toBe('cbz')
+        expect(container.querySelector('[data-rebook-page-surface="true"]')).toBeTruthy()
+        expect(container.querySelector('[data-rebook-surface-kind="image-page"]')).toBeTruthy()
+        expect(container.querySelector('[data-rebook-fixed-image="true"]')).toBeTruthy()
+        expect((container.querySelector('[data-rebook-fixed-image="true"]') as HTMLImageElement | null)?.src).toContain('data:image/')
 
         reader.destroy()
     })
