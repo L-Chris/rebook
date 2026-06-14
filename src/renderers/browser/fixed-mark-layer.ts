@@ -80,6 +80,8 @@ function createMarkLayer(surface: BrowserPageSurface, marks: readonly ReaderMark
 }
 
 function getPageMarkRects(surface: BrowserPageSurface, marks: readonly ReaderMark[]): ResolvedMarkRect[] {
+    if (surface.kind === 'spread') return getSpreadMarkRects(surface, marks)
+
     const format = surface.location?.type === 'fixed' ? surface.location.format : undefined
     const pageIndex = surface.pageIndex
     if (format === undefined || pageIndex === undefined) return getImagePageMarkRects(surface, marks)
@@ -92,6 +94,39 @@ function getImagePageMarkRects(surface: BrowserPageSurface, marks: readonly Read
     if (pageIndex === undefined) return []
 
     return resolveFixedMarkRects(marks, { pageIndex })
+}
+
+function getSpreadMarkRects(surface: BrowserPageSurface, marks: readonly ReaderMark[]): ResolvedMarkRect[] {
+    const pages = surface.metadata?.pages
+    if (!Array.isArray(pages)) return []
+
+    const rects: ResolvedMarkRect[] = []
+    for (const item of pages) {
+        const page = item as {
+            x?: number
+            y?: number
+            surface?: BrowserPageSurface
+        }
+        const pageSurface = page.surface
+        if (!pageSurface) continue
+        const pageIndex = pageSurface?.pageIndex
+        const format = pageSurface?.location?.type === 'fixed' ? pageSurface.location.format : undefined
+        if (pageIndex === undefined) continue
+        const pageRects = format === undefined
+            ? getImagePageMarkRects(pageSurface, marks)
+            : resolveFixedMarkRects(marks, { format, pageIndex })
+        for (const resolved of pageRects) {
+            rects.push({
+                ...resolved,
+                rect: {
+                    ...resolved.rect,
+                    x: resolved.rect.x + (page.x ?? 0),
+                    y: resolved.rect.y + (page.y ?? 0),
+                },
+            })
+        }
+    }
+    return rects
 }
 
 export const createBrowserFixedMarkLayerDecorator = (

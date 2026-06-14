@@ -13,12 +13,19 @@ import {
     resolveFixedPageFit,
     type FixedViewportMetrics,
 } from '../../core/fixed-page-model'
+import { createFixedPageViewport, type FixedPageInfo } from '../../core/fixed-document'
 import type { Book, LinkEvent, LoadEvent, RelocateEvent } from '../../core/types'
 import type { EventListener, LayoutMode, ReaderMark, RendererConfig, RendererStyles } from '../../core/renderer'
 import { UnsupportedFormatError } from '../../core/errors'
+import { parseCSSPixels } from '../../core/renderer-utils'
 import { RendererEventDispatcher } from '../../core/renderer-state'
 import type { BrowserPageCompositor, BrowserPageSurface } from './compositor'
-import { BrowserFixedContentRenderer, type BrowserFixedContentRenderContext, type BrowserFixedVisualRenderer } from './fixed-content'
+import {
+    BrowserFixedContentRenderer,
+    type BrowserFixedContentRenderContext,
+    type BrowserFixedSpreadPageRenderContext,
+    type BrowserFixedVisualRenderer,
+} from './fixed-content'
 import { BrowserFixedMarkLayerDecorator } from './fixed-mark-layer'
 import { BrowserSurfacePipeline } from './surface-pipeline'
 import { BrowserSurfaceHost } from './surface-host'
@@ -49,6 +56,8 @@ export interface BrowserFixedRendererConfig extends RendererConfig {
 
 const DEFAULT_MARGIN = 32
 const DEFAULT_TEXT_COLOR = '#111111'
+const DEFAULT_GAP = 32
+const DEFAULT_MIN_COLUMN_WIDTH = 320
 
 export class BrowserFixedRenderer implements BrowserContentEngine {
     private readonly host: BrowserSurfaceHost
@@ -60,13 +69,16 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     private sequence: FixedPageSequence | null = null
     private styles: RendererStyles
     private layoutMode: LayoutMode
+    private maxColumnCount: number
     private lastLocation: RelocateEvent | null = null
     private readonly devicePixelRatio?: number | (() => number)
     private wheelNavigationPending = false
+    private visiblePageCount = 1
 
     constructor(config: BrowserFixedRendererConfig) {
         this.styles = config.styles ?? {}
         this.layoutMode = config.layout ?? 'paginated'
+        this.maxColumnCount = config.maxColumnCount ?? 1
         this.beforeNavigate = config.beforeNavigate
         this.devicePixelRatio = config.devicePixelRatio
 
@@ -112,13 +124,17 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
 
     async next(): Promise<void> {
         if (!await this.canNavigate('next')) return
-        if (!this.sequence?.next()) return
+        const step = this.getNavigationStep()
+        const target = (this.sequence?.pageIndex ?? 0) + step
+        if (!this.sequence || target >= this.sequence.pageCount || !this.sequence.goTo(target)) return
         await this.renderCurrentPage('page')
     }
 
     async prev(): Promise<void> {
         if (!await this.canNavigate('prev')) return
-        if (!this.sequence?.prev()) return
+        const step = this.getNavigationStep()
+        const target = Math.max(0, (this.sequence?.pageIndex ?? 0) - step)
+        if (!this.sequence || target === this.sequence.pageIndex || !this.sequence.goTo(target)) return
         await this.renderCurrentPage('page')
     }
 
@@ -139,8 +155,9 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         void this.renderCurrentPage('layout')
     }
 
-    setSpread(_maxColumns: number): void {
-        // Fixed renderer currently presents one page at a time.
+    setSpread(maxColumns: number): void {
+        this.maxColumnCount = Math.max(1, maxColumns)
+        void this.renderCurrentPage('spread')
     }
 
     setMark(mark: ReaderMark): void {
@@ -203,22 +220,16 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         const page = sequence?.currentPage
         if (!sequence || !page) return
 
-        const fit = resolveFixedPageFit(page, this.getViewportMetrics(), {
-            margin: this.styles.margin,
-            maxInlineSize: this.styles.maxInlineSize,
-            maxColumnWidth: this.styles.maxColumnWidth,
-            defaultMargin: DEFAULT_MARGIN,
-            devicePixelRatio: this.getDevicePixelRatio(),
-        })
+        const renderPlan = this.createRenderPlan(sequence, page)
+        const { fit } = renderPlan
         this.pageHost.style.padding = `${fit.margin}px`
-        const rendered = await this.surfacePipeline.render(
-            createFixedPageContentRenderContext(sequence.document, page, this.styles, fit),
-        )
+        const rendered = await this.surfacePipeline.render(renderPlan.context)
         if (!rendered) return
 
-        this.applyPageAlignment(fit.viewport.cssHeight, fit.margin)
+        this.visiblePageCount = renderPlan.pageCount
+        this.applyPageAlignment(renderPlan.blockSize, fit.margin)
         this.scroller.scrollTop = 0
-        this.emit('load', { doc: rendered.surface.metadata?.textLayer ?? rendered.surface, index: page.index })
+        this.emit('load', { doc: getLoadDocument(rendered.surface), index: page.index })
         this.emitRelocate(reason)
     }
 
@@ -234,6 +245,108 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
             inlineSize: this.scroller.clientWidth,
             blockSize: this.scroller.clientHeight,
         }
+    }
+
+    private createRenderPlan(sequence: FixedPageSequence, page: FixedPageInfo): FixedRenderPlan {
+        const pages = this.getVisiblePages(sequence)
+        if (pages.length <= 1) {
+            const fit = resolveFixedPageFit(page, this.getViewportMetrics(), {
+                margin: this.styles.margin,
+                maxInlineSize: this.styles.maxInlineSize,
+                maxColumnWidth: this.styles.maxColumnWidth,
+                defaultMargin: DEFAULT_MARGIN,
+                devicePixelRatio: this.getDevicePixelRatio(),
+            })
+        return {
+            fit,
+            context: createFixedPageContentRenderContext(sequence.document, page, this.styles, fit),
+                blockSize: fit.viewport.cssHeight,
+                pageCount: 1,
+            }
+        }
+
+        const fit = this.resolveSpreadFit(pages)
+        const contexts = this.createSpreadPageContexts(sequence, pages, fit)
+        return {
+            fit,
+            context: {
+                document: sequence.document,
+                styles: this.styles,
+                pages: contexts,
+                width: fit.spreadWidth,
+                height: fit.spreadHeight,
+                scale: fit.scale,
+            },
+            blockSize: fit.spreadHeight * fit.scale,
+            pageCount: pages.length,
+        }
+    }
+
+    private getVisiblePages(sequence: FixedPageSequence): readonly FixedPageInfo[] {
+        const page = sequence.currentPage
+        if (!page || this.getRequestedColumnCount() < 2) return page ? [page] : []
+        const nextPage = sequence.pages[sequence.pageIndex + 1]
+        return nextPage ? [page, nextPage] : [page]
+    }
+
+    private getRequestedColumnCount(): number {
+        if (this.layoutMode !== 'paginated' || this.maxColumnCount < 2) return 1
+        const metrics = this.getViewportMetrics()
+        const margin = parseCSSPixels(this.styles.margin, DEFAULT_MARGIN)
+        const gap = parseCSSPixels(this.styles.gap, DEFAULT_GAP)
+        const minColumnWidth = parseCSSPixels(this.styles.minColumnWidth, DEFAULT_MIN_COLUMN_WIDTH)
+        const available = metrics.inlineSize - margin * 2
+        return available >= minColumnWidth * 2 + gap ? 2 : 1
+    }
+
+    private resolveSpreadFit(pages: readonly FixedPageInfo[]): FixedSpreadFit {
+        const metrics = this.getViewportMetrics()
+        const margin = parseCSSPixels(this.styles.margin, DEFAULT_MARGIN)
+        const gap = parseCSSPixels(this.styles.gap, DEFAULT_GAP)
+        const availableInlineSize = Math.max(1, metrics.inlineSize - margin * 2)
+        const maxColumnWidth = parseCSSPixels(
+            this.styles.maxColumnWidth ?? this.styles.maxInlineSize,
+            availableInlineSize,
+        )
+        const availableForPages = Math.max(1, availableInlineSize - gap * (pages.length - 1))
+        const columnInlineSize = Math.max(1, Math.min(maxColumnWidth, availableForPages / pages.length))
+        const scale = Math.min(...pages.map(item => columnInlineSize / Math.max(1, item.width)))
+        const normalizedScale = Number.isFinite(scale) && scale > 0 ? scale : 1
+        const unscaledGap = gap / normalizedScale
+        const spreadWidth = pages.reduce((total, item, index) => total + item.width + (index > 0 ? unscaledGap : 0), 0)
+        const spreadHeight = Math.max(...pages.map(item => item.height))
+        return {
+            margin,
+            availableInlineSize,
+            targetInlineSize: spreadWidth * normalizedScale,
+            scale: normalizedScale,
+            gap: unscaledGap,
+            spreadWidth,
+            spreadHeight,
+        }
+    }
+
+    private createSpreadPageContexts(
+        sequence: FixedPageSequence,
+        pages: readonly FixedPageInfo[],
+        fit: FixedSpreadFit,
+    ): BrowserFixedSpreadPageRenderContext[] {
+        let x = 0
+        return pages.map(page => {
+            const item: BrowserFixedSpreadPageRenderContext = {
+                context: createFixedPageContentRenderContext(sequence.document, page, this.styles, {
+                    ...fit,
+                    viewport: createFixedPageViewport(page, {
+                        scale: fit.scale,
+                        devicePixelRatio: this.getDevicePixelRatio(),
+                    }),
+                }),
+                x,
+                y: Math.max(0, (fit.spreadHeight - page.height) / 2),
+            }
+            x += page.width + fit.gap
+            return item
+        })
     }
 
     private getDevicePixelRatio(): number {
@@ -273,6 +386,37 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
             this.wheelNavigationPending = false
         })
     }
+
+    private getNavigationStep(): number {
+        return Math.max(1, this.visiblePageCount)
+    }
+}
+
+interface FixedRenderPlan {
+    fit: { margin: number }
+    context: BrowserFixedContentRenderContext
+    blockSize: number
+    pageCount: number
+}
+
+interface FixedSpreadFit {
+    margin: number
+    availableInlineSize: number
+    targetInlineSize: number
+    scale: number
+    gap: number
+    spreadWidth: number
+    spreadHeight: number
+}
+
+function getLoadDocument(surface: BrowserPageSurface): unknown {
+    if (surface.metadata?.textLayer) return surface.metadata.textLayer
+    const pages = surface.metadata?.pages
+    if (Array.isArray(pages)) {
+        const first = pages[0] as { surface?: BrowserPageSurface } | undefined
+        return first?.surface?.metadata?.textLayer ?? surface
+    }
+    return surface
 }
 
 export const createBrowserFixedRenderer = (config: BrowserFixedRendererConfig): BrowserFixedRenderer =>

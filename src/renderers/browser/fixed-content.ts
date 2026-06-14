@@ -2,6 +2,7 @@ import type {
     FixedPageRenderer,
     FixedPageTextLayer,
 } from '../../core/fixed-document'
+import type { TextProvider, TextChunk, TextSearchResult, BookRange } from '../../core/location'
 import type { ContentRenderer } from '../../core/page-surface'
 import type { RendererStyles } from '../../core/renderer'
 import {
@@ -16,6 +17,21 @@ import {
     type BrowserFixedVisualRenderContext,
 } from './fixed-visual'
 
+export interface BrowserFixedSpreadPageRenderContext {
+    readonly context: BrowserFixedVisualRenderContext
+    readonly x: number
+    readonly y: number
+}
+
+export interface BrowserFixedSpreadContentRenderContext {
+    readonly document: BrowserFixedVisualRenderContext['document']
+    readonly styles: RendererStyles
+    readonly pages: readonly BrowserFixedSpreadPageRenderContext[]
+    readonly width: number
+    readonly height: number
+    readonly scale: number
+}
+
 export interface BrowserFixedContentRendererConfig {
     readonly fixedPageRenderer?: FixedPageRenderer<HTMLCanvasElement>
     readonly devicePixelRatio?: number | (() => number)
@@ -23,7 +39,7 @@ export interface BrowserFixedContentRendererConfig {
     readonly visualRenderers?: readonly BrowserFixedVisualRenderer[]
 }
 
-export type BrowserFixedContentRenderContext = BrowserFixedVisualRenderContext
+export type BrowserFixedContentRenderContext = BrowserFixedVisualRenderContext | BrowserFixedSpreadContentRenderContext
 
 const DEFAULT_TEXT_COLOR = '#111111'
 const DEFAULT_FONT_FAMILY = 'sans-serif'
@@ -47,6 +63,11 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
     }
 
     async renderSurface(context: BrowserFixedContentRenderContext): Promise<BrowserPageSurface> {
+        if (isSpreadContext(context)) return this.renderSpreadSurface(context)
+        return this.renderPageSurface(context)
+    }
+
+    private async renderPageSurface(context: BrowserFixedVisualRenderContext): Promise<BrowserPageSurface> {
         const text = context.document.getPageText
             ? await context.document.getPageText(context.page.index)
             : emptyFixedPageTextLayer(context.page)
@@ -81,7 +102,73 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
         }
     }
 
-    private async renderContentLayer(context: BrowserFixedContentRenderContext): Promise<BrowserPageSurfaceLayer | null> {
+    private async renderSpreadSurface(context: BrowserFixedSpreadContentRenderContext): Promise<BrowserPageSurface> {
+        const renderedPages = await Promise.all(context.pages.map(async item => ({
+            ...item,
+            surface: await this.renderPageSurface(item.context),
+        })))
+        const layer = document.createElement('div')
+        layer.dataset.rebookFixedSpreadLayer = 'true'
+        layer.style.position = 'relative'
+        layer.style.width = `${context.width}px`
+        layer.style.height = `${context.height}px`
+
+        for (const item of renderedPages) {
+            const frame = document.createElement('div')
+            frame.dataset.rebookSpreadPage = 'true'
+            frame.dataset.pageIndex = String(item.surface.pageIndex ?? item.context.page.index)
+            frame.style.cssText = `
+                position: absolute;
+                left: ${item.x}px;
+                top: ${item.y}px;
+                width: ${item.surface.width}px;
+                height: ${item.surface.height}px;
+                background: #ffffff;
+                box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+                overflow: hidden;
+                box-sizing: border-box;
+            `
+            for (const pageLayer of item.surface.layers) mountUnscaledLayer(frame, item.surface, pageLayer)
+            layer.append(frame)
+        }
+
+        const layers: BrowserPageSurfaceLayer[] = [{
+            id: 'spread',
+            kind: 'content',
+            contentKind: 'dom',
+            content: layer,
+            zIndex: 0,
+            selectable: true,
+            pointerEvents: 'auto',
+        }]
+        const pageMetadata = renderedPages.map(item => ({
+            x: item.x,
+            y: item.y,
+            page: item.context.page,
+            surface: item.surface,
+        }))
+
+        return {
+            id: `${context.document.format}:spread:${renderedPages.map(item => item.context.page.index).join('-')}`,
+            kind: 'spread',
+            pageIndex: renderedPages[0]?.context.page.index,
+            width: context.width,
+            height: context.height,
+            scale: context.scale,
+            location: renderedPages[0]?.surface.location,
+            layers,
+            metadata: {
+                pages: pageMetadata,
+            },
+            textProvider: createSpreadTextProvider(renderedPages.map(item => item.surface.textProvider).filter(isTextProvider)),
+            destroy() {
+                layer.remove()
+                for (const item of renderedPages) item.surface.destroy?.()
+            },
+        }
+    }
+
+    private async renderContentLayer(context: BrowserFixedVisualRenderContext): Promise<BrowserPageSurfaceLayer | null> {
         const renderer = selectFixedVisualRenderer(context.document, this.visualRenderers)
         return await renderer?.renderLayer(context) ?? null
     }
@@ -165,6 +252,44 @@ function renderTextLayer(target: HTMLElement, layer: FixedPageTextLayer, options
 
         target.append(span)
     }
+}
+
+function isSpreadContext(context: BrowserFixedContentRenderContext): context is BrowserFixedSpreadContentRenderContext {
+    return 'pages' in context
+}
+
+function mountUnscaledLayer(frame: HTMLElement, surface: BrowserPageSurface, layer: BrowserPageSurfaceLayer): void {
+    const element = layer.content
+    element.dataset.rebookSurfaceLayer = layer.id
+    element.dataset.rebookSurfaceLayerKind = layer.kind
+    element.dataset.rebookSurfaceLayerContent = layer.contentKind
+    element.style.position = 'absolute'
+    element.style.left = '0'
+    element.style.top = '0'
+    element.style.width = `${surface.width}px`
+    element.style.height = `${surface.height}px`
+    element.style.transformOrigin = '0 0'
+    element.style.zIndex = String(layer.zIndex ?? 0)
+    element.style.pointerEvents = layer.pointerEvents ?? (layer.kind === 'content' ? 'none' : 'auto')
+    element.style.userSelect = layer.selectable === false ? 'none' : 'text'
+    if (layer.opacity !== undefined) element.style.opacity = String(layer.opacity)
+    frame.append(element)
+}
+
+function createSpreadTextProvider(providers: readonly TextProvider[]): TextProvider | undefined {
+    if (providers.length === 0) return undefined
+    return {
+        async getText(range?: BookRange): Promise<readonly TextChunk[]> {
+            return (await Promise.all(providers.map(provider => provider.getText(range)))).flat()
+        },
+        async search(query: string, range?: BookRange): Promise<readonly TextSearchResult[]> {
+            return (await Promise.all(providers.map(provider => provider.search?.(query, range) ?? []))).flat()
+        },
+    }
+}
+
+function isTextProvider(value: TextProvider | undefined): value is TextProvider {
+    return value !== undefined
 }
 
 function createCanvasFontAscentRatioMeasurer(): ((fontSize: number, fontFamily: string, fontStyle?: string, fontWeight?: string) => number) | undefined {

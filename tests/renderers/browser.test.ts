@@ -825,6 +825,76 @@ describe('BrowserRenderer', () => {
         reader.destroy()
     })
 
+    it('renders fixed-document spreads when the viewport is wide enough', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '980')
+        container.setAttribute('data-height', '220')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [],
+            pageList: [
+                { label: '1', href: 'pdf:page:0' },
+                { label: '2', href: 'pdf:page:1' },
+                { label: '3', href: 'pdf:page:2' },
+            ],
+            fixedDocument: {
+                kind: 'fixed-document',
+                format: 'pdf',
+                pageCount: 3,
+                getPage: pageIndex => ({ index: pageIndex, width: 300, height: 144 }),
+                getPages: () => [
+                    { index: 0, width: 300, height: 144 },
+                    { index: 1, width: 300, height: 144 },
+                    { index: 2, width: 300, height: 144 },
+                ],
+                getPageText: pageIndex => ({
+                    pageIndex,
+                    width: 300,
+                    height: 144,
+                    text: `Fixed page ${pageIndex + 1}`,
+                    runs: [{
+                        text: `Fixed page ${pageIndex + 1}`,
+                        transform: [18, 0, 0, 18, 48, 48],
+                        fontSize: 18,
+                        width: 120,
+                    }],
+                }),
+            },
+            resolveHref: href => {
+                const match = href.match(/^pdf:page:(\d+)$/)
+                return match ? { index: Number(match[1]) } : null
+            },
+        }
+
+        const reader = createReader({
+            container,
+            maxColumnCount: 2,
+            styles: { margin: '32px', gap: '32px', minColumnWidth: '300px' },
+        })
+        await reader.openBook(book)
+
+        expect(reader.getCurrentSurface()).toMatchObject({ kind: 'spread', pageIndex: 0 })
+        expect(container.querySelectorAll('[data-rebook-spread-page="true"]')).toHaveLength(2)
+        expect(container.textContent).toContain('Fixed page 1')
+        expect(container.textContent).toContain('Fixed page 2')
+        expect((await reader.getCurrentText()).map(chunk => chunk.text)).toEqual(['Fixed page 1', 'Fixed page 2'])
+
+        await reader.next()
+        expect(reader.getCurrentSurface()).toMatchObject({ kind: 'fixed-page', pageIndex: 2 })
+        expect(container.textContent).toContain('Fixed page 3')
+        expect(container.textContent).not.toContain('Fixed page 2')
+
+        reader.setSpread(1)
+        await reader.goTo(0)
+        expect(reader.getCurrentSurface()).toMatchObject({ kind: 'fixed-page', pageIndex: 0 })
+        expect(container.querySelectorAll('[data-rebook-spread-page="true"]')).toHaveLength(0)
+        expect(container.textContent).toContain('Fixed page 1')
+        expect(container.textContent).not.toContain('Fixed page 2')
+
+        reader.destroy()
+    })
+
     it('centers short fixed pages vertically and navigates with the wheel', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '420')
