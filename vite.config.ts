@@ -24,6 +24,7 @@ export default defineConfig({
         'core/parser': resolve(__dirname, 'src/core/parser.ts'),
         'core/reader': resolve(__dirname, 'src/core/reader.ts'),
         'core/renderer-router': resolve(__dirname, 'src/core/renderer-router.ts'),
+        'core/surface-pipeline': resolve(__dirname, 'src/core/surface-pipeline.ts'),
         'parsers/epub': resolve(__dirname, 'src/parsers/epub.ts'),
         'parsers/cbz': resolve(__dirname, 'src/parsers/cbz.ts'),
         'parsers/fb2': resolve(__dirname, 'src/parsers/fb2.ts'),

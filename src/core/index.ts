@@ -160,6 +160,15 @@ export type {
     PageSurfaceRequest,
 } from './page-surface'
 export {
+    PageSurfacePipeline,
+    createPageSurfacePipeline,
+} from './surface-pipeline'
+export type {
+    PageSurfacePipelineConfig,
+    PageSurfacePipelineDecoratorContext,
+    PageSurfacePipelineRenderResult,
+} from './surface-pipeline'
+export {
     RendererRouter,
     createRendererRouter,
     matchesFixedDocument,

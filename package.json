@@ -27,6 +27,9 @@
       "core/renderer-router": [
         "dist/core/renderer-router.d.ts"
       ],
+      "core/surface-pipeline": [
+        "dist/core/surface-pipeline.d.ts"
+      ],
       "renderers/browser": [
         "dist/renderers/browser/index.d.ts"
       ],
@@ -123,6 +126,10 @@
     "./core/renderer-router": {
       "types": "./dist/core/renderer-router.d.ts",
       "import": "./dist/core/renderer-router.js"
+    },
+    "./core/surface-pipeline": {
+      "types": "./dist/core/surface-pipeline.d.ts",
+      "import": "./dist/core/surface-pipeline.js"
     },
     "./renderers/browser": {
       "types": "./dist/renderers/browser/index.d.ts",

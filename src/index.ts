@@ -250,6 +250,15 @@ export type {
     PageSurfaceLayerKind,
     PageSurfaceRequest,
 } from './core/page-surface'
+export {
+    PageSurfacePipeline,
+    createPageSurfacePipeline,
+} from './core/surface-pipeline'
+export type {
+    PageSurfacePipelineConfig,
+    PageSurfacePipelineDecoratorContext,
+    PageSurfacePipelineRenderResult,
+} from './core/surface-pipeline'
 
 export {
     RendererRouter,
