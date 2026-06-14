@@ -160,20 +160,24 @@ export class BrowserFixedRenderer implements Renderer {
 
     setMark(mark: ReaderMark): void {
         this.marks.set(mark.id, mark)
+        void this.renderCurrentPage('mark')
     }
 
     removeMark(id: string): void {
         this.marks.delete(id)
+        void this.renderCurrentPage('mark')
     }
 
     clearMarks(kind?: string): void {
         if (kind === undefined) {
             this.marks.clear()
+            void this.renderCurrentPage('mark')
             return
         }
         for (const [id, mark] of this.marks) {
             if (mark.kind === kind) this.marks.delete(id)
         }
+        void this.renderCurrentPage('mark')
     }
 
     getMarks(): ReaderMark[] {
@@ -232,6 +236,7 @@ export class BrowserFixedRenderer implements Renderer {
             page,
             scale,
             styles: this.styles,
+            marks: Array.from(this.marks.values()),
         })
         if (token !== this.renderToken) {
             surface.destroy?.()

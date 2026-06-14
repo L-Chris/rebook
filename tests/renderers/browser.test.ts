@@ -373,9 +373,31 @@ describe('BrowserRenderer', () => {
         expect(container.textContent).toContain('Fixed page 1')
         expect(location?.pageItem?.label).toBe('1')
 
+        reader.setMark({
+            id: 'fixed-highlight',
+            kind: 'highlight',
+            range: {
+                type: 'fixed',
+                format: 'pdf',
+                pageIndex: 0,
+                rect: { x: 30, y: 24, width: 90, height: 18 },
+            },
+            data: { color: 'rgba(0, 128, 255, 0.25)' },
+        })
+        await reader.refresh()
+
+        const annotation = container.querySelector('[data-rebook-annotation="true"]') as HTMLElement | null
+        expect(container.querySelector('[data-rebook-annotation-layer="true"]')).toBeTruthy()
+        expect(annotation?.dataset.markId).toBe('fixed-highlight')
+        expect(annotation?.classList.contains('rebook-mark-highlight')).toBe(true)
+        expect(annotation?.style.left).toBe('30px')
+        expect(annotation?.style.top).toBe('24px')
+        expect(annotation?.style.width).toBe('90px')
+
         await reader.next()
         expect(container.textContent).toContain('Fixed page 2')
         expect(reader.getLocation()?.pageItem?.label).toBe('2')
+        expect(container.querySelector('[data-rebook-annotation="true"]')).toBeNull()
 
         reader.destroy()
     })
@@ -415,6 +437,22 @@ describe('BrowserRenderer', () => {
         expect(container.querySelector('[data-rebook-surface-kind="image-page"]')).toBeTruthy()
         expect(container.querySelector('[data-rebook-fixed-image="true"]')).toBeTruthy()
         expect((container.querySelector('[data-rebook-fixed-image="true"]') as HTMLImageElement | null)?.src).toContain('data:image/')
+
+        reader.setMark({
+            id: 'comic-panel',
+            kind: 'panel',
+            range: {
+                type: 'image',
+                pageIndex: 0,
+                rect: { x: 0, y: 0, width: 1, height: 1 },
+            },
+        })
+        await reader.refresh()
+
+        const annotation = container.querySelector('[data-rebook-annotation="true"]') as HTMLElement | null
+        expect(container.querySelector('[data-rebook-annotation-layer="true"]')).toBeTruthy()
+        expect(annotation?.dataset.markId).toBe('comic-panel')
+        expect(annotation?.classList.contains('rebook-mark-panel')).toBe(true)
 
         reader.destroy()
     })

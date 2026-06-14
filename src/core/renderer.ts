@@ -6,6 +6,7 @@
  */
 
 import type { Book, RelocateEvent, LoadEvent } from './types'
+import type { BookLocation, BookRange } from './location'
 
 /**
  * Style options for the renderer.
@@ -58,6 +59,8 @@ export type ReaderMarkRange =
     | { sectionIndex: number; blockId: string; startOffset?: number; endOffset?: number }
     | { sectionIndex: number; href: string }
     | { cfi: string }
+    | BookLocation
+    | BookRange
 
 export interface ReaderMark {
     id: string
