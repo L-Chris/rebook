@@ -18,6 +18,9 @@
       "core/fixed-document": [
         "dist/core/fixed-document.d.ts"
       ],
+      "core/fixed-text-provider": [
+        "dist/core/fixed-text-provider.d.ts"
+      ],
       "core/location": [
         "dist/core/location.d.ts"
       ],
@@ -120,6 +123,10 @@
     "./core/fixed-document": {
       "types": "./dist/core/fixed-document.d.ts",
       "import": "./dist/core/fixed-document.js"
+    },
+    "./core/fixed-text-provider": {
+      "types": "./dist/core/fixed-text-provider.d.ts",
+      "import": "./dist/core/fixed-text-provider.js"
     },
     "./core/location": {
       "types": "./dist/core/location.d.ts",

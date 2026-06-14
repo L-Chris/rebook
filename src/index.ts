@@ -233,6 +233,13 @@ export {
     type StaticTextProviderOptions,
 } from './core/text-provider'
 export {
+    createFixedPageTextProvider,
+    emptyFixedPageTextLayer,
+    fixedPageTextChunks,
+    fixedTextChunkMatchesRange,
+    fixedTextRunRect,
+} from './core/fixed-text-provider'
+export {
     createReflowableTextProvider,
     lineMatchesReflowableBookRange,
     lineToReflowableBookRange,

@@ -69,6 +69,13 @@ export {
     type StaticTextProviderOptions,
 } from './text-provider'
 export {
+    createFixedPageTextProvider,
+    emptyFixedPageTextLayer,
+    fixedPageTextChunks,
+    fixedTextChunkMatchesRange,
+    fixedTextRunRect,
+} from './fixed-text-provider'
+export {
     createReflowableTextProvider,
     lineMatchesReflowableBookRange,
     lineToReflowableBookRange,
