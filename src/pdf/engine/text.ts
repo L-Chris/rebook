@@ -1,6 +1,7 @@
 import { bytesToLatin1 } from './bytes'
 import { ContentDictToken, ContentNameToken, ContentTokenizer, ContentToken, isContentString } from './content'
 import { identityFontDecoder, PdfFontDecoder, PdfFontMap, PdfTextAdvanceOptions } from './fonts'
+import { decodePdfTextString } from './strings'
 import { PdfFontSource, PdfMatrix, PdfPageText, PdfTextRun } from '../types'
 
 export interface PdfTextResources {
@@ -488,15 +489,6 @@ const actualText = (token: ContentToken | undefined): string | undefined => {
   if (!isContentDict(token)) return undefined
   const value = token.entries.get('ActualText')
   return isContentString(value) || typeof value === 'string' ? decodePdfTextString(textValue(value)) : undefined
-}
-
-const decodePdfTextString = (value: string): string => {
-  if (value.length >= 2 && value.charCodeAt(0) === 0xfe && value.charCodeAt(1) === 0xff) {
-    let output = ''
-    for (let i = 2; i + 1 < value.length; i += 2) output += String.fromCharCode((value.charCodeAt(i) << 8) | value.charCodeAt(i + 1))
-    return output
-  }
-  return value
 }
 
 interface MarkedContentState {

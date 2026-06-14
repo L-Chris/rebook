@@ -4,6 +4,7 @@ import { createIdentityCidFontDecoder, createPdfFontSource, createSimpleFontDeco
 import { buildPageDisplayList, collectResourceNames, PdfContentResourceNames, PdfFormResource, PdfGraphicsColorSpace, PdfGraphicsResources, PdfGraphicsState, readOptionalGraphicsColorSpace, readOptionalShading, readOptionalShadingPattern } from './graphics'
 import { applyColorKeyMaskToRgba, applySoftMaskToRgba, applyStencilMaskToRgba, imageMaskSamplesToRgba, imageSamplesToRgba, readImageColorKeyMask, readImageColorSpace, readImageDecode, readOptionalDeviceColorSpace, supportsImageBits } from './images'
 import { PdfLexer } from './lexer'
+import { decodePdfTextString } from './strings'
 import {
   isDict,
   isName,
@@ -214,7 +215,7 @@ export class RebookPdfDocument {
     if (!isName(subtype, 'Link')) return undefined
     const rect = toBox(this.resolve(value.entries.get('Rect')))
     if (!rect) return undefined
-    const contents = stringValue(this.resolve(value.entries.get('Contents')))
+    const contents = textStringValue(this.resolve(value.entries.get('Contents')))
     const link = this.readTarget(value)
     return {
       type: 'link',
@@ -282,7 +283,7 @@ export class RebookPdfDocument {
   private readPageLabelRule(pageIndex: PdfPrimitive | undefined, value: PdfPrimitive | undefined): PdfPageLabelRule | undefined {
     if (typeof pageIndex !== 'number' || !Number.isInteger(pageIndex) || pageIndex < 0 || !isDict(value)) return undefined
     const style = pageLabelStyle(this.resolve(value.entries.get('S')))
-    const prefix = stringValue(this.resolve(value.entries.get('P')))
+    const prefix = textStringValue(this.resolve(value.entries.get('P')))
     const startValue = this.resolve(value.entries.get('St'))
     const start = typeof startValue === 'number' && Number.isInteger(startValue) && startValue > 0 ? startValue : 1
     return {
@@ -331,7 +332,7 @@ export class RebookPdfDocument {
   }
 
   private readOutlineItem(dict: PdfDict, seen: WeakSet<PdfDict>, depth: number): PdfOutlineItem | undefined {
-    const title = stringValue(this.resolve(dict.entries.get('Title')))
+    const title = textStringValue(this.resolve(dict.entries.get('Title')))
     if (title === undefined) return undefined
     const target = this.readTarget(dict)
     const count = numberValue(this.resolve(dict.entries.get('Count')))
@@ -1124,8 +1125,11 @@ const normalizeRect = (rect: [number, number, number, number]): [number, number,
 const stringValue = (value: PdfPrimitive | undefined): string | undefined =>
   typeof value === 'string' ? value : undefined
 
+const textStringValue = (value: PdfPrimitive | undefined): string | undefined =>
+  typeof value === 'string' ? decodePdfTextString(value) : undefined
+
 const destinationName = (value: PdfPrimitive | undefined): string | undefined => {
-  if (typeof value === 'string') return value
+  if (typeof value === 'string') return decodePdfTextString(value, { keepEscapeSequence: true })
   if (isName(value)) return value.value
   return undefined
 }
@@ -1136,7 +1140,7 @@ const readDestinationValue = (value: PdfPrimitive | undefined): PdfDestination |
 }
 
 const readDestination = (value: PdfPrimitive | undefined): PdfDestination | undefined => {
-  if (typeof value === 'string') return value
+  if (typeof value === 'string') return decodePdfTextString(value, { keepEscapeSequence: true })
   if (isName(value)) return value.value
   if (!Array.isArray(value)) return undefined
   const items: PdfDestinationItem[] = []
@@ -1148,7 +1152,8 @@ const readDestination = (value: PdfPrimitive | undefined): PdfDestination | unde
 }
 
 const readDestinationItem = (value: PdfPrimitive): PdfDestinationItem | undefined => {
-  if (value === null || typeof value === 'number' || typeof value === 'string' || isRef(value)) return value
+  if (typeof value === 'string') return decodePdfTextString(value, { keepEscapeSequence: true })
+  if (value === null || typeof value === 'number' || isRef(value)) return value
   if (isName(value)) return value.value
   return undefined
 }

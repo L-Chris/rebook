@@ -13,7 +13,8 @@ export function makeFlatePdf(): Uint8Array {
     ))
 }
 
-export function makeOutlinePdf(): Uint8Array {
+export function makeOutlinePdf(options: { titleObject?: string } = {}): Uint8Array {
+    const titleObject = options.titleObject ?? pdfLiteralString('Chapter 1')
     return buildClassicXrefPdf([
         '1 0 obj\n<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R >>\nendobj\n',
         '2 0 obj\n<< /Type /Pages /MediaBox [0 0 300 144] /Kids [3 0 R] /Count 1 >>\nendobj\n',
@@ -21,8 +22,23 @@ export function makeOutlinePdf(): Uint8Array {
         makeContentStream('BT /F1 18 Tf 48 96 Td (Outlined page) Tj ET'),
         '5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
         '6 0 obj\n<< /Type /Outlines /First 7 0 R /Last 7 0 R /Count 1 >>\nendobj\n',
-        '7 0 obj\n<< /Title (Chapter 1) /Parent 6 0 R /Dest [3 0 R /XYZ 0 144 null] >>\nendobj\n',
+        `7 0 obj\n<< /Title ${titleObject} /Parent 6 0 R /Dest [3 0 R /XYZ 0 144 null] >>\nendobj\n`,
     ])
+}
+
+export function pdfUtf16BeHexString(value: string): string {
+    let hex = 'FEFF'
+    for (let index = 0; index < value.length; index++) {
+        hex += value.charCodeAt(index).toString(16).padStart(4, '0')
+    }
+    return `<${hex.toUpperCase()}>`
+}
+
+export function pdfUtf8HexString(value: string): string {
+    const bytes = new TextEncoder().encode(value)
+    let hex = 'EFBBBF'
+    for (const byte of bytes) hex += byte.toString(16).padStart(2, '0')
+    return `<${hex.toUpperCase()}>`
 }
 
 function makePageObjects(contentObject: string): string[] {
@@ -41,6 +57,10 @@ function makeContentStream(content: string | Uint8Array, extraDict = ''): string
     const body = bytesToLatin1(bytes)
     const length = bytes.byteLength
     return `4 0 obj\n<< ${extraDict}/Length ${length} >>\nstream\n${body}\nendstream\nendobj\n`
+}
+
+function pdfLiteralString(value: string): string {
+    return `(${value.replace(/[\\()]/g, match => `\\${match}`)})`
 }
 
 function buildClassicXrefPdf(objects: string[]): Uint8Array {

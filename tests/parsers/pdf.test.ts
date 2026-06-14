@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { registry } from '../../src/core/parser'
 import { PDFParser, pdf } from '../../src/parsers/pdf'
-import { makeFlatePdf, makeOutlinePdf, makeSimplePdf } from '../fixtures/pdf-fixture'
+import { makeFlatePdf, makeOutlinePdf, makeSimplePdf, pdfUtf16BeHexString, pdfUtf8HexString } from '../fixtures/pdf-fixture'
 
 describe('PDFParser', () => {
     it('detects PDF inputs by extension and header', async () => {
@@ -55,6 +55,27 @@ describe('PDFParser', () => {
 
         expect(book.toc?.[0]).toMatchObject({ label: 'Chapter 1', href: 'pdf:page:0' })
         expect(book.resolveHref?.(book.toc![0].href)).toEqual({ index: 0 })
+    })
+
+    it('decodes UTF-16BE PDF outline titles', async () => {
+        const parser = new PDFParser()
+        const book = await parser.parse(makeOutlinePdf({ titleObject: pdfUtf16BeHexString('版权信息') }).buffer)
+
+        expect(book.toc?.[0]).toMatchObject({ label: '版权信息', href: 'pdf:page:0' })
+    })
+
+    it('decodes PDFDocEncoding outline titles', async () => {
+        const parser = new PDFParser()
+        const book = await parser.parse(makeOutlinePdf({ titleObject: '<80A0>' }).buffer)
+
+        expect(book.toc?.[0]).toMatchObject({ label: '•€', href: 'pdf:page:0' })
+    })
+
+    it('decodes UTF-8 PDF outline titles', async () => {
+        const parser = new PDFParser()
+        const book = await parser.parse(makeOutlinePdf({ titleObject: pdfUtf8HexString('你好') }).buffer)
+
+        expect(book.toc?.[0]).toMatchObject({ label: '你好', href: 'pdf:page:0' })
     })
 
     it('opens through the parser registry', async () => {
