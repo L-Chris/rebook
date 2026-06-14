@@ -5,9 +5,12 @@ export {
     matchesBrowserReflowableContent,
     selectBrowserContentEngine,
     type BrowserAdaptiveRendererConfig,
+} from './adaptive'
+export {
+    type BrowserContentEngine,
     type BrowserContentEngineMatch,
     type BrowserContentEngineRoute,
-} from './adaptive'
+} from './content-engine'
 export { BrowserRenderer, createBrowserRenderer, type BrowserRendererConfig } from './renderer'
 export { BrowserFixedRenderer, createBrowserFixedRenderer, type BrowserFixedRendererConfig } from './fixed'
 export {
@@ -81,7 +84,7 @@ export {
 export {
     ReaderView,
     createReader,
-    type BrowserRendererRoute,
-    type BrowserRendererRouteContext,
+    type BrowserConfiguredContentEngineRoute,
+    type BrowserContentEngineRouteContext,
     type ReaderConfig,
 } from './view'

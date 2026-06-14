@@ -430,8 +430,11 @@ export {
 } from './renderers/browser'
 export type {
     BrowserAdaptiveRendererConfig,
+    BrowserContentEngine,
     BrowserContentEngineMatch,
     BrowserContentEngineRoute,
+    BrowserConfiguredContentEngineRoute,
+    BrowserContentEngineRouteContext,
     BrowserFixedCanvasVisualRendererConfig,
     BrowserFixedContentRenderContext,
     BrowserFixedContentRendererConfig,
@@ -442,8 +445,6 @@ export type {
     BrowserSurfacePipelineDecoratorContext,
     BrowserSurfacePipelineRenderResult,
     BrowserRendererConfig,
-    BrowserRendererRoute,
-    BrowserRendererRouteContext,
     ReaderConfig,
 } from './renderers/browser'
 

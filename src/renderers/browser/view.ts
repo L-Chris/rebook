@@ -5,27 +5,27 @@
  */
 
 import type { ParserOptions } from '../../core/parser'
-import type { NavigationDirection, Renderer, RendererNavigationHooks } from '../../core/renderer'
+import type { NavigationDirection, RendererNavigationHooks } from '../../core/renderer'
 import type { RebookPlugin } from '../../core/types'
 import { ReaderSession, type ReaderSessionConfig } from '../../core/reader'
 import {
     BrowserAdaptiveRenderer,
     matchesBrowserFixedContent,
     matchesBrowserReflowableContent,
-    type BrowserContentEngineRoute,
 } from './adaptive'
+import type { BrowserContentEngine, BrowserContentEngineRoute } from './content-engine'
 import { BrowserDOMAdapter, BrowserURLFactory } from '../../adapters/browser'
 import { BrowserRenderer, type BrowserRendererConfig } from './renderer'
 import { BrowserFixedRenderer, type BrowserFixedRendererConfig } from './fixed'
 
-export interface BrowserRendererRouteContext {
+export interface BrowserContentEngineRouteContext {
     readonly hooks?: RendererNavigationHooks
 }
 
-export interface BrowserRendererRoute {
+export interface BrowserConfiguredContentEngineRoute {
     readonly id: string
     match: BrowserContentEngineRoute['match']
-    createRenderer(context: BrowserRendererRouteContext): Renderer
+    createEngine(context: BrowserContentEngineRouteContext): BrowserContentEngine
 }
 
 export interface ReaderConfig extends BrowserRendererConfig {
@@ -37,7 +37,7 @@ export interface ReaderConfig extends BrowserRendererConfig {
      * Content-engine override for fixed/page-native books. When omitted,
      * ReaderView mounts BrowserFixedRenderer behind BrowserAdaptiveRenderer.
      */
-    createFixedRenderer?: (hooks?: RendererNavigationHooks) => Renderer
+    createFixedContentEngine?: (hooks?: RendererNavigationHooks) => BrowserContentEngine
     fixedPageRenderer?: BrowserFixedRendererConfig['fixedPageRenderer']
     fixedContentRenderer?: BrowserFixedRendererConfig['fixedContentRenderer']
     /** Custom fixed-page visual renderers evaluated before built-in image/PDF renderers. */
@@ -47,12 +47,12 @@ export interface ReaderConfig extends BrowserRendererConfig {
      * Content-engine override for reflowable books. When omitted, ReaderView
      * mounts BrowserRenderer behind BrowserAdaptiveRenderer.
      */
-    createReflowableRenderer?: (hooks?: RendererNavigationHooks) => Renderer
+    createReflowableContentEngine?: (hooks?: RendererNavigationHooks) => BrowserContentEngine
     /**
      * Additional browser content-engine routes, evaluated before the default
      * fixed and reflowable routes.
      */
-    rendererRoutes?: readonly BrowserRendererRoute[]
+    contentEngineRoutes?: readonly BrowserConfiguredContentEngineRoute[]
 }
 
 /**
@@ -89,18 +89,18 @@ function createBrowserContentEngineRoutes(
     config: ReaderConfig,
     hooks: RendererNavigationHooks,
 ): BrowserContentEngineRoute[] {
-    const context: BrowserRendererRouteContext = { hooks }
+    const context: BrowserContentEngineRouteContext = { hooks }
     return [
-        ...(config.rendererRoutes ?? []).map((route): BrowserContentEngineRoute => ({
+        ...(config.contentEngineRoutes ?? []).map((route): BrowserContentEngineRoute => ({
             id: route.id,
             match: route.match,
-            createRenderer: () => route.createRenderer(context),
+            createEngine: () => route.createEngine(context),
         })),
         {
             id: 'fixed-document',
             match: matchesBrowserFixedContent,
-            createRenderer: () => config.createFixedRenderer
-                ? config.createFixedRenderer(hooks)
+            createEngine: () => config.createFixedContentEngine
+                ? config.createFixedContentEngine(hooks)
                 : new BrowserFixedRenderer({
                     ...config,
                     beforeNavigate: hooks.beforeNavigate,
@@ -109,8 +109,8 @@ function createBrowserContentEngineRoutes(
         {
             id: 'reflowable-browser',
             match: matchesBrowserReflowableContent,
-            createRenderer: () => config.createReflowableRenderer
-                ? config.createReflowableRenderer(hooks)
+            createEngine: () => config.createReflowableContentEngine
+                ? config.createReflowableContentEngine(hooks)
                 : new BrowserRenderer({
                     ...config,
                     beforeNavigate: hooks.beforeNavigate,

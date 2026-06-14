@@ -5,7 +5,7 @@
  */
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
-import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
+import type { LayoutMode, NavigationDirection, ReaderMark, RendererConfig, RendererStyles } from '../../core/renderer'
 import { debugRebook } from '../../core/debug'
 import { RendererEventDispatcher } from '../../core/renderer-state'
 import { flattenTOC } from '../../core/toc'
@@ -39,6 +39,7 @@ import {
 import { BrowserReflowableMarkLayerDecorator } from './reflowable-mark-layer'
 import { BrowserSurfacePipeline } from './surface-pipeline'
 import { BrowserSurfaceHost } from './surface-host'
+import type { BrowserContentEngine } from './content-engine'
 
 interface RendererEventMap {
     load: LoadEvent
@@ -75,7 +76,7 @@ const debounce = <T extends (...args: unknown[]) => void>(fn: T, wait: number): 
     }) as T
 }
 
-export class BrowserRenderer implements Renderer {
+export class BrowserRenderer implements BrowserContentEngine {
     private readonly host: BrowserSurfaceHost
     private readonly scroller: HTMLElement
     private readonly spacer: HTMLElement
@@ -871,7 +872,7 @@ export class BrowserRenderer implements Renderer {
     }
 }
 
-export const createBrowserRenderer = (config: BrowserRendererConfig): Renderer => {
+export const createBrowserRenderer = (config: BrowserRendererConfig): BrowserContentEngine => {
     return new BrowserRenderer(config)
 }
 

@@ -18,14 +18,7 @@ import type {
 } from '../../core/renderer'
 import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
 import type { Book } from '../../core/types'
-
-export type BrowserContentEngineMatch = boolean | number
-
-export interface BrowserContentEngineRoute {
-    readonly id: string
-    match(book: Book): BrowserContentEngineMatch
-    createRenderer(): Renderer
-}
+import type { BrowserContentEngine, BrowserContentEngineRoute } from './content-engine'
 
 export interface BrowserAdaptiveRendererConfig {
     readonly routes: readonly BrowserContentEngineRoute[]
@@ -35,7 +28,7 @@ export class BrowserAdaptiveRenderer implements Renderer {
     private readonly routes: readonly BrowserContentEngineRoute[]
     private readonly events = new RendererEventDispatcher()
     private readonly marks = new ReaderMarkStore()
-    private active: Renderer | null = null
+    private active: BrowserContentEngine | null = null
     private activeEngineId: string | null = null
     private styles: RendererStyles | null = null
     private layout: LayoutMode | null = null
@@ -50,7 +43,7 @@ export class BrowserAdaptiveRenderer implements Renderer {
 
         if (this.activeEngineId !== route.id) {
             this.active?.destroy()
-            this.active = route.createRenderer()
+            this.active = route.createEngine()
             this.activeEngineId = route.id
             this.events.replayTo(this.active)
         }
@@ -147,7 +140,7 @@ export class BrowserAdaptiveRenderer implements Renderer {
         this.spread = null
     }
 
-    getActiveRenderer(): Renderer | null {
+    getActiveEngine(): BrowserContentEngine | null {
         return this.active
     }
 
@@ -155,19 +148,19 @@ export class BrowserAdaptiveRenderer implements Renderer {
         return this.activeEngineId
     }
 
-    private requireActive(): Renderer {
+    private requireActive(): BrowserContentEngine {
         if (!this.active) {
             throw new UnsupportedFormatError('No browser content engine is active; open a book before navigating')
         }
         return this.active
     }
 
-    private replayState(renderer: Renderer): void {
-        if (this.styles) renderer.setStyles(this.styles)
-        if (this.layout) renderer.setLayout(this.layout)
-        if (this.spread !== null) renderer.setSpread(this.spread)
+    private replayState(engine: BrowserContentEngine): void {
+        if (this.styles) engine.setStyles(this.styles)
+        if (this.layout) engine.setLayout(this.layout)
+        if (this.spread !== null) engine.setSpread(this.spread)
         for (const mark of this.marks.values()) {
-            renderer.setMark(mark)
+            engine.setMark(mark)
         }
     }
 }

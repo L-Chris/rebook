@@ -9,7 +9,7 @@
 import type { FixedPageInfo, FixedPageRenderer } from '../../core/fixed-document'
 import { FixedPageSequence } from '../../core/fixed-page-sequence'
 import type { Book, LinkEvent, LoadEvent, RelocateEvent } from '../../core/types'
-import type { EventListener, LayoutMode, ReaderMark, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
+import type { EventListener, LayoutMode, ReaderMark, RendererConfig, RendererStyles } from '../../core/renderer'
 import { UnsupportedFormatError } from '../../core/errors'
 import { parseCSSPixels } from '../../core/renderer-utils'
 import { RendererEventDispatcher } from '../../core/renderer-state'
@@ -18,6 +18,7 @@ import { BrowserFixedContentRenderer, type BrowserFixedContentRenderContext, typ
 import { BrowserFixedMarkLayerDecorator } from './fixed-mark-layer'
 import { BrowserSurfacePipeline } from './surface-pipeline'
 import { BrowserSurfaceHost } from './surface-host'
+import type { BrowserContentEngine } from './content-engine'
 
 interface RendererEventMap {
     load: LoadEvent
@@ -45,7 +46,7 @@ export interface BrowserFixedRendererConfig extends RendererConfig {
 const DEFAULT_MARGIN = 32
 const DEFAULT_TEXT_COLOR = '#111111'
 
-export class BrowserFixedRenderer implements Renderer {
+export class BrowserFixedRenderer implements BrowserContentEngine {
     private readonly host: BrowserSurfaceHost
     private readonly events = new RendererEventDispatcher<RendererEventMap>()
     private readonly beforeNavigate: RendererConfig['beforeNavigate']

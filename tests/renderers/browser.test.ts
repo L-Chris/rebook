@@ -575,7 +575,7 @@ describe('BrowserRenderer', () => {
 
         const reader = createReader({
             container,
-            createFixedRenderer: () => fixedRenderer,
+            createFixedContentEngine: () => fixedRenderer,
         })
         await reader.openBook(book)
 
@@ -604,7 +604,7 @@ describe('BrowserRenderer', () => {
 
         const reader = createReader({
             container,
-            createReflowableRenderer: () => reflowableRenderer,
+            createReflowableContentEngine: () => reflowableRenderer,
         })
         await reader.openBook(book)
 
@@ -615,7 +615,7 @@ describe('BrowserRenderer', () => {
         reader.destroy()
     })
 
-    it('lets custom browser renderer routes override default format routes', async () => {
+    it('lets custom browser content engine routes override default format routes', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
         container.setAttribute('data-height', '72')
@@ -634,10 +634,10 @@ describe('BrowserRenderer', () => {
 
         const reader = createReader({
             container,
-            rendererRoutes: [{
+            contentEngineRoutes: [{
                 id: 'custom-route',
                 match: item => item.metadata?.renderer === 'custom-route' ? 100 : false,
-                createRenderer: ({ hooks }) => {
+                createEngine: ({ hooks }) => {
                     expect(typeof hooks?.beforeNavigate).toBe('function')
                     return routedRenderer
                 },
@@ -676,8 +676,8 @@ describe('BrowserRenderer', () => {
         const reflowable = new FakeFixedRenderer()
         const adaptive = new BrowserAdaptiveRenderer({
             routes: [
-                { id: 'fixed', match: matchesBrowserFixedContent, createRenderer: () => fixed },
-                { id: 'reflowable', match: matchesBrowserReflowableContent, createRenderer: () => reflowable },
+                { id: 'fixed', match: matchesBrowserFixedContent, createEngine: () => fixed },
+                { id: 'reflowable', match: matchesBrowserReflowableContent, createEngine: () => reflowable },
             ],
         })
         const listener: EventListener = () => {}
