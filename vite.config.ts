@@ -24,6 +24,7 @@ export default defineConfig({
         'core/page-surface': resolve(__dirname, 'src/core/page-surface.ts'),
         'core/parser': resolve(__dirname, 'src/core/parser.ts'),
         'core/reader': resolve(__dirname, 'src/core/reader.ts'),
+        'core/reflowable-text-provider': resolve(__dirname, 'src/core/reflowable-text-provider.ts'),
         'core/renderer-router': resolve(__dirname, 'src/core/renderer-router.ts'),
         'core/surface-pipeline': resolve(__dirname, 'src/core/surface-pipeline.ts'),
         'parsers/epub': resolve(__dirname, 'src/parsers/epub.ts'),

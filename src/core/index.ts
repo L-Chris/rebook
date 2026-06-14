@@ -69,6 +69,15 @@ export {
     type StaticTextProviderOptions,
 } from './text-provider'
 export {
+    createReflowableTextProvider,
+    lineMatchesReflowableBookRange,
+    lineToReflowableBookRange,
+    lineToReflowableTextChunkRecord,
+    type ReflowableLinePosition,
+    type ReflowableTextChunkRecord,
+    type ReflowableTextProviderContext,
+} from './reflowable-text-provider'
+export {
     FixedPageSequence,
     clampFixedPageIndex,
     parseFixedPageHref,

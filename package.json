@@ -27,6 +27,9 @@
       "core/reader": [
         "dist/core/reader.d.ts"
       ],
+      "core/reflowable-text-provider": [
+        "dist/core/reflowable-text-provider.d.ts"
+      ],
       "core/renderer-router": [
         "dist/core/renderer-router.d.ts"
       ],
@@ -129,6 +132,10 @@
     "./core/reader": {
       "types": "./dist/core/reader.d.ts",
       "import": "./dist/core/reader.js"
+    },
+    "./core/reflowable-text-provider": {
+      "types": "./dist/core/reflowable-text-provider.d.ts",
+      "import": "./dist/core/reflowable-text-provider.js"
     },
     "./core/renderer-router": {
       "types": "./dist/core/renderer-router.d.ts",

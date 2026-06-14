@@ -232,6 +232,15 @@ export {
     searchTextChunks,
     type StaticTextProviderOptions,
 } from './core/text-provider'
+export {
+    createReflowableTextProvider,
+    lineMatchesReflowableBookRange,
+    lineToReflowableBookRange,
+    lineToReflowableTextChunkRecord,
+    type ReflowableLinePosition,
+    type ReflowableTextChunkRecord,
+    type ReflowableTextProviderContext,
+} from './core/reflowable-text-provider'
 
 export {
     PageSurfaceController,
