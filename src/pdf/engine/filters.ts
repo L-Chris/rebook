@@ -1,6 +1,11 @@
 import { isDict, PdfDict, PdfError, PdfPrimitive, PdfRuntime } from '../types'
 
-let nodeZlib: Promise<typeof import('node:zlib')> | undefined
+interface NodeZlibModule {
+  inflateSync(data: Uint8Array): Uint8Array
+}
+
+let nodeZlib: Promise<NodeZlibModule> | undefined
+const nodeZlibSpecifier = 'node:' + 'zlib'
 
 export const decodeFilter = async (
   name: string,
@@ -40,7 +45,7 @@ const inflateWithBrowserApi = async (data: Uint8Array): Promise<Uint8Array> => {
 
 const inflateWithNode = async (data: Uint8Array): Promise<Uint8Array> => {
   try {
-    nodeZlib ??= import(/* @vite-ignore */ 'node:zlib')
+    nodeZlib ??= import(/* @vite-ignore */ nodeZlibSpecifier) as Promise<NodeZlibModule>
     const zlib = await nodeZlib
     const output = zlib.inflateSync(data)
     return new Uint8Array(output.buffer, output.byteOffset, output.byteLength)

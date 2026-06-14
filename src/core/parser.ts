@@ -74,7 +74,7 @@ export type ParserFactory = () => Parser
 /**
  * Registry of parsers for auto-detection.
  */
-class ParserRegistry {
+export class ParserRegistry {
     private parsers: Map<string, { factory: ParserFactory; priority: number }> = new Map()
 
     /**

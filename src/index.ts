@@ -4,11 +4,9 @@
  * @example
  * ```typescript
  * import { createReader } from 'rebook'
- * import { epub } from 'rebook/parsers/epub'
- * import { registry } from 'rebook'
+ * import { registerBuiltInParsers } from 'rebook'
  *
- * // Register parsers
- * registry.register('epub', epub)
+ * registerBuiltInParsers()
  *
  * // Create reader
  * const reader = createReader({ container: document.getElementById('viewer')! })
@@ -78,6 +76,7 @@ export type {
     ParserInput,
     ParserOptions,
     ParserFactory,
+    ParserRegistry,
 } from './core/parser'
 
 export type {
@@ -290,6 +289,12 @@ export { cbz, CBZParser } from './parsers/cbz'
 export { fb2, FB2Parser } from './parsers/fb2'
 export { mobi, MOBIParser } from './parsers/mobi'
 export { pdf, PDFParser } from './parsers/pdf'
+export {
+    builtInParsers,
+    registerBuiltInParsers,
+    type BuiltInParserEntry,
+    type BuiltInParserName,
+} from './parsers/builtins'
 export { RebookPdfDocument } from './pdf/engine/document'
 export type {
     PdfAnnotation,

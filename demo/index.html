@@ -618,7 +618,7 @@
                 <div class="drop-box">
                     <h2>Drop an e-book here</h2>
                     <p>or click "Open File" to browse</p>
-                    <p style="color: #aaa; font-size: 13px">Supports: EPUB, MOBI, FB2, CBZ</p>
+                    <p style="color: #aaa; font-size: 13px">Supports: EPUB, MOBI, FB2, CBZ, PDF</p>
                 </div>
             </div>
         </div>
@@ -656,12 +656,9 @@
             UnsupportedFormatError,
             AdapterRequiredError,
             exportFirstSections,
+            registerBuiltInParsers,
             setRebookDebug,
         } from '../src/index.ts'
-        import { epub } from '../src/parsers/epub.ts'
-        import { cbz } from '../src/parsers/cbz.ts'
-        import { fb2 } from '../src/parsers/fb2.ts'
-        import { mobi } from '../src/parsers/mobi.ts'
         import { withTrialLimit } from '../src/plugins/trial-limit.ts'
         import { createBrowserTTSAudioPlayer, withTTS } from '../src/plugins/tts.ts'
         import { withProfessionalTranslation, withTranslation } from '../src/plugins/translation.ts'
@@ -672,11 +669,7 @@
         const urlFactory = new BrowserURLFactory()
         const parserOptions = { domAdapter, urlFactory }
 
-        // Register all parsers with priorities
-        registry.register('epub', epub)      // priority 10 (from parser)
-        registry.register('mobi', mobi)      // priority 5 (from parser)
-        registry.register('fb2', fb2)        // priority 5 (from parser)
-        registry.register('cbz', cbz)        // priority 0 (from parser)
+        registerBuiltInParsers(registry)
 
         // DOM elements
         const viewer = document.getElementById('viewer')

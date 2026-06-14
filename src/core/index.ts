@@ -1,5 +1,5 @@
 export * from './types'
-export { type Parser, type ParserInput, type ParserOptions, registry } from './parser'
+export { ParserRegistry, type Parser, type ParserInput, type ParserOptions, registry } from './parser'
 export {
     type Exporter,
     type ExporterFactory,

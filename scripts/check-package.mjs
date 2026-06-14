@@ -7,6 +7,8 @@ const requiredFiles = [
   'dist/core/fixed-document.js',
   'dist/core/renderer-router.js',
   'dist/parsers/pdf.js',
+  'dist/pdf/platform/node.js',
+  'dist/pdf/renderers/node-canvas.js',
   'dist/renderers/browser.js',
   'dist/renderers/browser/fixed.js',
   'miniprogram_dist/index.js',

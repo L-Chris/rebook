@@ -27,6 +27,9 @@ export default defineConfig({
         'parsers/fb2': resolve(__dirname, 'src/parsers/fb2.ts'),
         'parsers/mobi': resolve(__dirname, 'src/parsers/mobi.ts'),
         'parsers/pdf': resolve(__dirname, 'src/parsers/pdf.ts'),
+        'parsers/builtins': resolve(__dirname, 'src/parsers/builtins.ts'),
+        'pdf/platform/node': resolve(__dirname, 'src/pdf/platform/node.ts'),
+        'pdf/renderers/node-canvas': resolve(__dirname, 'src/pdf/renderers/node-canvas.ts'),
         'adapters/index': resolve(__dirname, 'src/adapters/index.ts'),
         'adapters/browser': resolve(__dirname, 'src/adapters/browser.ts'),
         'adapters/node': resolve(__dirname, 'src/adapters/node.ts'),
@@ -49,6 +52,7 @@ export default defineConfig({
     rollupOptions: {
       external: [
         /^node:/,
+        '@napi-rs/canvas',
         '@modelcontextprotocol/sdk/server/mcp.js',
         '@modelcontextprotocol/sdk/server/stdio.js',
         'zod/v4',
