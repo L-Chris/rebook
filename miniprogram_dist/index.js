@@ -20948,14 +20948,6 @@ function findTOCItemForSection(book, sectionIndex, section = book.sections[secti
   }
   return null;
 }
-function isSameTOCItem(item, activeItem) {
-  if (!activeItem) return false;
-  if (item === activeItem) return true;
-  const itemHref = normalizeTOCHref(item.href);
-  const activeHref = normalizeTOCHref(activeItem.href);
-  if (!itemHref || !activeHref) return false;
-  return itemHref === activeHref;
-}
 class SectionProgress {
   constructor(sections, sizePerLoc = 1500) {
     __publicField(this, "sizes");
@@ -22345,6 +22337,7 @@ class ReaderSession {
 }
 function createTOCViewTree(items, activeItem, trialByItem) {
   let index = 0;
+  const hrefCounts = countTOCHrefs(items);
   const walk2 = (tocItems) => tocItems.map((item) => {
     var _a2, _b2, _c;
     const itemIndex = index++;
@@ -22355,11 +22348,30 @@ function createTOCViewTree(items, activeItem, trialByItem) {
       label: item.label || "Untitled",
       target: (_b2 = trialItem == null ? void 0 : trialItem.href) != null ? _b2 : item.href,
       disabled: (_c = trialItem == null ? void 0 : trialItem.disabled) != null ? _c : false,
-      active: isSameTOCItem(item, activeItem),
+      active: isActiveTOCViewItem(item, activeItem, hrefCounts),
       children
     };
   });
   return walk2(items);
+}
+function countTOCHrefs(items) {
+  var _a2;
+  const counts = /* @__PURE__ */ new Map();
+  for (const item of flattenTOC(items)) {
+    const href = normalizeTOCHref(item.href);
+    if (!href) continue;
+    counts.set(href, ((_a2 = counts.get(href)) != null ? _a2 : 0) + 1);
+  }
+  return counts;
+}
+function isActiveTOCViewItem(item, activeItem, hrefCounts) {
+  var _a2;
+  if (!activeItem) return false;
+  if (item === activeItem) return true;
+  const itemHref = normalizeTOCHref(item.href);
+  const activeHref = normalizeTOCHref(activeItem.href);
+  if (!itemHref || !activeHref || itemHref !== activeHref) return false;
+  return ((_a2 = hrefCounts.get(itemHref)) != null ? _a2 : 0) <= 1;
 }
 function normalizeTOCViewLocation(location) {
   if ((location == null ? void 0 : location.tocItem) !== null) return location;

@@ -76,6 +76,21 @@ describe('PDFParser', () => {
         })
     })
 
+    it('decodes legacy GB18030 text in PDFs without ToUnicode maps', async () => {
+        const data = await readFile('data/情景学习.pdf')
+        const book = await new PDFParser().parse(data, {
+            runtime: nodePdfRuntime,
+            embeddedFonts: false,
+        })
+
+        const text = await book.fixedDocument!.getPageText?.(0)
+
+        expect(text?.text).toContain('合法的边缘性参与')
+        expect(text?.text).not.toContain('µÚ')
+
+        book.destroy?.()
+    }, 10000)
+
     it('decodes UTF-16BE PDF outline titles', async () => {
         const parser = new PDFParser()
         const book = await parser.parse(makeOutlinePdf({ titleObject: pdfUtf16BeHexString('版权信息') }).buffer)

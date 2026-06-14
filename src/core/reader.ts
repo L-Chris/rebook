@@ -17,8 +17,8 @@ import { applyRebookPlugins } from './plugins'
 import {
     createSectionIndexLookup,
     flattenTOC,
-    isSameTOCItem,
     normalizeNavigationHref,
+    normalizeTOCHref,
     resolveTOCSectionIndex,
 } from './toc'
 import {
@@ -511,6 +511,7 @@ function createTOCViewTree(
     trialByItem?: ReadonlyMap<TOCItem, TrialTOCAccessItem>,
 ): TOCViewItem[] {
     let index = 0
+    const hrefCounts = countTOCHrefs(items)
 
     const walk = (tocItems: readonly TOCItem[]): TOCViewItem[] => tocItems.map(item => {
         const itemIndex = index++
@@ -521,12 +522,36 @@ function createTOCViewTree(
             label: item.label || 'Untitled',
             target: trialItem?.href ?? item.href,
             disabled: trialItem?.disabled ?? false,
-            active: isSameTOCItem(item, activeItem),
+            active: isActiveTOCViewItem(item, activeItem, hrefCounts),
             children,
         }
     })
 
     return walk(items)
+}
+
+function countTOCHrefs(items: readonly TOCItem[]): Map<string, number> {
+    const counts = new Map<string, number>()
+    for (const item of flattenTOC(items)) {
+        const href = normalizeTOCHref(item.href)
+        if (!href) continue
+        counts.set(href, (counts.get(href) ?? 0) + 1)
+    }
+    return counts
+}
+
+function isActiveTOCViewItem(
+    item: TOCItem,
+    activeItem: TOCItem | null,
+    hrefCounts: ReadonlyMap<string, number>,
+): boolean {
+    if (!activeItem) return false
+    if (item === activeItem) return true
+
+    const itemHref = normalizeTOCHref(item.href)
+    const activeHref = normalizeTOCHref(activeItem.href)
+    if (!itemHref || !activeHref || itemHref !== activeHref) return false
+    return (hrefCounts.get(itemHref) ?? 0) <= 1
 }
 
 function normalizeTOCViewLocation(location: RelocateEvent | null): RelocateEvent | null {

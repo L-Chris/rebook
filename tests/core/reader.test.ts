@@ -155,6 +155,26 @@ describe('ReaderSession', () => {
         book.destroy?.()
     }, 10000)
 
+    it('marks only the active TOC object when multiple items share a target', async () => {
+        const renderer = new FakeRenderer()
+        const intro = { label: 'Intro', href: 'pdf:page:0' }
+        const chapter = { label: 'Chapter', href: 'pdf:page:0' }
+        const book: Book = {
+            sections: [],
+            toc: [intro, chapter],
+            resolveHref: href => ({ index: href === 'pdf:page:0' ? 0 : -1 }),
+            destroy() {},
+        }
+        const reader = new ReaderSession({ createRenderer: () => renderer })
+        await reader.openBook(book)
+        renderer.setLocation({ index: 0, fraction: 0, totalFraction: 0, tocItem: chapter })
+
+        const activeItems = flattenTOCViewItems(reader.getTOCViewItems({ location: renderer.getLocation() }))
+            .filter(item => item.active)
+
+        expect(activeItems.map(item => item.label)).toEqual(['Chapter'])
+    })
+
     it('exposes current surface text through the reader core', async () => {
         const renderer = new FakeRenderer()
         const reader = new ReaderSession({ createRenderer: () => renderer })

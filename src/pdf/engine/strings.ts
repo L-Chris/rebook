@@ -1,3 +1,5 @@
+import { decodeLegacyChineseBytes } from './legacy-text'
+
 export interface DecodePdfTextStringOptions {
   keepEscapeSequence?: boolean
 }
@@ -8,6 +10,8 @@ export const decodePdfTextString = (
 ): string => {
   const decoded = decodeUnicodeTextString(value)
   if (decoded !== undefined) return options.keepEscapeSequence ? decoded : stripLanguageTags(decoded)
+  const legacyChinese = decodeLegacyChineseBytes(value)
+  if (legacyChinese !== undefined) return legacyChinese
   return decodePdfDocEncoding(value, options.keepEscapeSequence === true)
 }
 

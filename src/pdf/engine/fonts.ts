@@ -1,4 +1,5 @@
 import { bytesToLatin1 } from './bytes'
+import { decodeLegacyChineseBytes } from './legacy-text'
 import { isDict, isName, PdfDict, PdfFontSource, PdfName, PdfPrimitive } from '../types'
 
 export interface PdfFontDecoder {
@@ -37,12 +38,13 @@ export const createSimpleFontDecoder = (
   const table = createEncodingTable(encoding, resolve)
   const width = createSimpleWidthResolver(font, resolve, 500)
   const style = createFontStyle(font, resolve, source)
+  const allowShortLegacyChinesePairs = isLegacyChineseFont(font, resolve)
   return {
     decode: memoizeText((text: string): string => {
       if (hasUtf16BeBom(text)) return decodeUtf16BeOrBytes(text)
       let output = ''
       for (let i = 0; i < text.length; i++) output += table[text.charCodeAt(i) & 0xff] ?? String.fromCharCode(text.charCodeAt(i) & 0xff)
-      return output
+      return decodeLegacyChineseBytes(output, { allowShortPairs: allowShortLegacyChinesePairs }) ?? output
     }),
     advanceWidth: memoizeAdvance((text, options) => advanceSimpleText(text, options, width)),
     ...(style ? { style } : {}),
@@ -77,7 +79,7 @@ export const createToUnicodeFontDecoder = (
         }
         if (!matched) output += String.fromCharCode(bytes[index++])
       }
-      return output
+      return decodeLegacyChineseBytes(output) ?? output
     }),
     advanceWidth: advanceWidth ? memoizeAdvance(advanceWidth) : undefined,
     ...(style ? { style } : {}),
@@ -99,7 +101,7 @@ export const createIdentityCidFontDecoder = (
         if (index + 1 >= bytes.length) output += String.fromCharCode(bytes[index])
         else output += String.fromCodePoint((bytes[index] << 8) | bytes[index + 1])
       }
-      return output
+      return decodeLegacyChineseBytes(output) ?? output
     }),
     advanceWidth: memoizeAdvance((text, options) => advanceCidText(text, options, width)),
     ...(style ? { style } : {}),
@@ -228,6 +230,18 @@ const nameValue = (value: PdfPrimitive | undefined): string | undefined =>
 
 const stripFontSubsetPrefix = (name: string): string =>
   name.replace(/^[A-Z]{6}\+/, '')
+
+const isLegacyChineseFont = (
+  font: PdfDict,
+  resolve: (value: PdfPrimitive | undefined) => PdfPrimitive | undefined,
+): boolean => {
+  const names = [
+    nameValue(resolve(font.entries.get('BaseFont'))),
+    nameValue(resolve(font.entries.get('Encoding'))),
+    descendantBaseFont(font, resolve),
+  ].filter(Boolean).join(' ')
+  return /\b(?:GB|GBK|GB1|CNS|Big5|UniGB|STSong|SimSun|Song|Ming|Kai)(?:\b|-|_)/i.test(names)
+}
 
 const fontDataHash = (data: Uint8Array): string => {
   let hash = 2166136261
@@ -665,7 +679,7 @@ const parseBfRange = (source: string, entries: Map<string, string>): void => {
 const hasUtf16BeBom = (text: string): boolean => text.length >= 2 && text.charCodeAt(0) === 0xfe && text.charCodeAt(1) === 0xff
 
 const decodeUtf16BeOrBytes = (text: string): string => {
-  if (!hasUtf16BeBom(text)) return text
+  if (!hasUtf16BeBom(text)) return decodeLegacyChineseBytes(text) ?? text
   let output = ''
   for (let i = 2; i + 1 < text.length; i += 2) output += String.fromCharCode((text.charCodeAt(i) << 8) | text.charCodeAt(i + 1))
   return output
