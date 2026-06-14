@@ -59,3 +59,95 @@ export interface PageCompositor<TSurface extends PageSurface = PageSurface, TTar
     clear?(): void
     destroy?(): Promise<void> | void
 }
+
+export interface PageSurfaceControllerConfig<
+    TContext,
+    TSurface extends PageSurface = PageSurface,
+    TTarget = unknown,
+    TResult = unknown,
+> {
+    readonly contentRenderer: ContentRenderer<TContext, TSurface>
+    readonly compositor: PageCompositor<TSurface, TTarget, TResult>
+}
+
+export interface PageSurfaceComposeOutcome<
+    TSurface extends PageSurface = PageSurface,
+    TResult = unknown,
+> {
+    readonly surface: TSurface
+    readonly result: TResult
+}
+
+export class PageSurfaceController<
+    TContext,
+    TSurface extends PageSurface = PageSurface,
+    TTarget = unknown,
+    TResult = unknown,
+> {
+    private readonly contentRenderer: ContentRenderer<TContext, TSurface>
+    private readonly compositor: PageCompositor<TSurface, TTarget, TResult>
+    private sequence = 0
+
+    constructor(config: PageSurfaceControllerConfig<TContext, TSurface, TTarget, TResult>) {
+        this.contentRenderer = config.contentRenderer
+        this.compositor = config.compositor
+    }
+
+    render(
+        context: TContext,
+        target?: TTarget,
+        request?: PageSurfaceRequest,
+    ):
+        | PageSurfaceComposeOutcome<TSurface, TResult>
+        | Promise<PageSurfaceComposeOutcome<TSurface, TResult> | null>
+        | null {
+        const token = ++this.sequence
+        const surface = this.contentRenderer.renderSurface(context, request)
+        if (isPromiseLike(surface)) {
+            return surface.then(rendered => this.composeCurrent(token, rendered, target))
+        }
+        return this.composeCurrent(token, surface, target)
+    }
+
+    cancelPending(): void {
+        this.sequence++
+    }
+
+    clear(): void {
+        this.cancelPending()
+        this.compositor.clear?.()
+    }
+
+    private composeCurrent(
+        token: number,
+        surface: TSurface,
+        target?: TTarget,
+    ):
+        | PageSurfaceComposeOutcome<TSurface, TResult>
+        | Promise<PageSurfaceComposeOutcome<TSurface, TResult> | null>
+        | null {
+        if (token !== this.sequence) {
+            surface.destroy?.()
+            return null
+        }
+
+        let result: Promise<TResult> | TResult
+        try {
+            result = this.compositor.compose(surface, target)
+        } catch (error) {
+            surface.destroy?.()
+            throw error
+        }
+
+        if (isPromiseLike(result)) {
+            return result.then(composed => (
+                token === this.sequence ? { surface, result: composed } : null
+            ))
+        }
+        return { surface, result }
+    }
+}
+
+function isPromiseLike<T>(value: Promise<T> | T): value is Promise<T> {
+    return typeof (value as { then?: unknown })?.then === 'function'
+}

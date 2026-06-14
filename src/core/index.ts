@@ -123,10 +123,15 @@ export type {
     TextProvider,
     TextSearchResult,
 } from './location'
-export { REBOOK_PAGE_SURFACE_MODEL_VERSION } from './page-surface'
+export {
+    PageSurfaceController,
+    REBOOK_PAGE_SURFACE_MODEL_VERSION,
+} from './page-surface'
 export type {
     ContentRenderer,
     PageCompositor,
+    PageSurfaceComposeOutcome,
+    PageSurfaceControllerConfig,
     PageSurface,
     PageSurfaceKind,
     PageSurfaceLayer,

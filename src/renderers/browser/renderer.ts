@@ -8,6 +8,7 @@ import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, Resol
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererConfig, RendererStyles } from '../../core/renderer'
 import { debugRebook } from '../../core/debug'
 import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
+import { PageSurfaceController } from '../../core/page-surface'
 import { SectionProgress } from '../../utils/progress'
 import {
     getAnchorIds,
@@ -29,9 +30,10 @@ import {
     type TextBlock,
     type TextStyle,
 } from '../../core/pretext'
-import type { BrowserPageCompositor } from './compositor'
+import type { BrowserPageComposeResult, BrowserPageCompositor, BrowserPageSurface } from './compositor'
 import {
     BrowserReflowableContentRenderer,
+    type BrowserReflowableContentRenderContext,
     type ReflowableColumnLayout,
 } from './reflowable-content'
 import { BrowserSurfaceHost } from './surface-host'
@@ -82,6 +84,12 @@ export class BrowserRenderer implements Renderer {
     private prepared: PreparedText | null = null
     private lines: LineRange[] = []
     private readonly contentRenderer: BrowserReflowableContentRenderer
+    private readonly surfaceController: PageSurfaceController<
+        BrowserReflowableContentRenderContext,
+        BrowserPageSurface,
+        undefined,
+        BrowserPageComposeResult
+    >
     private styles: RendererStyles
     private maxColumnCount: number
     private columnLayout: ReflowableColumnLayout = {
@@ -129,6 +137,10 @@ export class BrowserRenderer implements Renderer {
         this.applyOverflowMode()
 
         this.contentRenderer = config.reflowableContentRenderer ?? new BrowserReflowableContentRenderer()
+        this.surfaceController = new PageSurfaceController({
+            contentRenderer: this.contentRenderer,
+            compositor: this.host.compositor,
+        })
 
         this.scroller.addEventListener('scroll', () => {
             this.renderVisibleLines()
@@ -167,7 +179,7 @@ export class BrowserRenderer implements Renderer {
         this.lastLocation = null
         this.prepared = null
         this.lines = []
-        this.host.clear()
+        this.surfaceController.clear()
         this.host.resetScrollExtent()
         this.scroller.scrollTop = 0
         this.prefetchPageCount = getPluginPrefetchPageCount(book)
@@ -341,6 +353,7 @@ export class BrowserRenderer implements Renderer {
     destroy(): void {
         this.activeLoadId++
         this.resizeObserver.disconnect()
+        this.surfaceController.cancelPending()
         void this.contentRenderer.destroy?.()
         this.host.destroy()
         this.events.clear()
@@ -466,12 +479,12 @@ export class BrowserRenderer implements Renderer {
     private renderVisibleLines(): void {
         const layout = this.columnLayout
         if (!this.prepared || this.currentIndex < 0) {
-            this.host.clear()
+            this.surfaceController.clear()
             return
         }
 
         const surfaceWidth = Math.max(1, layout.columnWidth * layout.columns + layout.gap * (layout.columns - 1))
-        const surface = this.contentRenderer.renderSurface({
+        this.surfaceController.render({
             sectionIndex: this.currentIndex,
             pageIndex: this.pageIndex,
             layoutMode: this.layoutMode,
@@ -487,7 +500,6 @@ export class BrowserRenderer implements Renderer {
             surfaceWidth,
             surfaceHeight: Math.max(1, layout.totalHeight),
         })
-        this.host.compose(surface)
     }
 
     private emitRelocate(reason: string): void {

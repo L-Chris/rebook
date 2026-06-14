@@ -16,8 +16,9 @@ import type { EventListener, LayoutMode, ReaderMark, Renderer, RendererConfig, R
 import { UnsupportedFormatError } from '../../core/errors'
 import { parseCSSPixels } from '../../core/renderer-utils'
 import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
-import type { BrowserPageCompositor } from './compositor'
-import { BrowserFixedContentRenderer, type BrowserFixedVisualRenderer } from './fixed-content'
+import { PageSurfaceController } from '../../core/page-surface'
+import type { BrowserPageComposeResult, BrowserPageCompositor, BrowserPageSurface } from './compositor'
+import { BrowserFixedContentRenderer, type BrowserFixedContentRenderContext, type BrowserFixedVisualRenderer } from './fixed-content'
 import { BrowserSurfaceHost } from './surface-host'
 
 interface RendererEventMap {
@@ -52,6 +53,12 @@ export class BrowserFixedRenderer implements Renderer {
     private readonly marks = new ReaderMarkStore()
     private readonly beforeNavigate: RendererConfig['beforeNavigate']
     private readonly contentRenderer: BrowserFixedContentRenderer
+    private readonly surfaceController: PageSurfaceController<
+        BrowserFixedContentRenderContext,
+        BrowserPageSurface,
+        undefined,
+        BrowserPageComposeResult
+    >
     private readonly scroller: HTMLElement
     private readonly pageHost: HTMLElement
     private book: Book | null = null
@@ -61,7 +68,6 @@ export class BrowserFixedRenderer implements Renderer {
     private layoutMode: LayoutMode
     private pageIndex = 0
     private lastLocation: RelocateEvent | null = null
-    private renderToken = 0
 
     constructor(config: BrowserFixedRendererConfig) {
         this.styles = config.styles ?? {}
@@ -81,6 +87,10 @@ export class BrowserFixedRenderer implements Renderer {
             fixedPageRenderer: config.fixedPageRenderer,
             visualRenderers: config.fixedVisualRenderers,
             devicePixelRatio: config.devicePixelRatio,
+        })
+        this.surfaceController = new PageSurfaceController({
+            contentRenderer: this.contentRenderer,
+            compositor: this.host.compositor,
         })
     }
 
@@ -189,7 +199,7 @@ export class BrowserFixedRenderer implements Renderer {
     }
 
     destroy(): void {
-        this.renderToken++
+        this.surfaceController.cancelPending()
         void this.contentRenderer.destroy?.()
         this.host.destroy()
         this.events.clear()
@@ -204,25 +214,20 @@ export class BrowserFixedRenderer implements Renderer {
         const page = this.pages[this.pageIndex]
         if (!fixedDocument || !page) return
 
-        const token = ++this.renderToken
         const margin = parseCSSPixels(this.styles.margin, DEFAULT_MARGIN)
         const scale = this.getPageScale(page, margin)
-        const surface = await this.contentRenderer.renderSurface({
+        this.pageHost.style.padding = `${margin}px`
+        const rendered = await this.surfaceController.render({
             document: fixedDocument,
             page,
             scale,
             styles: this.styles,
             marks: this.marks.getAll(),
         })
-        if (token !== this.renderToken) {
-            surface.destroy?.()
-            return
-        }
+        if (!rendered) return
 
-        this.pageHost.style.padding = `${margin}px`
-        this.host.compose(surface)
         this.scroller.scrollTop = 0
-        this.emit('load', { doc: surface.metadata?.textLayer ?? surface, index: page.index })
+        this.emit('load', { doc: rendered.surface.metadata?.textLayer ?? rendered.surface, index: page.index })
         this.emitRelocate(reason)
     }
 

@@ -1,0 +1,98 @@
+import { describe, expect, it, vi } from 'vitest'
+import {
+    PageSurfaceController,
+    type ContentRenderer,
+    type PageCompositor,
+    type PageSurface,
+    type PageSurfaceComposeOutcome,
+} from '../../src/core/page-surface'
+
+describe('PageSurfaceController', () => {
+    it('renders and composes synchronous page surfaces without deferring the fast path', () => {
+        const surface = createSurface('surface-1')
+        const contentRenderer: ContentRenderer<{ surface: PageSurface }> = {
+            id: 'sync-renderer',
+            renderSurface: context => context.surface,
+        }
+        const compositor: PageCompositor<PageSurface, undefined, string> = {
+            id: 'sync-compositor',
+            compose: rendered => `composed:${rendered.id}`,
+        }
+        const controller = new PageSurfaceController({ contentRenderer, compositor })
+
+        const result = controller.render({ surface })
+
+        expect(result).toEqual({ surface, result: 'composed:surface-1' })
+    })
+
+    it('destroys stale asynchronous surfaces instead of composing them', async () => {
+        const pending = new Map<string, (surface: PageSurface) => void>()
+        const composed: string[] = []
+        const destroyed = vi.fn()
+        const contentRenderer: ContentRenderer<{ id: string }> = {
+            id: 'async-renderer',
+            renderSurface: context => new Promise<PageSurface>(resolve => {
+                pending.set(context.id, resolve)
+            }),
+        }
+        const compositor: PageCompositor<PageSurface, undefined, string> = {
+            id: 'async-compositor',
+            compose: surface => {
+                composed.push(surface.id)
+                return `composed:${surface.id}`
+            },
+        }
+        const controller = new PageSurfaceController({ contentRenderer, compositor })
+
+        const first = controller.render({ id: 'first' }) as Promise<PageSurfaceComposeOutcome<PageSurface, string> | null>
+        const second = controller.render({ id: 'second' }) as Promise<PageSurfaceComposeOutcome<PageSurface, string> | null>
+
+        pending.get('second')?.(createSurface('second'))
+        await expect(second).resolves.toMatchObject({ result: 'composed:second' })
+
+        pending.get('first')?.(createSurface('first', destroyed))
+        await expect(first).resolves.toBeNull()
+
+        expect(composed).toEqual(['second'])
+        expect(destroyed).toHaveBeenCalledTimes(1)
+    })
+
+    it('clears the compositor and cancels pending surface renders', async () => {
+        let resolveSurface!: (surface: PageSurface) => void
+        const destroyed = vi.fn()
+        const clear = vi.fn()
+        const contentRenderer: ContentRenderer<void> = {
+            id: 'clear-renderer',
+            renderSurface: () => new Promise<PageSurface>(resolve => {
+                resolveSurface = resolve
+            }),
+        }
+        const compositor: PageCompositor<PageSurface> = {
+            id: 'clear-compositor',
+            compose: vi.fn(),
+            clear,
+        }
+        const controller = new PageSurfaceController({ contentRenderer, compositor })
+
+        const render = controller.render(undefined) as Promise<PageSurfaceComposeOutcome<PageSurface> | null>
+        controller.clear()
+        resolveSurface(createSurface('stale', destroyed))
+
+        await expect(render).resolves.toBeNull()
+        expect(clear).toHaveBeenCalledTimes(1)
+        expect(compositor.compose).not.toHaveBeenCalled()
+        expect(destroyed).toHaveBeenCalledTimes(1)
+    })
+})
+
+function createSurface(id: string, destroy = vi.fn()): PageSurface {
+    return {
+        id,
+        kind: 'fixed-page',
+        width: 100,
+        height: 100,
+        scale: 1,
+        layers: [],
+        destroy,
+    }
+}

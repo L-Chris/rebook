@@ -214,10 +214,15 @@ export {
     type StaticTextProviderOptions,
 } from './core/text-provider'
 
-export { REBOOK_PAGE_SURFACE_MODEL_VERSION } from './core/page-surface'
+export {
+    PageSurfaceController,
+    REBOOK_PAGE_SURFACE_MODEL_VERSION,
+} from './core/page-surface'
 export type {
     ContentRenderer,
     PageCompositor,
+    PageSurfaceComposeOutcome,
+    PageSurfaceControllerConfig,
     PageSurface,
     PageSurfaceKind,
     PageSurfaceLayer,
