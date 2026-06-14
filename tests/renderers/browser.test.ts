@@ -242,7 +242,10 @@ describe('BrowserRenderer', () => {
         renderer.setMark({
             id: 'current',
             kind: 'tts',
-            range: { sectionIndex: 0, blockId: 'p1', startOffset: 0, endOffset: 12 },
+            location: {
+                start: { type: 'reflowable', sectionIndex: 0, blockId: 'p1', offset: 0 },
+                end: { type: 'reflowable', sectionIndex: 0, blockId: 'p1', offset: 12 },
+            },
             className: 'is-current',
             data: { segmentId: 's1' },
         })
@@ -376,7 +379,7 @@ describe('BrowserRenderer', () => {
         reader.setMark({
             id: 'fixed-highlight',
             kind: 'highlight',
-            range: {
+            location: {
                 type: 'fixed',
                 format: 'pdf',
                 pageIndex: 0,
@@ -441,7 +444,7 @@ describe('BrowserRenderer', () => {
         reader.setMark({
             id: 'comic-panel',
             kind: 'panel',
-            range: {
+            location: {
                 type: 'image',
                 pageIndex: 0,
                 rect: { x: 0, y: 0, width: 1, height: 1 },

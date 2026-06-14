@@ -1803,11 +1803,19 @@
                 reader.setMark({
                     id: `tts-current-${index}`,
                     kind: 'tts',
-                    range: {
-                        sectionIndex: segment.sectionIndex,
-                        blockId: range.blockId,
-                        startOffset: range.startOffset,
-                        endOffset: range.endOffset,
+                    location: {
+                        start: {
+                            type: 'reflowable',
+                            sectionIndex: segment.sectionIndex,
+                            blockId: range.blockId,
+                            offset: range.startOffset,
+                        },
+                        end: {
+                            type: 'reflowable',
+                            sectionIndex: segment.sectionIndex,
+                            blockId: range.blockId,
+                            offset: range.endOffset,
+                        },
                     },
                     className: 'rebook-tts-current',
                     data: { segmentId: segment.id },

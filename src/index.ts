@@ -84,7 +84,6 @@ export type {
     RendererConfig,
     RendererStyles,
     ReaderMark,
-    ReaderMarkRange,
     LayoutMode,
     RendererFactory,
 } from './core/renderer'
@@ -189,13 +188,21 @@ export {
     type FixedPageViewportOptions,
 } from './core/fixed-document'
 
-export { REBOOK_LOCATION_MODEL_VERSION } from './core/location'
+export {
+    REBOOK_LOCATION_MODEL_VERSION,
+    bookPositionMatchesReflowableRange,
+    getBookPositionLocations,
+    getFixedPositionRects,
+    isBookRange,
+} from './core/location'
 export type {
     Annotation,
     BookLocation,
+    BookPosition,
     BookRange,
     BookSelection,
     Rect,
+    ReflowableTextRange,
     TextChunk,
     TextProvider,
     TextSearchResult,

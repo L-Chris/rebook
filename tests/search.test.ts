@@ -159,7 +159,7 @@ describe('ReaderSession search', () => {
         reader.setMark({
             id: 'tts-current',
             kind: 'tts',
-            range: { sectionIndex: 0, blockId: 'p1' },
+            location: { type: 'reflowable', sectionIndex: 0, blockId: 'p1' },
             className: 'is-current',
         })
 

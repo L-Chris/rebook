@@ -6,7 +6,7 @@
  */
 
 import type { Book, RelocateEvent, LoadEvent } from './types'
-import type { BookLocation, BookRange } from './location'
+import type { BookPosition } from './location'
 
 /**
  * Style options for the renderer.
@@ -55,17 +55,10 @@ export interface RendererNavigationHooks {
     beforeNavigate?: (direction: NavigationDirection) => boolean | Promise<boolean>
 }
 
-export type ReaderMarkRange =
-    | { sectionIndex: number; blockId: string; startOffset?: number; endOffset?: number }
-    | { sectionIndex: number; href: string }
-    | { cfi: string }
-    | BookLocation
-    | BookRange
-
 export interface ReaderMark {
     id: string
     kind?: string
-    range: ReaderMarkRange
+    location: BookPosition
     className?: string
     data?: Record<string, unknown>
 }

@@ -7,7 +7,7 @@ import type {
 } from '../../core/fixed-document'
 import type { ContentRenderer } from '../../core/page-surface'
 import type { ReaderMark, RendererStyles } from '../../core/renderer'
-import type { BookLocation, BookRange, Rect } from '../../core/location'
+import { getFixedPositionRects, type Rect } from '../../core/location'
 import { isPdfFixedDocument } from '../../pdf/fixed-document'
 import { BrowserPdfCanvasRenderer } from './pdf-canvas'
 import type { BrowserPageSurface, BrowserPageSurfaceLayer } from './compositor'
@@ -273,32 +273,7 @@ function getPageMarkRects(marks: readonly ReaderMark[], format: string, pageInde
 }
 
 function getMarkRects(mark: ReaderMark, format: string, pageIndex: number): Rect[] {
-    const range = mark.range
-    if (isBookRange(range)) {
-        return [
-            ...getLocationRects(range.start, format, pageIndex),
-            ...(range.end ? getLocationRects(range.end, format, pageIndex) : []),
-        ]
-    }
-    if (isBookLocation(range)) {
-        return getLocationRects(range, format, pageIndex)
-    }
-    return []
-}
-
-function getLocationRects(location: BookLocation, format: string, pageIndex: number): Rect[] {
-    if (location.type !== 'fixed' && location.type !== 'image') return []
-    if (location.pageIndex !== pageIndex) return []
-    if ('format' in location && location.format && location.format !== format) return []
-    return location.rect ? [location.rect] : []
-}
-
-function isBookRange(value: ReaderMark['range']): value is BookRange {
-    return !!value && typeof value === 'object' && 'start' in value
-}
-
-function isBookLocation(value: ReaderMark['range']): value is BookLocation {
-    return !!value && typeof value === 'object' && 'type' in value
+    return getFixedPositionRects(mark.location, { format, pageIndex })
 }
 
 function getMarkClassNames(mark: ReaderMark): string[] {

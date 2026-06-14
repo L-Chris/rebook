@@ -43,7 +43,7 @@ describe('RendererRouter', () => {
     })
 
     it('replays listeners and pending renderer state to a newly selected renderer', async () => {
-        const mark: ReaderMark = { id: 'm1', range: { sectionIndex: 0, href: 'chapter.html' } }
+        const mark: ReaderMark = { id: 'm1', location: { type: 'reflowable', sectionIndex: 0, href: 'chapter.html' } }
         const fixed = new FakeRenderer()
         const router = createRendererRouter([
             { id: 'fixed', match: matchesFixedDocument, createRenderer: () => fixed },

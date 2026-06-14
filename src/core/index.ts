@@ -99,13 +99,21 @@ export {
     type FixedPageViewport,
     type FixedPageViewportOptions,
 } from './fixed-document'
-export { REBOOK_LOCATION_MODEL_VERSION } from './location'
+export {
+    REBOOK_LOCATION_MODEL_VERSION,
+    bookPositionMatchesReflowableRange,
+    getBookPositionLocations,
+    getFixedPositionRects,
+    isBookRange,
+} from './location'
 export type {
     Annotation,
     BookLocation,
+    BookPosition,
     BookRange,
     BookSelection,
     Rect,
+    ReflowableTextRange,
     TextChunk,
     TextProvider,
     TextSearchResult,

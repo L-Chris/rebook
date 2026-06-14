@@ -20653,6 +20653,55 @@ class MOBIParser {
   }
 }
 const mobi = () => new MOBIParser();
+function isBookRange(value2) {
+  return typeof value2 === "object" && value2 !== null && "start" in value2;
+}
+function bookPositionMatchesReflowableRange(position, range) {
+  if (isBookRange(position)) return bookRangeMatchesReflowableRange(position, range);
+  return bookLocationMatchesReflowableRange(position, range);
+}
+function bookRangeMatchesReflowableRange(position, range) {
+  const start = getReflowableLocation(position.start);
+  const end = position.end ? getReflowableLocation(position.end) : start;
+  if (!start || !end) return false;
+  if (start.sectionIndex !== end.sectionIndex) {
+    return range.sectionIndex >= Math.min(start.sectionIndex, end.sectionIndex) && range.sectionIndex <= Math.max(start.sectionIndex, end.sectionIndex);
+  }
+  if (start.sectionIndex !== range.sectionIndex) return false;
+  const startBlockId = getReflowableBlockId(start);
+  const endBlockId = getReflowableBlockId(end);
+  if (startBlockId && endBlockId && startBlockId === endBlockId) {
+    return reflowableLocationMatchesBlock(start, range, end.offset);
+  }
+  return bookLocationMatchesReflowableRange(position.start, range) || (position.end ? bookLocationMatchesReflowableRange(position.end, range) : false);
+}
+function bookLocationMatchesReflowableRange(location, range) {
+  const reflowable = getReflowableLocation(location);
+  if (!reflowable) return false;
+  return reflowableLocationMatchesBlock(reflowable, range);
+}
+function getReflowableLocation(location) {
+  return location.type === "reflowable" || location.type === "text" ? location : null;
+}
+function getReflowableBlockId(location) {
+  return location.type === "reflowable" ? location.blockId : void 0;
+}
+function reflowableLocationMatchesBlock(location, range, endOffset = location.offset) {
+  var _a2, _b2, _c;
+  if (location.sectionIndex !== range.sectionIndex) return false;
+  if (location.type === "reflowable" && location.blockId) {
+    if (range.blockId !== location.blockId) return false;
+  }
+  if (location.offset === void 0 && endOffset === void 0) return true;
+  if (!range.offsetsReliable) return true;
+  const rangeStart = (_a2 = range.startOffset) != null ? _a2 : Number.NEGATIVE_INFINITY;
+  const rangeEnd = (_b2 = range.endOffset) != null ? _b2 : Number.POSITIVE_INFINITY;
+  if (rangeEnd <= rangeStart) return true;
+  const markStart = (_c = location.offset) != null ? _c : Number.NEGATIVE_INFINITY;
+  const markEnd = endOffset != null ? endOffset : Number.POSITIVE_INFINITY;
+  if (markEnd === markStart) return rangeStart <= markStart && markStart < rangeEnd;
+  return rangeStart < markEnd && rangeEnd > markStart;
+}
 class SectionProgress {
   constructor(sections, sizePerLoc = 1500) {
     __publicField(this, "sizes");
@@ -21500,18 +21549,14 @@ function compareTOCPosition(a, b) {
   return a.index - b.index || a.sourceTop - b.sourceTop || a.order - b.order;
 }
 function markMatchesLine(mark, line, sectionIndex) {
-  var _a2, _b2, _c, _d, _e, _f, _g, _h, _i;
-  if (!("sectionIndex" in mark.range) || mark.range.sectionIndex !== sectionIndex) return false;
-  if (!("blockId" in mark.range)) return false;
-  if (((_a2 = line.block) == null ? void 0 : _a2.id) !== mark.range.blockId) return false;
-  if (mark.range.startOffset === void 0 && mark.range.endOffset === void 0) return true;
-  if (((_c = (_b2 = line.block) == null ? void 0 : _b2.segments.length) != null ? _c : 0) !== 1) return true;
-  const lineStart = (_e = (_d = line.start) == null ? void 0 : _d.cursor.graphemeIndex) != null ? _e : 0;
-  const lineEnd = (_g = (_f = line.end) == null ? void 0 : _f.cursor.graphemeIndex) != null ? _g : lineStart;
-  if (lineEnd <= lineStart) return true;
-  const markStart = (_h = mark.range.startOffset) != null ? _h : Number.NEGATIVE_INFINITY;
-  const markEnd = (_i = mark.range.endOffset) != null ? _i : Number.POSITIVE_INFINITY;
-  return lineStart < markEnd && lineEnd > markStart;
+  var _a2, _b2, _c, _d, _e;
+  return bookPositionMatchesReflowableRange(mark.location, {
+    sectionIndex,
+    blockId: (_a2 = line.block) == null ? void 0 : _a2.id,
+    startOffset: (_b2 = line.start) == null ? void 0 : _b2.cursor.graphemeIndex,
+    endOffset: (_c = line.end) == null ? void 0 : _c.cursor.graphemeIndex,
+    offsetsReliable: ((_e = (_d = line.block) == null ? void 0 : _d.segments.length) != null ? _e : 0) === 1
+  });
 }
 function getLineMarkSnapshot(marks) {
   if (!marks.length) return {};

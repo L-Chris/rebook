@@ -1,5 +1,6 @@
 import type { ContentRenderer } from '../../core/page-surface'
 import type { LayoutMode, ReaderMark, RendererStyles } from '../../core/renderer'
+import { bookPositionMatchesReflowableRange } from '../../core/location'
 import { parseCSSPixels } from '../../core/renderer-utils'
 import {
     getVisibleLines,
@@ -409,17 +410,13 @@ function getRenderedLinePosition(
 }
 
 function markMatchesLine(mark: ReaderMark, line: LineRange, sectionIndex: number): boolean {
-    if (!('sectionIndex' in mark.range) || mark.range.sectionIndex !== sectionIndex) return false
-    if (!('blockId' in mark.range)) return false
-    if (line.block?.id !== mark.range.blockId) return false
-    if (mark.range.startOffset === undefined && mark.range.endOffset === undefined) return true
-    if ((line.block?.segments.length ?? 0) !== 1) return true
-    const lineStart = line.start?.cursor.graphemeIndex ?? 0
-    const lineEnd = line.end?.cursor.graphemeIndex ?? lineStart
-    if (lineEnd <= lineStart) return true
-    const markStart = mark.range.startOffset ?? Number.NEGATIVE_INFINITY
-    const markEnd = mark.range.endOffset ?? Number.POSITIVE_INFINITY
-    return lineStart < markEnd && lineEnd > markStart
+    return bookPositionMatchesReflowableRange(mark.location, {
+        sectionIndex,
+        blockId: line.block?.id,
+        startOffset: line.start?.cursor.graphemeIndex,
+        endOffset: line.end?.cursor.graphemeIndex,
+        offsetsReliable: (line.block?.segments.length ?? 0) === 1,
+    })
 }
 
 function getMarkClassNames(mark: ReaderMark): string[] {
