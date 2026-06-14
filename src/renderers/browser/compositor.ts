@@ -4,6 +4,12 @@ export interface BrowserPageSurfaceLayer extends PageSurfaceLayer<HTMLElement> {
 
 export interface BrowserPageSurface extends PageSurface<BrowserPageSurfaceLayer> {}
 
+export interface BrowserSpreadPageSurface {
+    readonly x: number
+    readonly y: number
+    readonly surface: BrowserPageSurface
+}
+
 export interface BrowserPageCompositorConfig {
     readonly host: HTMLElement
     readonly pageBackground?: string
@@ -43,15 +49,18 @@ export class BrowserPageCompositor implements PageCompositor<BrowserPageSurface,
         if (surface.pageIndex !== undefined) {
             frame.dataset.pageIndex = String(surface.pageIndex)
         }
+        const pageLike = surface.kind === 'fixed-page' || surface.kind === 'image-page'
         frame.style.cssText = `
             position: relative;
             width: ${surface.width * surface.scale}px;
             height: ${surface.height * surface.scale}px;
-            background: ${this.pageBackground};
-            box-shadow: ${this.pageShadow};
+            background: ${pageLike ? this.pageBackground : 'transparent'};
+            box-shadow: ${pageLike ? this.pageShadow : 'none'};
             overflow: hidden;
             flex: 0 0 auto;
         `
+
+        if (surface.kind === 'spread') mountSpreadPages(frame, surface, this.pageBackground, this.pageShadow)
 
         for (const layer of surface.layers) {
             mountLayer(frame, surface, layer)
@@ -70,6 +79,27 @@ export class BrowserPageCompositor implements PageCompositor<BrowserPageSurface,
 
     destroy(): void {
         this.clear()
+    }
+}
+
+function mountSpreadPages(frame: HTMLElement, surface: BrowserPageSurface, pageBackground: string, pageShadow: string): void {
+    for (const item of getBrowserSpreadPages(surface)) {
+        const pageFrame = document.createElement('div')
+        pageFrame.dataset.rebookSpreadPage = 'true'
+        if (item.surface.pageIndex !== undefined) pageFrame.dataset.pageIndex = String(item.surface.pageIndex)
+        pageFrame.style.cssText = `
+            position: absolute;
+            left: ${item.x * surface.scale}px;
+            top: ${item.y * surface.scale}px;
+            width: ${item.surface.width * item.surface.scale}px;
+            height: ${item.surface.height * item.surface.scale}px;
+            background: ${pageBackground};
+            box-shadow: ${pageShadow};
+            overflow: hidden;
+            box-sizing: border-box;
+        `
+        for (const layer of item.surface.layers) mountLayer(pageFrame, item.surface, layer)
+        frame.append(pageFrame)
     }
 }
 
@@ -116,3 +146,17 @@ function defaultLayerZIndex(kind: BrowserPageSurfaceLayer['kind']): number {
 
 export const createBrowserPageCompositor = (config: BrowserPageCompositorConfig): BrowserPageCompositor =>
     new BrowserPageCompositor(config)
+
+export function getBrowserSpreadPages(surface: BrowserPageSurface): readonly BrowserSpreadPageSurface[] {
+    const pages = surface.metadata?.pages
+    if (!Array.isArray(pages)) return []
+    return pages.filter(isBrowserSpreadPageSurface)
+}
+
+function isBrowserSpreadPageSurface(value: unknown): value is BrowserSpreadPageSurface {
+    if (!value || typeof value !== 'object') return false
+    const candidate = value as Partial<BrowserSpreadPageSurface>
+    return typeof candidate.x === 'number' &&
+        typeof candidate.y === 'number' &&
+        Boolean(candidate.surface)
+}

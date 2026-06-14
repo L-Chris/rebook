@@ -10,14 +10,17 @@ import type { FixedPageRenderer } from '../../core/fixed-document'
 import { FixedPageSequence } from '../../core/fixed-page-sequence'
 import {
     createFixedPageContentRenderContext,
+    getFixedSpreadPageLayouts,
+    getFixedVisiblePageCount,
     resolveFixedPageFit,
+    resolveFixedSpreadFit,
+    type FixedSpreadFit,
     type FixedViewportMetrics,
 } from '../../core/fixed-page-model'
-import { createFixedPageViewport, type FixedPageInfo } from '../../core/fixed-document'
+import type { FixedPageInfo } from '../../core/fixed-document'
 import type { Book, LinkEvent, LoadEvent, RelocateEvent } from '../../core/types'
 import type { EventListener, LayoutMode, ReaderMark, RendererConfig, RendererStyles } from '../../core/renderer'
 import { UnsupportedFormatError } from '../../core/errors'
-import { parseCSSPixels } from '../../core/renderer-utils'
 import { RendererEventDispatcher } from '../../core/renderer-state'
 import type { BrowserPageCompositor, BrowserPageSurface } from './compositor'
 import {
@@ -257,9 +260,9 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
                 defaultMargin: DEFAULT_MARGIN,
                 devicePixelRatio: this.getDevicePixelRatio(),
             })
-        return {
-            fit,
-            context: createFixedPageContentRenderContext(sequence.document, page, this.styles, fit),
+            return {
+                fit,
+                context: createFixedPageContentRenderContext(sequence.document, page, this.styles, fit),
                 blockSize: fit.viewport.cssHeight,
                 pageCount: 1,
             }
@@ -290,40 +293,26 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     }
 
     private getRequestedColumnCount(): number {
-        if (this.layoutMode !== 'paginated' || this.maxColumnCount < 2) return 1
-        const metrics = this.getViewportMetrics()
-        const margin = parseCSSPixels(this.styles.margin, DEFAULT_MARGIN)
-        const gap = parseCSSPixels(this.styles.gap, DEFAULT_GAP)
-        const minColumnWidth = parseCSSPixels(this.styles.minColumnWidth, DEFAULT_MIN_COLUMN_WIDTH)
-        const available = metrics.inlineSize - margin * 2
-        return available >= minColumnWidth * 2 + gap ? 2 : 1
+        return getFixedVisiblePageCount(this.layoutMode, this.maxColumnCount, this.getViewportMetrics(), {
+            margin: this.styles.margin,
+            gap: this.styles.gap,
+            minColumnWidth: this.styles.minColumnWidth,
+            defaultMargin: DEFAULT_MARGIN,
+            defaultGap: DEFAULT_GAP,
+            defaultMinColumnWidth: DEFAULT_MIN_COLUMN_WIDTH,
+        })
     }
 
     private resolveSpreadFit(pages: readonly FixedPageInfo[]): FixedSpreadFit {
-        const metrics = this.getViewportMetrics()
-        const margin = parseCSSPixels(this.styles.margin, DEFAULT_MARGIN)
-        const gap = parseCSSPixels(this.styles.gap, DEFAULT_GAP)
-        const availableInlineSize = Math.max(1, metrics.inlineSize - margin * 2)
-        const maxColumnWidth = parseCSSPixels(
-            this.styles.maxColumnWidth ?? this.styles.maxInlineSize,
-            availableInlineSize,
-        )
-        const availableForPages = Math.max(1, availableInlineSize - gap * (pages.length - 1))
-        const columnInlineSize = Math.max(1, Math.min(maxColumnWidth, availableForPages / pages.length))
-        const scale = Math.min(...pages.map(item => columnInlineSize / Math.max(1, item.width)))
-        const normalizedScale = Number.isFinite(scale) && scale > 0 ? scale : 1
-        const unscaledGap = gap / normalizedScale
-        const spreadWidth = pages.reduce((total, item, index) => total + item.width + (index > 0 ? unscaledGap : 0), 0)
-        const spreadHeight = Math.max(...pages.map(item => item.height))
-        return {
-            margin,
-            availableInlineSize,
-            targetInlineSize: spreadWidth * normalizedScale,
-            scale: normalizedScale,
-            gap: unscaledGap,
-            spreadWidth,
-            spreadHeight,
-        }
+        return resolveFixedSpreadFit(pages, this.getViewportMetrics(), {
+            margin: this.styles.margin,
+            gap: this.styles.gap,
+            maxInlineSize: this.styles.maxInlineSize,
+            maxColumnWidth: this.styles.maxColumnWidth,
+            defaultMargin: DEFAULT_MARGIN,
+            defaultGap: DEFAULT_GAP,
+            devicePixelRatio: this.getDevicePixelRatio(),
+        })
     }
 
     private createSpreadPageContexts(
@@ -331,22 +320,16 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         pages: readonly FixedPageInfo[],
         fit: FixedSpreadFit,
     ): BrowserFixedSpreadPageRenderContext[] {
-        let x = 0
-        return pages.map(page => {
-            const item: BrowserFixedSpreadPageRenderContext = {
-                context: createFixedPageContentRenderContext(sequence.document, page, this.styles, {
-                    ...fit,
-                    viewport: createFixedPageViewport(page, {
-                        scale: fit.scale,
-                        devicePixelRatio: this.getDevicePixelRatio(),
-                    }),
-                }),
-                x,
-                y: Math.max(0, (fit.spreadHeight - page.height) / 2),
-            }
-            x += page.width + fit.gap
-            return item
-        })
+        return getFixedSpreadPageLayouts(pages, fit, {
+            devicePixelRatio: this.getDevicePixelRatio(),
+        }).map(item => ({
+            context: createFixedPageContentRenderContext(sequence.document, item.page, this.styles, {
+                ...fit,
+                viewport: item.viewport,
+            }),
+            x: item.x,
+            y: item.y,
+        }))
     }
 
     private getDevicePixelRatio(): number {
@@ -393,20 +376,14 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
 }
 
 interface FixedRenderPlan {
-    fit: { margin: number }
+    fit: FixedPageFitLike
     context: BrowserFixedContentRenderContext
     blockSize: number
     pageCount: number
 }
 
-interface FixedSpreadFit {
+interface FixedPageFitLike {
     margin: number
-    availableInlineSize: number
-    targetInlineSize: number
-    scale: number
-    gap: number
-    spreadWidth: number
-    spreadHeight: number
 }
 
 function getLoadDocument(surface: BrowserPageSurface): unknown {

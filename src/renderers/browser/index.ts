@@ -55,10 +55,12 @@ export {
 export {
     BrowserPageCompositor,
     createBrowserPageCompositor,
+    getBrowserSpreadPages,
     type BrowserPageCompositorConfig,
     type BrowserPageComposeResult,
     type BrowserPageSurface,
     type BrowserPageSurfaceLayer,
+    type BrowserSpreadPageSurface,
 } from './compositor'
 export {
     BrowserViewportHost,

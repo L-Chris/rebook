@@ -4,8 +4,8 @@ import {
     type FixedPageInfo,
     type FixedPageViewport,
 } from './fixed-document'
-import type { RendererStyles } from './renderer'
-import { parseCSSPixels } from './renderer-utils'
+import type { LayoutMode, RendererStyles } from './renderer'
+import { getColumnCount, parseCSSPixels } from './renderer-utils'
 
 export interface FixedViewportMetrics {
     readonly inlineSize: number
@@ -14,9 +14,13 @@ export interface FixedViewportMetrics {
 
 export interface FixedPageFitOptions {
     readonly margin?: RendererStyles['margin']
+    readonly gap?: RendererStyles['gap']
+    readonly minColumnWidth?: RendererStyles['minColumnWidth']
     readonly maxInlineSize?: RendererStyles['maxInlineSize']
     readonly maxColumnWidth?: RendererStyles['maxColumnWidth']
     readonly defaultMargin?: number
+    readonly defaultGap?: number
+    readonly defaultMinColumnWidth?: number
     readonly minScale?: number
     readonly maxScale?: number
     readonly devicePixelRatio?: number
@@ -36,6 +40,23 @@ export interface FixedPageContentRenderContext {
     readonly scale: number
     readonly viewport: FixedPageViewport
     readonly styles: RendererStyles
+}
+
+export interface FixedSpreadFit {
+    readonly margin: number
+    readonly availableInlineSize: number
+    readonly targetInlineSize: number
+    readonly scale: number
+    readonly gap: number
+    readonly spreadWidth: number
+    readonly spreadHeight: number
+}
+
+export interface FixedSpreadPageLayout {
+    readonly page: FixedPageInfo
+    readonly x: number
+    readonly y: number
+    readonly viewport: FixedPageViewport
 }
 
 export function resolveFixedPageFit(
@@ -62,6 +83,71 @@ export function resolveFixedPageFit(
             devicePixelRatio: normalizeDevicePixelRatio(options.devicePixelRatio),
         }),
     }
+}
+
+export function getFixedVisiblePageCount(
+    layoutMode: LayoutMode,
+    maxColumnCount: number,
+    metrics: FixedViewportMetrics,
+    options: FixedPageFitOptions = {},
+): number {
+    const margin = parseCSSPixels(options.margin, options.defaultMargin ?? 0)
+    const gap = parseCSSPixels(options.gap, options.defaultGap ?? 0)
+    const minColumnWidth = parseCSSPixels(options.minColumnWidth, options.defaultMinColumnWidth ?? 320)
+    const availableInlineSize = Math.max(1, metrics.inlineSize - margin * 2)
+    return getColumnCount(layoutMode, availableInlineSize, minColumnWidth, gap, maxColumnCount)
+}
+
+export function resolveFixedSpreadFit(
+    pages: readonly FixedPageInfo[],
+    metrics: FixedViewportMetrics,
+    options: FixedPageFitOptions = {},
+): FixedSpreadFit {
+    const margin = parseCSSPixels(options.margin, options.defaultMargin ?? 0)
+    const gap = parseCSSPixels(options.gap, options.defaultGap ?? 0)
+    const availableInlineSize = Math.max(1, metrics.inlineSize - margin * 2)
+    const maxInlineSize = parseCSSPixels(
+        options.maxColumnWidth ?? options.maxInlineSize,
+        availableInlineSize,
+    )
+    const pageCount = Math.max(1, pages.length)
+    const availableForPages = Math.max(1, availableInlineSize - gap * (pageCount - 1))
+    const targetPageInlineSize = Math.max(1, Math.min(maxInlineSize, availableForPages / pageCount))
+    const unclampedScale = Math.min(...pages.map(page => targetPageInlineSize / Math.max(1, page.width)))
+    const scale = clampScale(unclampedScale, options.minScale, options.maxScale)
+    const unscaledGap = gap / Math.max(scale, 1e-6)
+    const spreadWidth = pages.reduce((total, page, index) => total + page.width + (index > 0 ? unscaledGap : 0), 0)
+    const spreadHeight = Math.max(1, ...pages.map(page => page.height))
+    return {
+        margin,
+        availableInlineSize,
+        targetInlineSize: spreadWidth * scale,
+        scale,
+        gap: unscaledGap,
+        spreadWidth,
+        spreadHeight,
+    }
+}
+
+export function getFixedSpreadPageLayouts(
+    pages: readonly FixedPageInfo[],
+    fit: FixedSpreadFit,
+    options: Pick<FixedPageFitOptions, 'devicePixelRatio'> = {},
+): FixedSpreadPageLayout[] {
+    let x = 0
+    return pages.map(page => {
+        const item: FixedSpreadPageLayout = {
+            page,
+            x,
+            y: Math.max(0, (fit.spreadHeight - page.height) / 2),
+            viewport: createFixedPageViewport(page, {
+                scale: fit.scale,
+                devicePixelRatio: normalizeDevicePixelRatio(options.devicePixelRatio),
+            }),
+        }
+        x += page.width + fit.gap
+        return item
+    })
 }
 
 export function createFixedPageContentRenderContext(

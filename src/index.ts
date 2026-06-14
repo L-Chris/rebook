@@ -196,10 +196,15 @@ export {
 } from './core/fixed-page-sequence'
 export {
     createFixedPageContentRenderContext,
+    getFixedSpreadPageLayouts,
+    getFixedVisiblePageCount,
     resolveFixedPageFit,
+    resolveFixedSpreadFit,
     type FixedPageContentRenderContext,
     type FixedPageFit,
     type FixedPageFitOptions,
+    type FixedSpreadFit,
+    type FixedSpreadPageLayout,
     type FixedViewportMetrics,
 } from './core/fixed-page-model'
 export {

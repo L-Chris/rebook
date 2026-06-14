@@ -1,7 +1,7 @@
 import { resolveFixedMarkRects, type ResolvedMarkRect } from '../../core/mark-resolver'
 import type { PageSurfaceDecorator } from '../../core/page-surface'
 import type { ReaderMark } from '../../core/renderer'
-import type { BrowserPageSurface, BrowserPageSurfaceLayer } from './compositor'
+import { getBrowserSpreadPages, type BrowserPageSurface, type BrowserPageSurfaceLayer } from './compositor'
 import {
     applyBrowserMarkDataset,
     getBrowserMarkClassNames,
@@ -97,18 +97,9 @@ function getImagePageMarkRects(surface: BrowserPageSurface, marks: readonly Read
 }
 
 function getSpreadMarkRects(surface: BrowserPageSurface, marks: readonly ReaderMark[]): ResolvedMarkRect[] {
-    const pages = surface.metadata?.pages
-    if (!Array.isArray(pages)) return []
-
     const rects: ResolvedMarkRect[] = []
-    for (const item of pages) {
-        const page = item as {
-            x?: number
-            y?: number
-            surface?: BrowserPageSurface
-        }
+    for (const page of getBrowserSpreadPages(surface)) {
         const pageSurface = page.surface
-        if (!pageSurface) continue
         const pageIndex = pageSurface?.pageIndex
         const format = pageSurface?.location?.type === 'fixed' ? pageSurface.location.format : undefined
         if (pageIndex === undefined) continue
@@ -120,8 +111,8 @@ function getSpreadMarkRects(surface: BrowserPageSurface, marks: readonly ReaderM
                 ...resolved,
                 rect: {
                     ...resolved.rect,
-                    x: resolved.rect.x + (page.x ?? 0),
-                    y: resolved.rect.y + (page.y ?? 0),
+                    x: resolved.rect.x + page.x,
+                    y: resolved.rect.y + page.y,
                 },
             })
         }

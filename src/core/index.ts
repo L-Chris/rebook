@@ -120,10 +120,15 @@ export {
 } from './fixed-page-sequence'
 export {
     createFixedPageContentRenderContext,
+    getFixedSpreadPageLayouts,
+    getFixedVisiblePageCount,
     resolveFixedPageFit,
+    resolveFixedSpreadFit,
     type FixedPageContentRenderContext,
     type FixedPageFit,
     type FixedPageFitOptions,
+    type FixedSpreadFit,
+    type FixedSpreadPageLayout,
     type FixedViewportMetrics,
 } from './fixed-page-model'
 export {
