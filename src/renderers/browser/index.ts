@@ -27,6 +27,11 @@ export {
     type BrowserViewportHostKind,
 } from './viewport'
 export {
+    BrowserSurfaceHost,
+    createBrowserSurfaceHost,
+    type BrowserSurfaceHostConfig,
+} from './surface-host'
+export {
     BrowserPdfCanvasRenderer,
     createBrowserPdfCanvasRenderer,
     type BrowserPdfCanvasRendererConfig,

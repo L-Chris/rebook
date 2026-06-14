@@ -10,7 +10,7 @@ import { mobi } from '../../src/parsers/mobi'
 import { CBZParser } from '../../src/parsers/cbz'
 import { PDFParser } from '../../src/parsers/pdf'
 import { withTrialLimit } from '../../src/plugins/trial-limit'
-import { createReader, BrowserPageCompositor, BrowserRenderer, BrowserViewportHost } from '../../src/renderers/browser'
+import { createReader, BrowserPageCompositor, BrowserRenderer, BrowserSurfaceHost, BrowserViewportHost } from '../../src/renderers/browser'
 import { makeSimplePdf } from '../fixtures/pdf-fixture'
 import { createTestCBZ } from '../fixtures/cbz-fixture'
 
@@ -153,6 +153,39 @@ describe('BrowserRenderer', () => {
         expect(host.scrollExtent.style.height).toBe('480px')
         expect(host.surfaceHost.parentElement).toBe(host.scrollExtent)
 
+        host.destroy()
+        expect(container.children.length).toBe(0)
+    })
+
+    it('combines the browser viewport and compositor into a reusable surface host', () => {
+        const container = document.createElement('div')
+        const content = document.createElement('div')
+        content.textContent = 'hosted surface'
+        const host = new BrowserSurfaceHost({
+            container,
+            kind: 'fixed',
+        })
+
+        const result = host.compose({
+            id: 'surface-host-1',
+            kind: 'image-page',
+            pageIndex: 1,
+            width: 120,
+            height: 80,
+            scale: 1,
+            layers: [{
+                id: 'content',
+                kind: 'content',
+                contentKind: 'dom',
+                content,
+            }],
+        })
+
+        expect(host.scroller.dataset.rebookViewportScroller).toBe('true')
+        expect(host.surfaceHost.querySelector('[data-rebook-page-surface="true"]')).toBe(result.frame)
+        expect(result.frame.dataset.rebookFixedPage).toBe('true')
+        host.clear()
+        expect(host.surfaceHost.children.length).toBe(0)
         host.destroy()
         expect(container.children.length).toBe(0)
     })

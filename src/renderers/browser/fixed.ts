@@ -16,9 +16,9 @@ import type { EventListener, LayoutMode, ReaderMark, Renderer, RendererConfig, R
 import { UnsupportedFormatError } from '../../core/errors'
 import { parseCSSPixels } from '../../core/renderer-utils'
 import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
-import { BrowserPageCompositor } from './compositor'
+import type { BrowserPageCompositor } from './compositor'
 import { BrowserFixedContentRenderer } from './fixed-content'
-import { BrowserViewportHost } from './viewport'
+import { BrowserSurfaceHost } from './surface-host'
 
 interface RendererEventMap {
     load: LoadEvent
@@ -45,12 +45,11 @@ const DEFAULT_MARGIN = 32
 const DEFAULT_TEXT_COLOR = '#111111'
 
 export class BrowserFixedRenderer implements Renderer {
-    private readonly viewport: BrowserViewportHost
+    private readonly host: BrowserSurfaceHost
     private readonly events = new RendererEventDispatcher<RendererEventMap>()
     private readonly marks = new ReaderMarkStore()
     private readonly beforeNavigate: RendererConfig['beforeNavigate']
     private readonly contentRenderer: BrowserFixedContentRenderer
-    private readonly compositor: BrowserPageCompositor
     private readonly scroller: HTMLElement
     private readonly pageHost: HTMLElement
     private book: Book | null = null
@@ -67,18 +66,15 @@ export class BrowserFixedRenderer implements Renderer {
         this.layoutMode = config.layout ?? 'paginated'
         this.beforeNavigate = config.beforeNavigate
 
-        this.viewport = new BrowserViewportHost({
+        this.host = new BrowserSurfaceHost({
             container: config.container,
             kind: 'fixed',
             styles: this.styles,
             defaultColor: DEFAULT_TEXT_COLOR,
+            compositor: config.pageCompositor,
         })
-        this.scroller = this.viewport.scroller
-        this.pageHost = this.viewport.scrollExtent
-
-        this.compositor = config.pageCompositor ?? new BrowserPageCompositor({
-            host: this.viewport.surfaceHost,
-        })
+        this.scroller = this.host.scroller
+        this.pageHost = this.host.scrollExtent
         this.contentRenderer = config.fixedContentRenderer ?? new BrowserFixedContentRenderer({
             fixedPageRenderer: config.fixedPageRenderer,
             devicePixelRatio: config.devicePixelRatio,
@@ -130,7 +126,7 @@ export class BrowserFixedRenderer implements Renderer {
 
     setStyles(styles: RendererStyles): void {
         this.styles = { ...this.styles, ...styles }
-        this.viewport.applyStyles(this.styles)
+        this.host.applyStyles(this.styles)
         void this.renderCurrentPage('styles')
     }
 
@@ -191,9 +187,8 @@ export class BrowserFixedRenderer implements Renderer {
 
     destroy(): void {
         this.renderToken++
-        this.compositor.destroy()
         void this.contentRenderer.destroy?.()
-        this.viewport.destroy()
+        this.host.destroy()
         this.events.clear()
         this.marks.clear()
         this.book = null
@@ -222,7 +217,7 @@ export class BrowserFixedRenderer implements Renderer {
         }
 
         this.pageHost.style.padding = `${margin}px`
-        this.compositor.compose(surface)
+        this.host.compose(surface)
         this.scroller.scrollTop = 0
         this.emit('load', { doc: surface.metadata?.textLayer ?? surface, index: page.index })
         this.emitRelocate(reason)
