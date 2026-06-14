@@ -126,6 +126,10 @@ type WebGpuDrawCommand =
   | { readonly kind: 'solid'; readonly vertices: Float32Array; readonly scissor?: PdfRectBounds }
   | { readonly kind: 'texture'; readonly vertices: Float32Array; readonly texture: WebGpuTextureSource; readonly scissor?: PdfRectBounds }
 
+type MutableWebGpuDrawCommand =
+  | { readonly kind: 'solid'; readonly vertices: number[]; readonly scissor?: PdfRectBounds }
+  | { readonly kind: 'texture'; readonly vertices: number[]; readonly texture: WebGpuTextureSource; readonly scissor?: PdfRectBounds }
+
 interface WebGpuTextureSource {
   readonly source: unknown
   readonly width: number
@@ -134,7 +138,7 @@ interface WebGpuTextureSource {
 }
 
 class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
-  private readonly commands: WebGpuDrawCommand[] = []
+  private readonly commands: MutableWebGpuDrawCommand[] = []
   private readonly atlas = new GlyphAtlas(2048)
   private unsupportedOps = 0
   private glyphs = 0
@@ -164,9 +168,9 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
     }
     if (!vertices.length) return
     this.paths++
-    this.commands.push({
+    this.pushCommand({
       kind: 'solid',
-      vertices: new Float32Array(vertices),
+      vertices,
       ...(state.clipRect ? { scissor: state.clipRect } : {}),
     })
   }
@@ -190,7 +194,7 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
       [0, 1],
     ], [1, 1, 1], state.fillAlpha, this.displayList)
     this.images++
-    this.commands.push({
+    this.pushCommand({
       kind: 'texture',
       vertices,
       texture,
@@ -208,9 +212,9 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
 
     const vertices = this.textVertices(op.run, state)
     if (!vertices.length) return
-    this.commands.push({
+    this.pushCommand({
       kind: 'texture',
-      vertices: new Float32Array(vertices),
+      vertices,
       texture: this.atlas,
       ...(state.clipRect ? { scissor: state.clipRect } : {}),
     })
@@ -227,7 +231,10 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
   async finish(): Promise<WebGpuPage> {
     await this.atlas.flush()
     const atlas = this.atlas.snapshot()
-    const commands = this.commands
+    const commands = this.commands.map(command => ({
+      ...command,
+      vertices: new Float32Array(command.vertices),
+    })) as WebGpuDrawCommand[]
     return {
       width: this.displayList.width,
       height: this.displayList.height,
@@ -271,6 +278,15 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
       cursor += advance * textScale
     }
     return vertices
+  }
+
+  private pushCommand(command: MutableWebGpuDrawCommand): void {
+    const previous = this.commands.at(-1)
+    if (previous && canBatchCommands(previous, command)) {
+      appendVertices(previous.vertices, command.vertices)
+      return
+    }
+    this.commands.push(command)
   }
 }
 
@@ -371,11 +387,15 @@ class GlyphAtlas implements WebGpuTextureSource {
     this.context.font = font
     this.context.fillStyle = '#fff'
     this.context.fillText(char, this.x + padding + left, this.y + padding + ascent)
+    const u0 = this.x / this.width
+    const v0 = this.y / this.height
+    const u1 = (this.x + width) / this.width
+    const v1 = (this.y + height) / this.height
     const uv = [
-      [this.x / this.width, this.y / this.height],
-      [(this.x + width) / this.width, this.y / this.height],
-      [(this.x + width) / this.width, (this.y + height) / this.height],
-      [this.x / this.width, (this.y + height) / this.height],
+      [u0, v1],
+      [u1, v1],
+      [u1, v0],
+      [u0, v0],
     ] as const
     const glyph = {
       uv,
@@ -394,13 +414,6 @@ class GlyphAtlas implements WebGpuTextureSource {
   }
 
   async flush(): Promise<void> {
-    if (this.flushed) return
-    if ('convertToBlob' in this.canvas && typeof this.canvas.convertToBlob === 'function' && typeof createImageBitmap === 'function') {
-      const blob = await this.canvas.convertToBlob()
-      const bitmap = await createImageBitmap(blob)
-      ;(this as { source: unknown }).source = bitmap
-      ;(this as { destroy?: () => void }).destroy = () => bitmap.close()
-    }
     this.flushed = true
   }
 
@@ -416,6 +429,24 @@ function textWidthScale(run: PdfTextRun, atlas: GlyphAtlas, scale: number): numb
   if (!Number.isFinite(measured) || measured <= 0) return 1
   const widthScale = run.width / measured
   return Number.isFinite(widthScale) && Math.abs(widthScale - 1) > 1e-3 ? widthScale : 1
+}
+
+function canBatchCommands(left: MutableWebGpuDrawCommand, right: MutableWebGpuDrawCommand): boolean {
+  if (left.kind !== right.kind || !sameScissor(left.scissor, right.scissor)) return false
+  if (left.kind === 'texture' && right.kind === 'texture') return left.texture === right.texture
+  return left.kind === 'solid' && right.kind === 'solid'
+}
+
+function sameScissor(left?: PdfRectBounds, right?: PdfRectBounds): boolean {
+  if (!left || !right) return left === right
+  return left.minX === right.minX &&
+    left.minY === right.minY &&
+    left.maxX === right.maxX &&
+    left.maxY === right.maxY
+}
+
+function appendVertices(target: number[], source: readonly number[]): void {
+  for (let index = 0; index < source.length; index++) target.push(source[index])
 }
 
 function tessellatePathFill(segments: readonly PdfPathSegment[], matrix: PdfMatrix): Point[][] {
@@ -585,10 +616,10 @@ function texturedQuadVertices(
   color: readonly [number, number, number],
   alpha: number,
   displayList: PdfPageDisplayList,
-): Float32Array {
+): number[] {
   const vertices: number[] = []
   pushTexturedQuad(vertices, points, uv, color, alpha, displayList)
-  return new Float32Array(vertices)
+  return vertices
 }
 
 function pushTexturedQuad(
@@ -656,17 +687,6 @@ async function imageTextureSource(image: PdfImageData): Promise<WebGpuTextureSou
   const rgba = new Uint8ClampedArray(new ArrayBuffer(image.data.byteLength))
   rgba.set(image.data)
   context.putImageData(new ImageData(rgba, image.width, image.height), 0, 0)
-  if ('convertToBlob' in canvas && typeof canvas.convertToBlob === 'function' && typeof createImageBitmap === 'function') {
-    const bitmap = await createImageBitmap(await canvas.convertToBlob())
-    return {
-      source: bitmap,
-      width: bitmap.width,
-      height: bitmap.height,
-      destroy() {
-        bitmap.close()
-      },
-    }
-  }
   return { source: canvas, width: image.width, height: image.height }
 }
 
