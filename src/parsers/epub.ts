@@ -745,7 +745,9 @@ class ResourceLoader {
                 }
             }
 
-            for (const el of doc.querySelectorAll('link[href]')) await replace(el, 'href')
+            for (const el of doc.querySelectorAll('link[href]')) {
+                if (isResourceLinkHrefElement(el)) await replace(el, 'href')
+            }
             for (const el of doc.querySelectorAll('[href]')) {
                 if (!isNavigationHrefElement(el)) await replace(el, 'href')
             }
@@ -970,6 +972,26 @@ class ResourceLoader {
 function isNavigationHrefElement(el: XMLElement): boolean {
     const name = el.localName.toLowerCase()
     return name === 'a' || name === 'area' || name === 'link'
+}
+
+function isResourceLinkHrefElement(el: XMLElement): boolean {
+    const name = el.localName.toLowerCase()
+    if (name !== 'link') return false
+
+    const relTokens = new Set((el.getAttribute('rel') ?? '')
+        .split(/\s+/)
+        .map(token => token.toLowerCase())
+        .filter(Boolean))
+    if (!relTokens.size) return false
+    if (relTokens.has('stylesheet') || relTokens.has('icon') || relTokens.has('apple-touch-icon')) {
+        return true
+    }
+
+    const as = el.getAttribute('as')?.toLowerCase()
+    if (relTokens.has('preload') || relTokens.has('prefetch')) {
+        return !!as && as !== 'document' && as !== 'html'
+    }
+    return false
 }
 
 // ============================================================================

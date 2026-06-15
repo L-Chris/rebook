@@ -31,6 +31,44 @@ beforeAll(() => {
 })
 
 describe('EPUB Pretext segments', () => {
+    it('does not recurse through XHTML navigation link metadata while loading blocks', async () => {
+        const parser = new EPUBParser()
+        const book = await parser.parse(await createTestEPUB({
+            chapters: [
+                {
+                    id: 'chapter1',
+                    title: 'Chapter 1',
+                    content: '<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="style.css"/><link rel="next" href="chapter2.xhtml"/></head><body><p>First linked chapter.</p></body></html>',
+                },
+                {
+                    id: 'chapter2',
+                    title: 'Chapter 2',
+                    content: '<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="prev" href="chapter1.xhtml"/></head><body><p>Second linked chapter.</p></body></html>',
+                },
+            ],
+            resources: [{
+                id: 'style',
+                href: 'style.css',
+                mediaType: 'text/css',
+                data: 'p { color: red; }',
+            }],
+        }), {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+
+        const blocks = await Promise.race([
+            book.sections[0].getBlocks?.(),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('getBlocks timed out')), 500)),
+        ])
+        const html = await book.sections[0].load()
+
+        expect(blocks?.map(block => block.segments.map(segment => segment.text).join('')).join('\n')).toContain('First linked chapter.')
+        expect(html).toContain('rel="next" href="chapter2.xhtml"')
+        expect(html).toContain('rel="stylesheet"')
+        expect(html).toContain('test://resource-')
+    })
+
     it('exposes styled segments on EPUB sections', async () => {
         const parser = new EPUBParser()
         const book = await parser.parse(await createTestEPUB({
