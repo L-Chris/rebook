@@ -1,10 +1,10 @@
 import { bytesToLatin1 } from './bytes'
 import { ContentInlineImageToken, ContentTokenizer, ContentToken, isContentString } from './content'
 import { decodeAscii85, decodeAsciiHex, decodeRunLength } from './filters'
-import { PdfFontDecoder, PdfFontMap } from './fonts'
+import { PdfFontDecoder, PdfFontMap, PdfTextAdvanceOptions } from './fonts'
 import { colorizeImageMask, imageMaskSamplesToRgba, imageSamplesToRgba, readImageColorSpace, readImageDecode, readOptionalDeviceColorSpace, supportsImageBits } from './images'
 import { identityMatrix, isIdentityMatrix, multiplyMatrix, transformPoint, translateMatrix } from './matrix'
-import { advancePdfText, contentTextValue, currentPdfFont, isContentName, pdfFontRunStyle, PdfTextState } from './text-state'
+import { advancePdfTextWithOptions, contentTextValue, currentPdfFont, isContentName, pdfFontRunStyle } from './text-state'
 import { isDict, isName, isStream, PdfBlendMode, PdfColor, PdfDeviceColorSpace, PdfDisplayOp, PdfError, PdfImageColorSpace, PdfImageData, PdfLineCap, PdfLineJoin, PdfMatrix, PdfPageDisplayList, PdfPathPaint, PdfPathSegment, PdfPrimitive, PdfRect, PdfShading, PdfShadingColorStop, PdfShadingPattern, PdfTextRenderingMode, PdfTextRun } from '../types'
 
 export interface PdfType0Function {
@@ -225,6 +225,16 @@ class GraphicsInterpreter {
   private readonly paintStateStack: GraphicsPaintState[] = []
   private formDepth = 0
   private inlineImageCount = 0
+  private cachedFontName: string | undefined
+  private cachedFontResources: PdfFontMap | undefined
+  private cachedFont: PdfFontDecoder | undefined
+  private cachedRunStyleFont: PdfFontDecoder | undefined
+  private cachedRunStyle: Partial<PdfTextRun> = {}
+  private cachedAdvanceOptions: PdfTextAdvanceOptions | undefined
+  private cachedAdvanceFontSize = Number.NaN
+  private cachedAdvanceCharSpacing = Number.NaN
+  private cachedAdvanceWordSpacing = Number.NaN
+  private cachedAdvanceHorizontalScale = Number.NaN
 
   constructor(
     private readonly pageIndex: number,
@@ -255,11 +265,11 @@ class GraphicsInterpreter {
     switch (operator) {
       case 'q':
         this.paintStateStack.push(this.snapshotPaintState())
-        this.ops.push({ type: 'save' })
+        this.pushOp({ type: 'save' })
         break
       case 'Q':
         this.restorePaintState(this.paintStateStack.pop())
-        this.ops.push({ type: 'restore' })
+        this.pushOp({ type: 'restore' })
         break
       case 'cm': {
         const f = this.popNumber()
@@ -268,38 +278,38 @@ class GraphicsInterpreter {
         const c = this.popNumber()
         const b = this.popNumber()
         const a = this.popNumber()
-        this.ops.push({ type: 'transform', matrix: [a, b, c, d, e, f] })
+        this.pushOp({ type: 'transform', matrix: [a, b, c, d, e, f] })
         break
       }
       case 'w':
-        this.ops.push({ type: 'lineWidth', width: this.popNumber() })
+        this.pushOp({ type: 'lineWidth', width: this.popNumber() })
         break
       case 'J':
-        this.ops.push({ type: 'lineCap', cap: lineCap(this.popNumber()) })
+        this.pushOp({ type: 'lineCap', cap: lineCap(this.popNumber()) })
         break
       case 'j':
-        this.ops.push({ type: 'lineJoin', join: lineJoin(this.popNumber()) })
+        this.pushOp({ type: 'lineJoin', join: lineJoin(this.popNumber()) })
         break
       case 'M':
-        this.ops.push({ type: 'miterLimit', limit: this.popNumber() })
+        this.pushOp({ type: 'miterLimit', limit: this.popNumber() })
         break
       case 'd': {
         const phase = this.popNumber()
         const pattern = this.stack.pop()
-        this.ops.push({ type: 'dash', pattern: numberArray(pattern), phase })
+        this.pushOp({ type: 'dash', pattern: numberArray(pattern), phase })
         break
       }
       case 'G':
         this.strokeColorSpace = 'DeviceGray'
         this.strokeColor = gray(this.popNumber())
         this.strokePattern = undefined
-        this.ops.push({ type: 'strokeColor', color: this.strokeColor })
+        this.pushOp({ type: 'strokeColor', color: this.strokeColor })
         break
       case 'g':
         this.fillColorSpace = 'DeviceGray'
         this.fillColor = gray(this.popNumber())
         this.fillPattern = undefined
-        this.ops.push({ type: 'fillColor', color: this.fillColor })
+        this.pushOp({ type: 'fillColor', color: this.fillColor })
         break
       case 'RG': {
         this.strokeColorSpace = 'DeviceRGB'
@@ -308,7 +318,7 @@ class GraphicsInterpreter {
         const r = this.popNumber()
         this.strokeColor = [r, g, b]
         this.strokePattern = undefined
-        this.ops.push({ type: 'strokeColor', color: this.strokeColor })
+        this.pushOp({ type: 'strokeColor', color: this.strokeColor })
         break
       }
       case 'rg': {
@@ -318,7 +328,7 @@ class GraphicsInterpreter {
         const r = this.popNumber()
         this.fillColor = [r, g, b]
         this.fillPattern = undefined
-        this.ops.push({ type: 'fillColor', color: this.fillColor })
+        this.pushOp({ type: 'fillColor', color: this.fillColor })
         break
       }
       case 'K': {
@@ -329,7 +339,7 @@ class GraphicsInterpreter {
         const c = this.popNumber()
         this.strokeColor = cmyk(c, m, y, k)
         this.strokePattern = undefined
-        this.ops.push({ type: 'strokeColor', color: this.strokeColor })
+        this.pushOp({ type: 'strokeColor', color: this.strokeColor })
         break
       }
       case 'k': {
@@ -340,7 +350,7 @@ class GraphicsInterpreter {
         const c = this.popNumber()
         this.fillColor = cmyk(c, m, y, k)
         this.fillPattern = undefined
-        this.ops.push({ type: 'fillColor', color: this.fillColor })
+        this.pushOp({ type: 'fillColor', color: this.fillColor })
         break
       }
       case 'CS':
@@ -359,7 +369,7 @@ class GraphicsInterpreter {
         }
         this.strokeColor = this.popColor(this.strokeColorSpace)
         this.strokePattern = undefined
-        this.ops.push({ type: 'strokeColor', color: this.strokeColor })
+        this.pushOp({ type: 'strokeColor', color: this.strokeColor })
         break
       case 'sc':
       case 'scn':
@@ -369,7 +379,7 @@ class GraphicsInterpreter {
         }
         this.fillColor = this.popColor(this.fillColorSpace)
         this.fillPattern = undefined
-        this.ops.push({ type: 'fillColor', color: this.fillColor })
+        this.pushOp({ type: 'fillColor', color: this.fillColor })
         break
       case 'BMC':
       case 'BDC':
@@ -386,7 +396,7 @@ class GraphicsInterpreter {
         const name = this.stack.pop()
         if (!isContentName(name)) break
         const shading = this.resources.shadings?.get(name.value)
-        if (shading) this.ops.push({ type: 'shading', name: name.value, shading })
+        if (shading) this.pushOp({ type: 'shading', name: name.value, shading })
         break
       }
       case 'm': {
@@ -480,7 +490,7 @@ class GraphicsInterpreter {
         const name = this.stack.pop()
         if (!isContentName(name)) break
         const image = this.resources.images?.get(name.value)
-        if (image) this.ops.push({ type: 'image', name: name.value, image: colorizeImageMask(image, this.fillColor) })
+        if (image) this.pushOp({ type: 'image', name: name.value, image: colorizeImageMask(image, this.fillColor) })
         else {
           const form = this.resources.forms?.get(name.value)
           if (form) this.showForm(form)
@@ -581,19 +591,12 @@ class GraphicsInterpreter {
       fontSize: this.fontSize,
       ...(width !== undefined ? { width } : {}),
       fontName: this.fontName,
-      ...pdfFontRunStyle(font),
+      ...this.currentRunStyle(font),
       fillColor: this.fillColor,
       strokeColor: this.strokeColor,
       renderingMode: this.textRenderingMode,
     }
-    if (transformed) {
-      this.ops.push({ type: 'save' })
-      this.ops.push({ type: 'transform', matrix: renderMatrix })
-      this.ops.push({ type: 'text', run })
-      this.ops.push({ type: 'restore' })
-    } else {
-      this.ops.push({ type: 'text', run })
-    }
+    this.pushTextRun(run, transformed ? renderMatrix : undefined)
     this.advanceTextMatrix(advance)
   }
 
@@ -608,10 +611,10 @@ class GraphicsInterpreter {
     if (this.formDepth >= maxFormDepth) return
     const state = this.snapshotState()
     const previousResources = this.resources
-    this.ops.push({ type: 'save' })
-    this.ops.push({ type: 'transform', matrix: form.matrix })
+    this.pushOp({ type: 'save' })
+    this.pushOp({ type: 'transform', matrix: form.matrix })
     if (form.bbox) {
-      this.ops.push({
+      this.pushOp({
         type: 'clip',
         segments: [rectToPath(form.bbox)],
         rule: 'nonzero',
@@ -625,7 +628,7 @@ class GraphicsInterpreter {
       this.formDepth--
       this.resources = previousResources
       this.restoreState(state)
-      this.ops.push({ type: 'restore' })
+      this.pushOp({ type: 'restore' })
     }
   }
 
@@ -651,7 +654,7 @@ class GraphicsInterpreter {
         ? imageMaskSamplesToRgba(samples, width, height, decode)
         : imageSamplesToRgba(samples, width, height, colorSpace, bitsPerComponent, decode),
     }
-    this.ops.push({
+    this.pushOp({
       type: 'image',
       name: `inline-${++this.inlineImageCount}`,
       image: imageMask ? colorizeImageMask(image, this.fillColor) : image,
@@ -660,14 +663,14 @@ class GraphicsInterpreter {
 
   private applyGraphicsState(state: PdfGraphicsState | undefined): void {
     if (!state) return
-    if (state.lineWidth !== undefined) this.ops.push({ type: 'lineWidth', width: state.lineWidth })
-    if (state.lineCap !== undefined) this.ops.push({ type: 'lineCap', cap: state.lineCap })
-    if (state.lineJoin !== undefined) this.ops.push({ type: 'lineJoin', join: state.lineJoin })
-    if (state.miterLimit !== undefined) this.ops.push({ type: 'miterLimit', limit: state.miterLimit })
-    if (state.dash !== undefined) this.ops.push({ type: 'dash', pattern: state.dash.pattern, phase: state.dash.phase })
-    if (state.strokeAlpha !== undefined) this.ops.push({ type: 'strokeAlpha', alpha: state.strokeAlpha })
-    if (state.fillAlpha !== undefined) this.ops.push({ type: 'fillAlpha', alpha: state.fillAlpha })
-    if (state.blendMode !== undefined) this.ops.push({ type: 'blendMode', mode: state.blendMode })
+    if (state.lineWidth !== undefined) this.pushOp({ type: 'lineWidth', width: state.lineWidth })
+    if (state.lineCap !== undefined) this.pushOp({ type: 'lineCap', cap: state.lineCap })
+    if (state.lineJoin !== undefined) this.pushOp({ type: 'lineJoin', join: state.lineJoin })
+    if (state.miterLimit !== undefined) this.pushOp({ type: 'miterLimit', limit: state.miterLimit })
+    if (state.dash !== undefined) this.pushOp({ type: 'dash', pattern: state.dash.pattern, phase: state.dash.phase })
+    if (state.strokeAlpha !== undefined) this.pushOp({ type: 'strokeAlpha', alpha: state.strokeAlpha })
+    if (state.fillAlpha !== undefined) this.pushOp({ type: 'fillAlpha', alpha: state.fillAlpha })
+    if (state.blendMode !== undefined) this.pushOp({ type: 'blendMode', mode: state.blendMode })
   }
 
   private snapshotState(): GraphicsStateSnapshot {
@@ -719,7 +722,7 @@ class GraphicsInterpreter {
 
   private paintPath(paint: PdfPathPaint): void {
     if (this.path.length > 0 || paint === 'none') {
-      this.ops.push({
+      this.pushOp({
         type: 'path',
         segments: this.path,
         paint,
@@ -731,7 +734,7 @@ class GraphicsInterpreter {
   }
 
   private clipPath(rule: 'nonzero' | 'evenodd'): void {
-    if (this.path.length > 0) this.ops.push({ type: 'clip', segments: [...this.path], rule })
+    if (this.path.length > 0) this.pushOp({ type: 'clip', segments: [...this.path], rule })
   }
 
   private currentPoint(): { x: number; y: number } {
@@ -758,11 +761,25 @@ class GraphicsInterpreter {
   }
 
   private currentFont(): PdfFontDecoder {
-    return currentPdfFont(this.fontName, this.resources.fonts)
+    if (this.cachedFont && this.cachedFontName === this.fontName && this.cachedFontResources === this.resources.fonts) {
+      return this.cachedFont
+    }
+    const font = currentPdfFont(this.fontName, this.resources.fonts)
+    this.cachedFontName = this.fontName
+    this.cachedFontResources = this.resources.fonts
+    this.cachedFont = font
+    return font
+  }
+
+  private currentRunStyle(font: PdfFontDecoder): Partial<PdfTextRun> {
+    if (this.cachedRunStyleFont === font) return this.cachedRunStyle
+    this.cachedRunStyleFont = font
+    this.cachedRunStyle = pdfFontRunStyle(font)
+    return this.cachedRunStyle
   }
 
   private advanceText(text: string, font: PdfFontDecoder): number {
-    return advancePdfText(text, font, this.textState())
+    return advancePdfTextWithOptions(text, font, this.textAdvanceOptions())
   }
 
   private textRunWidth(advance: number): number | undefined {
@@ -771,13 +788,27 @@ class GraphicsInterpreter {
     return horizontalScale > 1e-9 ? advance / horizontalScale : advance
   }
 
-  private textState(): PdfTextState {
-    return {
+  private textAdvanceOptions(): PdfTextAdvanceOptions {
+    if (
+      this.cachedAdvanceOptions &&
+      this.cachedAdvanceFontSize === this.fontSize &&
+      this.cachedAdvanceCharSpacing === this.charSpacing &&
+      this.cachedAdvanceWordSpacing === this.wordSpacing &&
+      this.cachedAdvanceHorizontalScale === this.horizontalScale
+    ) {
+      return this.cachedAdvanceOptions
+    }
+    this.cachedAdvanceFontSize = this.fontSize
+    this.cachedAdvanceCharSpacing = this.charSpacing
+    this.cachedAdvanceWordSpacing = this.wordSpacing
+    this.cachedAdvanceHorizontalScale = this.horizontalScale
+    this.cachedAdvanceOptions = {
       fontSize: this.fontSize,
       charSpacing: this.charSpacing,
       wordSpacing: this.wordSpacing,
       horizontalScale: this.horizontalScale,
     }
+    return this.cachedAdvanceOptions
   }
 
   private advanceTextMatrix(x: number): void {
@@ -785,7 +816,16 @@ class GraphicsInterpreter {
   }
 
   private textRenderMatrix(): PdfMatrix {
-    return multiplyMatrix(this.textMatrix, [this.horizontalScale, 0, 0, 1, 0, this.textRise])
+    if (this.horizontalScale === 1 && this.textRise === 0) return this.textMatrix
+    const matrix = this.textMatrix
+    return [
+      matrix[0] * this.horizontalScale,
+      matrix[1] * this.horizontalScale,
+      matrix[2],
+      matrix[3],
+      matrix[2] * this.textRise + matrix[4],
+      matrix[3] * this.textRise + matrix[5],
+    ]
   }
 
   private popNumber(): number {
@@ -860,6 +900,18 @@ class GraphicsInterpreter {
     this.textRenderingMode = state.textRenderingMode
     this.strokeColorSpace = state.strokeColorSpace
     this.fillColorSpace = state.fillColorSpace
+  }
+
+  private pushOp(op: PdfDisplayOp): void {
+    this.ops.push(op)
+  }
+
+  private pushTextRun(run: PdfTextRun, matrix: PdfMatrix | undefined): void {
+    if (matrix === undefined) {
+      this.ops.push({ type: 'text', run })
+    } else {
+      this.ops.push({ type: 'save' }, { type: 'transform', matrix }, { type: 'text', run }, { type: 'restore' })
+    }
   }
 }
 
@@ -1234,24 +1286,60 @@ const isSimpleTextMatrix = (matrix: PdfMatrix): boolean =>
 const compactTextDisplayOps = (ops: PdfDisplayOp[]): PdfDisplayOp[] => {
   const compacted: PdfDisplayOp[] = []
   for (let index = 0; index < ops.length;) {
-    const span = collectTextDisplaySpan(ops, index)
-    if (span && span.sequenceCount > 1) {
-      compacted.push(
-        { type: 'save' },
-        { type: 'transform', matrix: span.matrix },
-        { type: 'text', run: { ...span.run, text: span.text, width: span.width } },
-        { type: 'restore' },
-      )
-      index += span.consumed
-      continue
+    const op = ops[index]
+    if (op?.type === 'save') {
+      const first = transformedTextOpAt(ops, index)
+      if (first) {
+        let text = first.run.text
+        let width = textDisplayRunWidth(first.run)
+        let consumed = 4
+        let sequenceCount = 1
+        let previous = first
+        for (let nextIndex = index + 4; nextIndex < ops.length; nextIndex += 4) {
+          const next = transformedTextOpAt(ops, nextIndex)
+          if (!next || !sameTextDisplayStyle(first.run, next.run) || !canAppendTextDisplayOp(previous, next)) break
+          const offset = localMatrixOffset(first.matrix, next.matrix)
+          width = Math.max(width, offset.x + textDisplayRunWidth(next.run))
+          text += next.run.text
+          consumed += 4
+          sequenceCount++
+          previous = next
+        }
+        if (sequenceCount > 1) {
+          compacted.push(
+            { type: 'save' },
+            { type: 'transform', matrix: first.matrix },
+            { type: 'text', run: { ...first.run, text, width } },
+            { type: 'restore' },
+          )
+          index += consumed
+          continue
+        }
+      }
     }
-    const plainSpan = collectPlainTextDisplaySpan(ops, index)
-    if (plainSpan && plainSpan.sequenceCount > 1) {
-      compacted.push({ type: 'text', run: { ...plainSpan.run, text: plainSpan.text, width: plainSpan.width } })
-      index += plainSpan.consumed
-      continue
+    if (op?.type === 'text' && paintsDisplayText(op.run)) {
+      const first = op.run
+      let text = first.text
+      let width = textDisplayRunWidth(first)
+      let consumed = 1
+      let sequenceCount = 1
+      let previous = first
+      for (let nextIndex = index + 1; nextIndex < ops.length; nextIndex++) {
+        const nextOp = ops[nextIndex]
+        if (nextOp?.type !== 'text' || !paintsDisplayText(nextOp.run) || !sameTextDisplayStyle(first, nextOp.run) || !canAppendPlainTextDisplayOp(previous, nextOp.run)) break
+        width = Math.max(width, nextOp.run.x - first.x + textDisplayRunWidth(nextOp.run))
+        text += nextOp.run.text
+        consumed++
+        sequenceCount++
+        previous = nextOp.run
+      }
+      if (sequenceCount > 1) {
+        compacted.push({ type: 'text', run: { ...first, text, width } })
+        index += consumed
+        continue
+      }
     }
-    compacted.push(ops[index])
+    compacted.push(op)
     index++
   }
   return compacted

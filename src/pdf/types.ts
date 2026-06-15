@@ -68,6 +68,7 @@ export interface PdfFontSource {
   family: string
   fallbackFamily: string
   data: Uint8Array
+  getBrowserData?: () => Uint8Array
   format?: string
   weight?: string
   style?: 'normal' | 'italic' | 'oblique'

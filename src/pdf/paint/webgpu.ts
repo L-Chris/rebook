@@ -1960,7 +1960,7 @@ async function registerBrowserFonts(fonts: readonly PdfFontSource[]): Promise<vo
   if (typeof FontFaceCtor !== 'function' || !fontSet || typeof fontSet.add !== 'function') return
   await Promise.all(fonts.map(async font => {
     try {
-      const face = new FontFaceCtor(font.family, font.data.slice().buffer, {
+      const face = new FontFaceCtor(font.family, (font.getBrowserData?.() ?? font.data).slice().buffer, {
         ...(font.weight ? { weight: font.weight } : {}),
         ...(font.style ? { style: font.style } : {}),
       })

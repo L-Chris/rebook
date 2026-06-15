@@ -237,6 +237,36 @@ describe('BrowserRenderer', () => {
         expect(host.children.length).toBe(0)
     })
 
+    it('mounts raster fixed content at final CSS size without transform scaling', () => {
+        const host = document.createElement('div')
+        const canvas = document.createElement('canvas')
+        canvas.width = 400
+        canvas.height = 200
+
+        const compositor = new BrowserPageCompositor({ host })
+        compositor.compose({
+            id: 'surface-raster',
+            kind: 'fixed-page',
+            pageIndex: 1,
+            width: 200,
+            height: 100,
+            scale: 2,
+            layers: [{
+                id: 'content',
+                kind: 'content',
+                contentKind: 'canvas',
+                content: canvas,
+                selectable: false,
+            }],
+        })
+
+        expect(canvas.style.width).toBe('400px')
+        expect(canvas.style.height).toBe('200px')
+        expect(canvas.style.transform ?? '').toBe('')
+
+        compositor.destroy()
+    })
+
     it('runs browser content surfaces through a shared pipeline', async () => {
         const host = document.createElement('div')
         const compositor = new BrowserPageCompositor({ host })
@@ -1123,8 +1153,8 @@ describe('BrowserRenderer', () => {
 
         expect(frame?.style.width).toBe('360px')
         expect(parseFloat(frame?.style.height ?? '')).toBeCloseTo(172.8)
-        expect(canvas?.style.width).toBe('300px')
-        expect(canvas?.style.transform).toBe('scale(1.2)')
+        expect(canvas?.style.width).toBe('360px')
+        expect(canvas?.style.transform ?? '').toBe('')
         expect(canvas?.width).toBe(360)
 
         reader.destroy()

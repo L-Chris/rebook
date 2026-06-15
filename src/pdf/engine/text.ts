@@ -1,9 +1,9 @@
 import { bytesToLatin1 } from './bytes'
 import { ContentTokenizer, ContentToken, isContentString } from './content'
-import { PdfFontDecoder, PdfFontMap } from './fonts'
+import { PdfFontDecoder, PdfFontMap, PdfTextAdvanceOptions } from './fonts'
 import { copyMatrix, identityMatrix, multiplyMatrix, translateMatrix } from './matrix'
 import { decodePdfTextString } from './strings'
-import { advancePdfText, contentTextValue, currentPdfFont, isContentDict, isContentName, pdfFontRunStyle, PdfTextState } from './text-state'
+import { advancePdfTextWithOptions, contentTextValue, currentPdfFont, isContentDict, isContentName, pdfFontRunStyle } from './text-state'
 import { PdfFontSource, PdfMatrix, PdfPageText, PdfTextRun } from '../types'
 
 export interface PdfTextResources {
@@ -46,6 +46,16 @@ class TextInterpreter {
   private textRise = 0
   private readonly ctmStack: PdfMatrix[] = []
   private readonly markedContent: MarkedContentState[] = []
+  private cachedFontName: string | undefined
+  private cachedFontResources: PdfFontMap | undefined
+  private cachedFont: PdfFontDecoder | undefined
+  private cachedRunStyleFont: PdfFontDecoder | undefined
+  private cachedRunStyle: Partial<PdfTextRun> = {}
+  private cachedAdvanceOptions: PdfTextAdvanceOptions | undefined
+  private cachedAdvanceFontSize = Number.NaN
+  private cachedAdvanceCharSpacing = Number.NaN
+  private cachedAdvanceWordSpacing = Number.NaN
+  private cachedAdvanceHorizontalScale = Number.NaN
 
   constructor(
     private readonly pageIndex: number,
@@ -191,7 +201,7 @@ class TextInterpreter {
     const advance = this.advanceText(text, font)
     const width = this.displayTextAdvance(advance, this.textMatrix)
     const actualText = this.currentActualText()
-    const runStyle = pdfFontRunStyle(font)
+    const runStyle = this.currentRunStyle(font)
     if (actualText) {
       if (!actualText.seenText) {
         const point = this.textLayerPoint(positionMatrix)
@@ -370,20 +380,48 @@ class TextInterpreter {
   }
 
   private currentFont(): PdfFontDecoder {
-    return currentPdfFont(this.fontName, this.resources.fonts)
+    if (this.cachedFont && this.cachedFontName === this.fontName && this.cachedFontResources === this.resources.fonts) {
+      return this.cachedFont
+    }
+    const font = currentPdfFont(this.fontName, this.resources.fonts)
+    this.cachedFontName = this.fontName
+    this.cachedFontResources = this.resources.fonts
+    this.cachedFont = font
+    return font
+  }
+
+  private currentRunStyle(font: PdfFontDecoder): Partial<PdfTextRun> {
+    if (this.cachedRunStyleFont === font) return this.cachedRunStyle
+    this.cachedRunStyleFont = font
+    this.cachedRunStyle = pdfFontRunStyle(font)
+    return this.cachedRunStyle
   }
 
   private advanceText(text: string, font: PdfFontDecoder): number {
-    return advancePdfText(text, font, this.textState())
+    return advancePdfTextWithOptions(text, font, this.textAdvanceOptions())
   }
 
-  private textState(): PdfTextState {
-    return {
+  private textAdvanceOptions(): PdfTextAdvanceOptions {
+    if (
+      this.cachedAdvanceOptions &&
+      this.cachedAdvanceFontSize === this.fontSize &&
+      this.cachedAdvanceCharSpacing === this.charSpacing &&
+      this.cachedAdvanceWordSpacing === this.wordSpacing &&
+      this.cachedAdvanceHorizontalScale === this.horizontalScale
+    ) {
+      return this.cachedAdvanceOptions
+    }
+    this.cachedAdvanceFontSize = this.fontSize
+    this.cachedAdvanceCharSpacing = this.charSpacing
+    this.cachedAdvanceWordSpacing = this.wordSpacing
+    this.cachedAdvanceHorizontalScale = this.horizontalScale
+    this.cachedAdvanceOptions = {
       fontSize: this.fontSize,
       charSpacing: this.charSpacing,
       wordSpacing: this.wordSpacing,
       horizontalScale: this.horizontalScale,
     }
+    return this.cachedAdvanceOptions
   }
 
   private advanceTextMatrix(x: number): void {
@@ -395,7 +433,16 @@ class TextInterpreter {
   }
 
   private textRenderMatrix(): PdfMatrix {
-    return multiplyMatrix(this.textMatrix, [this.horizontalScale, 0, 0, 1, 0, this.textRise])
+    if (this.horizontalScale === 1 && this.textRise === 0) return this.textMatrix
+    const matrix = this.textMatrix
+    return [
+      matrix[0] * this.horizontalScale,
+      matrix[1] * this.horizontalScale,
+      matrix[2],
+      matrix[3],
+      matrix[2] * this.textRise + matrix[4],
+      matrix[3] * this.textRise + matrix[5],
+    ]
   }
 }
 

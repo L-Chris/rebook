@@ -38,7 +38,7 @@ export class BrowserFixedPainterVisualRenderer implements BrowserFixedVisualRend
     constructor(config: BrowserFixedPainterVisualRendererConfig = {}) {
         this.painters = config.fixedPainters?.length
             ? config.fixedPainters
-            : createDefaultFixedPainters(config.fixedPainter ?? 'auto', config)
+            : createDefaultFixedPainters(config.fixedPainter ?? 'canvas', config)
     }
 
     match(document: FixedDocument): BrowserFixedVisualRendererMatch {

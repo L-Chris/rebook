@@ -497,8 +497,8 @@
         <div class="setting-row">
             <label>Fixed Painter</label>
             <select id="fixed-painter-select">
-                <option value="auto" selected>Auto</option>
-                <option value="canvas">Canvas 2D</option>
+                <option value="auto">Auto</option>
+                <option value="canvas" selected>Canvas 2D</option>
                 <option value="webgpu">WebGPU</option>
             </select>
         </div>
@@ -790,7 +790,7 @@
         const defaultConfig = {
             layout: 'paginated',
             spread: '2',
-            fixedPainter: 'auto',
+            fixedPainter: 'canvas',
             pdfBenchmark: false,
             pdfBenchmarkPages: '8',
             fontSize: '16px',

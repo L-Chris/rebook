@@ -54,7 +54,7 @@ export interface BrowserFixedRendererConfig extends RendererConfig {
      */
     fixedPageRenderer?: FixedPageRenderer<HTMLCanvasElement>
     fixedContentRenderer?: BrowserFixedContentRenderer
-    /** Built-in fixed visual painter preference. Defaults to auto, preferring WebGPU when available. */
+    /** Built-in fixed visual painter preference. Defaults to Canvas; WebGPU is opt-in. */
     fixedPainter?: BrowserFixedPainterPreference
     /** Custom fixed-page painters evaluated by the built-in painter visual renderer. */
     fixedPainters?: readonly BrowserFixedPainter[]

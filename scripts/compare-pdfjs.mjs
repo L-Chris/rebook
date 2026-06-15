@@ -15,7 +15,7 @@ const minRenderSpeedup = numberArg('min-render-speedup', 2)
 const includeRender = booleanArg('render', true)
 const includeText = booleanArg('text', false)
 const includeDisplayList = booleanArg('display-list', false)
-const useEmbeddedFonts = booleanArg('embedded-fonts', false)
+const useEmbeddedFonts = booleanArg('embedded-fonts', true)
 const engine = stringArg('engine')
 
 if (engine) {
@@ -83,7 +83,7 @@ async function runRebook(path, mode) {
   if (mode === 'render') {
     const [{ createCanvas }, { RebookPdfDocument }, { nodeRuntime }, { createNodeCanvasRenderer }] = await Promise.all([
       import('@napi-rs/canvas'),
-      import('../dist/index.js'),
+      import('../dist/pdf/document.js'),
       import('../dist/pdf/runtime/node.js'),
       import('../dist/pdf/paint/node-canvas.js'),
     ])
@@ -91,7 +91,7 @@ async function runRebook(path, mode) {
     const document = await RebookPdfDocument.load(input, {
       runtime: nodeRuntime,
       cache: true,
-      ...(useEmbeddedFonts ? { embeddedFonts: true } : {}),
+      embeddedFonts: useEmbeddedFonts,
     })
     const renderer = createNodeCanvasRenderer()
     const target = { canvas: createCanvas(1, 1) }
@@ -112,19 +112,26 @@ async function runRebook(path, mode) {
   }
 
   if (mode === 'text') {
-    const { PDFParser } = await import('../dist/parsers/pdf.js')
+    const [{ RebookPdfDocument }, { nodeRuntime }] = await Promise.all([
+      import('../dist/pdf/document.js'),
+      import('../dist/pdf/runtime/node.js'),
+    ])
     const start = performance.now()
-    const book = await new PDFParser().parse(input)
-    const pageCount = selectedPageCount(book.fixedDocument.pageCount)
+    const document = await RebookPdfDocument.load(input, {
+      runtime: nodeRuntime,
+      cache: true,
+      embeddedFonts: useEmbeddedFonts,
+    })
+    const pageCount = selectedPageCount(document.pageCount)
     let chars = 0
     for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
-      const text = await book.fixedDocument.getPageText(pageIndex)
+      const text = await document.getPageText(pageIndex)
       chars += text.text.length
     }
     return {
       ms: performance.now() - start,
       pages: pageCount,
-      totalPages: book.fixedDocument.pageCount,
+      totalPages: document.pageCount,
       chars,
       items: 0,
       failures: [],
@@ -133,13 +140,13 @@ async function runRebook(path, mode) {
 
   if (mode === 'display-list') {
     const [{ RebookPdfDocument }, { nodeRuntime }] = await Promise.all([
-      import('../dist/index.js'),
+      import('../dist/pdf/document.js'),
       import('../dist/pdf/runtime/node.js'),
     ])
     const start = performance.now()
     const document = await RebookPdfDocument.load(input, {
       runtime: nodeRuntime,
-      ...(useEmbeddedFonts ? { embeddedFonts: true } : {}),
+      embeddedFonts: useEmbeddedFonts,
     })
     const pageCount = selectedPageCount(document.pageCount)
     let ops = 0

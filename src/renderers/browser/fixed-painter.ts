@@ -293,7 +293,7 @@ export function createDefaultFixedPainters(
     config: BrowserFixedPainterConfig,
 ): BrowserFixedPainter[] {
     const canvas = new BrowserFixedCanvasPainter(config)
-    if (preference === 'canvas') return [canvas]
+    if (preference !== 'webgpu') return [canvas]
     return [
         new BrowserFixedWebGpuPainter(config),
         canvas,

@@ -21094,6 +21094,14 @@ function getElementLikeId(value2) {
 function unescapeCSSIdentifier(value2) {
   return value2.replace(/\\(.)/g, "$1");
 }
+function getSpreadVisibleItemCount(layoutMode, maxItemCount, metrics, options = {}) {
+  var _a2, _b2, _c;
+  const margin = parseCSSPixels(options.margin, (_a2 = options.defaultMargin) != null ? _a2 : 0);
+  const gap = parseCSSPixels(options.gap, (_b2 = options.defaultGap) != null ? _b2 : 0);
+  const minColumnWidth = parseCSSPixels(options.minColumnWidth, (_c = options.defaultMinColumnWidth) != null ? _c : 320);
+  const availableInlineSize = Math.max(1, metrics.inlineSize - margin * 2);
+  return getColumnCount(layoutMode, availableInlineSize, minColumnWidth, gap, maxItemCount);
+}
 const DEFAULT_MARGIN = 32;
 const DEFAULT_GAP = 48;
 class WechatMiniProgramRenderer {
@@ -21388,7 +21396,12 @@ class WechatMiniProgramRenderer {
     const minColumnWidth = parseCSSPixels(this.styles.minColumnWidth, 320);
     const maxColumnWidth = parseCSSPixels((_a2 = this.styles.maxColumnWidth) != null ? _a2 : this.styles.maxInlineSize, 720);
     const availableWidth = Math.max(1, this.width - margin * 2);
-    const columns = getColumnCount(this.layoutMode, availableWidth, minColumnWidth, gap, this.maxColumnCount);
+    const columns = getSpreadVisibleItemCount(this.layoutMode, this.maxColumnCount, {
+      inlineSize: availableWidth
+    }, {
+      gap,
+      minColumnWidth
+    });
     const rawWidth = columns > 1 ? (availableWidth - gap * (columns - 1)) / columns : availableWidth;
     const inlineSize = Math.max(1, Math.min(maxColumnWidth, rawWidth));
     const pageHeight = Math.max(1, this.height);

@@ -30,9 +30,11 @@ export const pdfTextAdvanceOptions = (state: PdfTextState): PdfTextAdvanceOption
 })
 
 export const advancePdfText = (text: string, font: PdfFontDecoder, state: PdfTextState): number => {
-  const options = pdfTextAdvanceOptions(state)
-  return font.advanceWidth?.(text, options) ?? identityFontDecoder.advanceWidth?.(text, options) ?? 0
+  return advancePdfTextWithOptions(text, font, pdfTextAdvanceOptions(state))
 }
+
+export const advancePdfTextWithOptions = (text: string, font: PdfFontDecoder, options: PdfTextAdvanceOptions): number =>
+  font.advanceWidth?.(text, options) ?? identityFontDecoder.advanceWidth?.(text, options) ?? 0
 
 export const pdfFontRunStyle = (font: PdfFontDecoder): Partial<PdfTextRun> => {
   const style = font.style

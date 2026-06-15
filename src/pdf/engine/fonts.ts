@@ -63,13 +63,12 @@ export const createToUnicodeFontDecoder = (
   const style = font && resolve ? createFontStyle(font, resolve, source) : source ? sourceStyle(source) : undefined
   return {
     decode: memoizeText((text: string): string => {
-      const bytes = stringToBytes(text)
       let output = ''
-      for (let index = 0; index < bytes.length;) {
+      for (let index = 0; index < text.length;) {
         let matched = false
         for (const length of lengths) {
-          if (index + length > bytes.length) continue
-          const key = bytesToHex(bytes.subarray(index, index + length))
+          if (index + length > text.length) continue
+          const key = stringBytesToHex(text, index, length)
           const value = entries.get(key)
           if (!value) continue
           output += value
@@ -77,7 +76,7 @@ export const createToUnicodeFontDecoder = (
           matched = true
           break
         }
-        if (!matched) output += String.fromCharCode(bytes[index++])
+        if (!matched) output += String.fromCharCode(text.charCodeAt(index++) & 0xff)
       }
       return decodeLegacyChineseBytes(output) ?? output
     }),
@@ -95,11 +94,11 @@ export const createIdentityCidFontDecoder = (
   const style = font && resolve ? createFontStyle(font, resolve, source) : source ? sourceStyle(source) : undefined
   return {
     decode: memoizeText((text: string): string => {
-      const bytes = stringToBytes(text)
       let output = ''
-      for (let index = 0; index < bytes.length; index += 2) {
-        if (index + 1 >= bytes.length) output += String.fromCharCode(bytes[index])
-        else output += String.fromCodePoint((bytes[index] << 8) | bytes[index + 1])
+      for (let index = 0; index < text.length; index += 2) {
+        const high = text.charCodeAt(index) & 0xff
+        if (index + 1 >= text.length) output += String.fromCharCode(high)
+        else output += String.fromCodePoint((high << 8) | (text.charCodeAt(index + 1) & 0xff))
       }
       return decodeLegacyChineseBytes(output) ?? output
     }),
@@ -126,14 +125,22 @@ export const createPdfFontSource = (
 ): PdfFontSource => {
   const name = fontDisplayName(font, resolve)
   const traits = fontTraits(font, resolve, name)
-  const fontData = format === 'truetype' ? prepareTrueTypeFontForBrowser(data, name, traits, toUnicodeCMap) : data
   const fallbackFamily = fontFallbackFamily(name, traits.generic)
-  const id = `RebookPdfFont-${fontDataHash(fontData)}`
+  const id = `RebookPdfFont-${nextPdfFontSourceId++}`
+  let browserData: Uint8Array | undefined
   return {
     id,
     family: id,
     fallbackFamily,
-    data: fontData,
+    data,
+    ...(format === 'truetype'
+      ? {
+          getBrowserData: () => {
+            browserData ??= prepareTrueTypeFontForBrowser(data, name, traits, toUnicodeCMap)
+            return browserData
+          },
+        }
+      : {}),
     ...(format ? { format } : {}),
     ...(traits.weight ? { weight: traits.weight } : {}),
     ...(traits.style ? { style: traits.style } : {}),
@@ -231,6 +238,8 @@ const nameValue = (value: PdfPrimitive | undefined): string | undefined =>
 const stripFontSubsetPrefix = (name: string): string =>
   name.replace(/^[A-Z]{6}\+/, '')
 
+let nextPdfFontSourceId = 1
+
 const isLegacyChineseFont = (
   font: PdfDict,
   resolve: (value: PdfPrimitive | undefined) => PdfPrimitive | undefined,
@@ -241,15 +250,6 @@ const isLegacyChineseFont = (
     descendantBaseFont(font, resolve),
   ].filter(Boolean).join(' ')
   return /\b(?:GB|GBK|GB1|CNS|Big5|UniGB|STSong|SimSun|Song|Ming|Kai)(?:\b|-|_)/i.test(names)
-}
-
-const fontDataHash = (data: Uint8Array): string => {
-  let hash = 2166136261
-  for (const byte of data) {
-    hash ^= byte
-    hash = Math.imul(hash, 16777619)
-  }
-  return (hash >>> 0).toString(36)
 }
 
 const prepareTrueTypeFontForBrowser = (
@@ -586,12 +586,12 @@ const advanceSimpleText = (text: string, options: PdfTextAdvanceOptions, width: 
 }
 
 const advanceCidText = (text: string, options: PdfTextAdvanceOptions, width: (cid: number) => number): number => {
-  const bytes = stringToBytes(text)
   let glyphUnits = 0
   let spacing = 0
-  for (let index = 0; index < bytes.length;) {
-    const cid = index + 1 < bytes.length ? (bytes[index] << 8) | bytes[index + 1] : bytes[index]
-    index += index + 1 < bytes.length ? 2 : 1
+  for (let index = 0; index < text.length;) {
+    const high = text.charCodeAt(index) & 0xff
+    const cid = index + 1 < text.length ? (high << 8) | (text.charCodeAt(index + 1) & 0xff) : high
+    index += index + 1 < text.length ? 2 : 1
     glyphUnits += width(cid)
     spacing += options.charSpacing
     if (cid === 0x20) spacing += options.wordSpacing
@@ -693,9 +693,17 @@ const stringToBytes = (text: string): Uint8Array => {
 
 const bytesToHex = (bytes: Uint8Array): string => {
   let output = ''
-  for (const byte of bytes) output += byte.toString(16).padStart(2, '0').toUpperCase()
+  for (const byte of bytes) output += byteHex[byte]
   return output
 }
+
+const stringBytesToHex = (text: string, start: number, length: number): string => {
+  let output = ''
+  for (let index = 0; index < length; index++) output += byteHex[text.charCodeAt(start + index) & 0xff]
+  return output
+}
+
+const byteHex = Array.from({ length: 256 }, (_, value) => value.toString(16).padStart(2, '0').toUpperCase())
 
 const normalizeHex = (hex: string): string => (hex.length % 2 === 0 ? hex : `0${hex}`).toUpperCase()
 
@@ -713,13 +721,25 @@ function memoizeText(decode: (text: string) => string): ((text: string) => strin
 }
 
 function memoizeAdvance(advance: (text: string, options: PdfTextAdvanceOptions) => number): ((text: string, options: PdfTextAdvanceOptions) => number) {
-  const cache = new Map<string, number>()
+  const cacheByOptions = new Map<string, Map<string, number>>()
+  let lastOptions: PdfTextAdvanceOptions | undefined
+  let lastCache: Map<string, number> | undefined
   return (text, options) => {
-    const key = `${options.fontSize}/${options.charSpacing}/${options.wordSpacing}/${options.horizontalScale}/${text}`
-    const cached = cache.get(key)
+    let cache = options === lastOptions ? lastCache : undefined
+    if (!cache) {
+      const key = `${options.fontSize}/${options.charSpacing}/${options.wordSpacing}/${options.horizontalScale}`
+      cache = cacheByOptions.get(key)
+      if (!cache) {
+        cache = new Map<string, number>()
+        if (cacheByOptions.size < maxTextCacheEntries) cacheByOptions.set(key, cache)
+      }
+      lastOptions = options
+      lastCache = cache
+    }
+    const cached = cache.get(text)
     if (cached !== undefined) return cached
     const value = advance(text, options)
-    if (cache.size < maxTextCacheEntries) cache.set(key, value)
+    if (cache.size < maxTextCacheEntries) cache.set(text, value)
     return value
   }
 }

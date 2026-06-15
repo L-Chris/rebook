@@ -39,9 +39,10 @@ export class Canvas2DRenderer implements PdfRenderer<PdfCanvas2DContext, Canvas2
   }
 
   private async registerDisplayListFonts(displayList: PdfPageDisplayList): Promise<void> {
+    const register = this.rendererOptions.registerFonts ?? getBrowserFontRegistrar()
+    if (!register) return
     const fonts = collectFontSources(displayList, this.registeredFontIds)
     if (fonts.length === 0) return
-    const register = this.rendererOptions.registerFonts ?? registerBrowserFonts
     try {
       await register(fonts)
     } finally {
@@ -357,22 +358,24 @@ const collectFontSources = (displayList: PdfPageDisplayList, registeredIds: Set<
   return fonts
 }
 
-const registerBrowserFonts = async (fonts: PdfFontSource[]): Promise<void> => {
+const getBrowserFontRegistrar = (): ((fonts: PdfFontSource[]) => Promise<void>) | undefined => {
   const FontFaceCtor = globalThis.FontFace
   const fontSet = globalThis.document?.fonts
-  if (typeof FontFaceCtor !== 'function' || !fontSet || typeof fontSet.add !== 'function') return
-  await Promise.all(fonts.map(async (font) => {
-    try {
-      const face = new FontFaceCtor(font.family, fontArrayBuffer(font.data), {
-        ...(font.weight ? { weight: font.weight } : {}),
-        ...(font.style ? { style: font.style } : {}),
-      })
-      await face.load()
-      fontSet.add(face)
-    } catch {
-      // Keep rendering with the CSS fallback stack when a platform rejects a font program.
-    }
-  }))
+  if (typeof FontFaceCtor !== 'function' || !fontSet || typeof fontSet.add !== 'function') return undefined
+  return async (fonts) => {
+    await Promise.all(fonts.map(async (font) => {
+      try {
+        const face = new FontFaceCtor(font.family, fontArrayBuffer(font.getBrowserData?.() ?? font.data), {
+          ...(font.weight ? { weight: font.weight } : {}),
+          ...(font.style ? { style: font.style } : {}),
+        })
+        await face.load()
+        fontSet.add(face)
+      } catch {
+        // Keep rendering with the CSS fallback stack when a platform rejects a font program.
+      }
+    }))
+  }
 }
 
 const fontArrayBuffer = (data: Uint8Array): ArrayBuffer =>

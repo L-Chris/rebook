@@ -58,16 +58,48 @@ export class ContentTokenizer {
 
   private readHexString(): ContentStringToken {
     this.offset++
-    let hex = ''
+    const start = this.offset
+    const first = this.source.charCodeAt(start)
+    const second = this.source.charCodeAt(start + 1)
+    const third = this.source.charCodeAt(start + 2)
+    const fourth = this.source.charCodeAt(start + 3)
+    if (this.source.charCodeAt(start + 4) === 62) {
+      const a = hexNibble(first)
+      const b = hexNibble(second)
+      const c = hexNibble(third)
+      const d = hexNibble(fourth)
+      if (a >= 0 && b >= 0 && c >= 0 && d >= 0) {
+        this.offset = start + 5
+        return { type: 'string', value: String.fromCharCode((a << 4) | b, (c << 4) | d) }
+      }
+    }
+    if (this.source.charCodeAt(start + 2) === 62) {
+      const a = hexNibble(first)
+      const b = hexNibble(second)
+      if (a >= 0 && b >= 0) {
+        this.offset = start + 3
+        return { type: 'string', value: String.fromCharCode((a << 4) | b) }
+      }
+    }
+    let result = ''
+    let highNibble = -1
     while (this.offset < this.source.length && this.source[this.offset] !== '>') {
-      if (!isWhitespace(this.source[this.offset])) hex += this.source[this.offset]
+      const char = this.source.charCodeAt(this.offset)
+      if (!isWhitespaceCode(char)) {
+        const nibble = hexNibble(char)
+        if (nibble >= 0) {
+          if (highNibble < 0) highNibble = nibble
+          else {
+            result += String.fromCharCode((highNibble << 4) | nibble)
+            highNibble = -1
+          }
+        }
+      }
       this.offset++
     }
+    if (highNibble >= 0) result += String.fromCharCode(highNibble << 4)
     this.offset++
-    if (hex.length % 2 === 1) hex += '0'
-    let output = ''
-    for (let i = 0; i < hex.length; i += 2) output += String.fromCharCode(Number.parseInt(hex.slice(i, i + 2), 16))
-    return { type: 'string', value: output }
+    return { type: 'string', value: result }
   }
 
   private readName(): ContentNameToken {
@@ -130,8 +162,11 @@ export class ContentTokenizer {
     const start = this.offset
     while (this.offset < this.source.length && !isTokenDelimiter(this.source[this.offset])) this.offset++
     const word = this.source.slice(start, this.offset)
-    const number = Number(word)
-    return word !== '' && Number.isFinite(number) ? number : word
+    if (word !== '' && canStartNumber(word.charCodeAt(0))) {
+      const number = Number(word)
+      if (Number.isFinite(number)) return number
+    }
+    return word
   }
 
   private readInlineImage(): ContentInlineImageToken {
@@ -197,12 +232,27 @@ export class ContentTokenizer {
 }
 
 const decodeName = (input: string): string =>
-  input.replace(/#([0-9a-fA-F]{2})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+  input.includes('#')
+    ? input.replace(/#([0-9a-fA-F]{2})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    : input
 
 const isLineBreak = (char: string | undefined): boolean => char === '\n' || char === '\r'
 
 const isWhitespace = (char: string | undefined): boolean =>
   char === ' ' || char === '\n' || char === '\r' || char === '\t' || char === '\f' || char === '\0'
+
+const isWhitespaceCode = (char: number): boolean =>
+  char === 32 || char === 10 || char === 13 || char === 9 || char === 12 || char === 0
+
+const canStartNumber = (char: number): boolean =>
+  (char >= 48 && char <= 57) || char === 43 || char === 45 || char === 46
+
+const hexNibble = (char: number): number => {
+  if (char >= 48 && char <= 57) return char - 48
+  if (char >= 65 && char <= 70) return char - 55
+  if (char >= 97 && char <= 102) return char - 87
+  return -1
+}
 
 const isTokenDelimiter = (char: string | undefined): boolean =>
   char === undefined ||

@@ -4,8 +4,14 @@ export const identityMatrix = (): PdfMatrix => [1, 0, 0, 1, 0, 0]
 
 export const copyMatrix = (matrix: PdfMatrix): PdfMatrix => [...matrix]
 
-export const translateMatrix = (matrix: PdfMatrix, x: number, y: number): PdfMatrix =>
-  multiplyMatrix(matrix, [1, 0, 0, 1, x, y])
+export const translateMatrix = (matrix: PdfMatrix, x: number, y: number): PdfMatrix => [
+  matrix[0],
+  matrix[1],
+  matrix[2],
+  matrix[3],
+  matrix[0] * x + matrix[2] * y + matrix[4],
+  matrix[1] * x + matrix[3] * y + matrix[5],
+]
 
 export const multiplyMatrix = (left: PdfMatrix, right: PdfMatrix): PdfMatrix => [
   left[0] * right[0] + left[2] * right[1],

@@ -105,21 +105,30 @@ function mountSpreadPages(frame: HTMLElement, surface: BrowserPageSurface, pageB
 
 function mountLayer(frame: HTMLElement, surface: BrowserPageSurface, layer: BrowserPageSurfaceLayer): void {
     const element = layer.content
+    const preScaledRasterLayer = isPreScaledRasterLayer(layer)
     element.dataset.rebookSurfaceLayer = layer.id
     element.dataset.rebookSurfaceLayerKind = layer.kind
     element.dataset.rebookSurfaceLayerContent = layer.contentKind
     element.style.position = 'absolute'
     element.style.left = '0'
     element.style.top = '0'
-    element.style.width = `${surface.width}px`
-    element.style.height = `${surface.height}px`
-    element.style.transform = mergeScaleTransform(element.style.transform, surface.scale)
+    element.style.width = `${preScaledRasterLayer ? surface.width * surface.scale : surface.width}px`
+    element.style.height = `${preScaledRasterLayer ? surface.height * surface.scale : surface.height}px`
+    element.style.transform = preScaledRasterLayer ? element.style.transform : mergeScaleTransform(element.style.transform, surface.scale)
     element.style.transformOrigin = '0 0'
     element.style.zIndex = String(layer.zIndex ?? defaultLayerZIndex(layer.kind))
     element.style.pointerEvents = layer.pointerEvents ?? (layer.kind === 'content' ? 'none' : 'auto')
     element.style.userSelect = layer.selectable === false ? 'none' : 'text'
     if (layer.opacity !== undefined) element.style.opacity = String(layer.opacity)
     frame.append(element)
+}
+
+function isPreScaledRasterLayer(layer: BrowserPageSurfaceLayer): boolean {
+    return layer.kind === 'content' && (
+        layer.contentKind === 'canvas' ||
+        layer.contentKind === 'image' ||
+        layer.contentKind === 'texture'
+    )
 }
 
 function mergeScaleTransform(existing: string, scale: number): string {

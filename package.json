@@ -69,6 +69,9 @@
       "pdf/runtime/node": [
         "dist/pdf/runtime/node.d.ts"
       ],
+      "pdf/document": [
+        "dist/pdf/document.d.ts"
+      ],
       "pdf/paint/node-canvas": [
         "dist/pdf/paint/node-canvas.d.ts"
       ],
@@ -123,6 +126,10 @@
     "./pdf/runtime/node": {
       "types": "./dist/pdf/runtime/node.d.ts",
       "import": "./dist/pdf/runtime/node.js"
+    },
+    "./pdf/document": {
+      "types": "./dist/pdf/document.d.ts",
+      "import": "./dist/pdf/document.js"
     },
     "./pdf/paint/node-canvas": {
       "types": "./dist/pdf/paint/node-canvas.d.ts",

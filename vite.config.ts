@@ -37,6 +37,7 @@ export default defineConfig({
         'parsers/mobi': resolve(__dirname, 'src/parsers/mobi.ts'),
         'parsers/pdf': resolve(__dirname, 'src/parsers/pdf.ts'),
         'parsers/builtins': resolve(__dirname, 'src/parsers/builtins.ts'),
+        'pdf/document': resolve(__dirname, 'src/pdf/engine/document.ts'),
         'pdf/runtime/node': resolve(__dirname, 'src/pdf/runtime/node.ts'),
         'pdf/paint/node-canvas': resolve(__dirname, 'src/pdf/paint/node-canvas.ts'),
         'adapters/index': resolve(__dirname, 'src/adapters/index.ts'),

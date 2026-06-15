@@ -1,6 +1,6 @@
 import { bytesToLatin1, findLastBytes, readLine, skipWhitespace, toBytes } from './bytes'
 import { decodeFilter } from './filters'
-import { createIdentityCidFontDecoder, createPdfFontSource, createSimpleFontDecoder, createToUnicodeFontDecoder, fontDescriptor, identityFontDecoder, isIdentityCidFont, PdfFontMap } from './fonts'
+import { createIdentityCidFontDecoder, createPdfFontSource, createSimpleFontDecoder, createToUnicodeFontDecoder, fontDescriptor, identityFontDecoder, isIdentityCidFont, PdfFontDecoder, PdfFontMap } from './fonts'
 import { buildPageDisplayList, collectResourceNames, PdfContentResourceNames, PdfFormResource, PdfGraphicsColorSpace, PdfGraphicsResources, PdfGraphicsState, readOptionalGraphicsColorSpace, readOptionalShading, readOptionalShadingPattern } from './graphics'
 import { applyColorKeyMaskToRgba, applySoftMaskToRgba, applyStencilMaskToRgba, imageMaskSamplesToRgba, imageSamplesToRgba, readImageColorKeyMask, readImageColorSpace, readImageDecode, readOptionalDeviceColorSpace, supportsImageBits } from './images'
 import { PdfLexer } from './lexer'
@@ -54,8 +54,10 @@ export class RebookPdfDocument {
   private namedDestinationsCache?: Promise<PdfNamedDestinations>
   private pageLabelsCache?: Promise<string[]>
   private decodedStreamCache = new WeakMap<PdfStream, Promise<Uint8Array>>()
+  private resourceNameCache = new WeakMap<Uint8Array, PdfContentResourceNames>()
   private imageCache = new WeakMap<PdfStream, Promise<PdfImageData>>()
   private fontCache = new WeakMap<PdfDict, Map<string, Promise<PdfFontMap>>>()
+  private fontDecoderCache = new WeakMap<PdfDict, Promise<PdfFontDecoder>>()
   private fontSourceCache = new WeakMap<PdfDict, Promise<PdfFontSource | undefined>>()
   private pagesCache?: PdfPageInfo[]
   private root?: PdfDict
@@ -161,8 +163,10 @@ export class RebookPdfDocument {
     this.pageTextCache.clear()
     this.pageDisplayListCache.clear()
     this.decodedStreamCache = new WeakMap<PdfStream, Promise<Uint8Array>>()
+    this.resourceNameCache = new WeakMap<Uint8Array, PdfContentResourceNames>()
     this.imageCache = new WeakMap<PdfStream, Promise<PdfImageData>>()
     this.fontCache = new WeakMap<PdfDict, Map<string, Promise<PdfFontMap>>>()
+    this.fontDecoderCache = new WeakMap<PdfDict, Promise<PdfFontDecoder>>()
     this.fontSourceCache = new WeakMap<PdfDict, Promise<PdfFontSource | undefined>>()
     this.pagesCache = undefined
     this.outlineCache = undefined
@@ -176,13 +180,13 @@ export class RebookPdfDocument {
 
   private async buildPageText(pageIndex: number): Promise<PdfPageText> {
     const { page, chunks, width, height, transform } = await this.getDecodedPageContent(pageIndex)
-    const resources = await this.readTextResources(page.resources, 0, this.collectUsedResourceNames(page.resources, chunks))
+    const resources = await this.readTextResources(page.resources, 0, this.selectUsedResourceNames(page.resources, chunks))
     return extractPageText(chunks, page.index, width, height, resources, transform)
   }
 
   private async buildPageDisplayList(pageIndex: number): Promise<PdfPageDisplayList> {
     const { page, chunks, width, height, transform } = await this.getDecodedPageContent(pageIndex)
-    const resources = await this.readGraphicsResources(page.resources, 0, this.collectUsedResourceNames(page.resources, chunks))
+    const resources = await this.readGraphicsResources(page.resources, 0, this.selectUsedResourceNames(page.resources, chunks))
     return transformDisplayListToPage(buildPageDisplayList(chunks, page.index, width, height, resources), transform)
   }
 
@@ -651,19 +655,58 @@ export class RebookPdfDocument {
     return cached
   }
 
+  private selectUsedResourceNames(resources: PdfDict | undefined, streams: Uint8Array[]): Partial<PdfContentResourceNames> | undefined {
+    if (this.shouldReadAllResources(resources)) return undefined
+    return this.collectUsedResourceNames(resources, streams)
+  }
+
+  private shouldReadAllResources(resources: PdfDict | undefined): boolean {
+    if (!resources) return true
+    return this.resourceEntryCount(resources, 'Font') +
+      this.resourceEntryCount(resources, 'XObject') +
+      this.resourceEntryCount(resources, 'Shading') +
+      this.resourceEntryCount(resources, 'Pattern') <= maxUnfilteredResourceCount
+  }
+
+  private resourceEntryCount(resources: PdfDict, name: string): number {
+    const dict = this.resolve(resources.entries.get(name))
+    return isDict(dict) ? dict.entries.size : 0
+  }
+
   private collectUsedResourceNames(resources: PdfDict | undefined, streams: Uint8Array[]): Partial<PdfContentResourceNames> | undefined {
     const hasFonts = this.hasFontResources(resources)
     const hasXObjects = this.hasXObjectResources(resources)
     const hasShadings = this.hasShadingResources(resources)
     const hasPatterns = this.hasPatternResources(resources)
     if (!hasFonts && !hasXObjects && !hasShadings && !hasPatterns) return undefined
-    const names = collectResourceNames(streams)
+    const names = this.collectContentResourceNames(streams)
     return {
       fonts: hasFonts ? names.fonts : undefined,
       xObjects: hasXObjects ? names.xObjects : undefined,
       shadings: hasShadings ? names.shadings : undefined,
       patterns: hasPatterns ? names.patterns : undefined,
     }
+  }
+
+  private collectContentResourceNames(streams: Uint8Array[]): PdfContentResourceNames {
+    const result: PdfContentResourceNames = {
+      fonts: new Set(),
+      xObjects: new Set(),
+      shadings: new Set(),
+      patterns: new Set(),
+    }
+    for (const stream of streams) {
+      let names = this.resourceNameCache.get(stream)
+      if (!names) {
+        names = collectResourceNames([stream])
+        this.resourceNameCache.set(stream, names)
+      }
+      addAll(result.fonts, names.fonts)
+      addAll(result.xObjects, names.xObjects)
+      addAll(result.shadings, names.shadings)
+      addAll(result.patterns, names.patterns)
+    }
+    return result
   }
 
   private hasXObjectResources(resources: PdfDict | undefined): boolean {
@@ -784,7 +827,7 @@ export class RebookPdfDocument {
     const formResources = this.resolve(stream.dict.entries.get('Resources'))
     const decoded = await this.decodePdfStream(stream)
     const resolvedResources = isDict(formResources) ? formResources : parentResources
-    const resources = await this.readGraphicsResources(resolvedResources, depth, this.collectUsedResourceNames(resolvedResources, [decoded]))
+    const resources = await this.readGraphicsResources(resolvedResources, depth, this.selectUsedResourceNames(resolvedResources, [decoded]))
     return {
       matrix: toMatrix(this.resolve(stream.dict.entries.get('Matrix'))) ?? identityMatrix(),
       bbox: toBox(this.resolve(stream.dict.entries.get('BBox'))),
@@ -819,7 +862,7 @@ export class RebookPdfDocument {
     return {
       matrix: toMatrix(this.resolve(stream.dict.entries.get('Matrix'))) ?? identityMatrix(),
       streams: [decoded],
-      resources: await this.readTextResources(resolvedResources, depth, this.collectUsedResourceNames(resolvedResources, [decoded])),
+      resources: await this.readTextResources(resolvedResources, depth, this.selectUsedResourceNames(resolvedResources, [decoded])),
     }
   }
 
@@ -854,14 +897,30 @@ export class RebookPdfDocument {
         fonts.set(name, identityFontDecoder)
         continue
       }
-      const toUnicode = this.resolve(dict.entries.get('ToUnicode'))
-      const toUnicodeBytes = isStream(toUnicode) ? await this.decodePdfStream(toUnicode) : undefined
-      const source = this.options.embeddedFonts ? await this.readFontSource(dict, toUnicodeBytes) : undefined
-      if (toUnicodeBytes) fonts.set(name, createToUnicodeFontDecoder(toUnicodeBytes, dict, (item) => this.resolve(item), source))
-      else if (isIdentityCidFont(dict, (item) => this.resolve(item))) fonts.set(name, createIdentityCidFontDecoder(dict, (item) => this.resolve(item), source))
-      else fonts.set(name, createSimpleFontDecoder(dict, (item) => this.resolve(item), source))
+      fonts.set(name, await this.readFontDecoder(dict))
     }
     return fonts
+  }
+
+  private async readFontDecoder(font: PdfDict): Promise<PdfFontDecoder> {
+    if (this.cacheEnabled) {
+      let cached = this.fontDecoderCache.get(font)
+      if (!cached) {
+        cached = this.buildFontDecoder(font)
+        this.fontDecoderCache.set(font, cached)
+      }
+      return cached
+    }
+    return this.buildFontDecoder(font)
+  }
+
+  private async buildFontDecoder(font: PdfDict): Promise<PdfFontDecoder> {
+    const toUnicode = this.resolve(font.entries.get('ToUnicode'))
+    const toUnicodeBytes = isStream(toUnicode) ? await this.decodePdfStream(toUnicode) : undefined
+    const source = this.options.embeddedFonts ? await this.readFontSource(font, toUnicodeBytes) : undefined
+    if (toUnicodeBytes) return createToUnicodeFontDecoder(toUnicodeBytes, font, (item) => this.resolve(item), source)
+    if (isIdentityCidFont(font, (item) => this.resolve(item))) return createIdentityCidFontDecoder(font, (item) => this.resolve(item), source)
+    return createSimpleFontDecoder(font, (item) => this.resolve(item), source)
   }
 
   private async readFontSource(font: PdfDict, toUnicodeCMap?: Uint8Array): Promise<PdfFontSource | undefined> {
@@ -1312,6 +1371,7 @@ const maxOutlineDepth = 64
 const maxNameTreeDepth = 64
 const maxNumberTreeDepth = 64
 const maxSoftMaskDepth = 4
+const maxUnfilteredResourceCount = 24
 
 const isRasterImageFilter = (name: string): boolean =>
   name === 'DCTDecode' || name === 'DCT'
@@ -1355,6 +1415,10 @@ const refKey = (ref: PdfRef): string => `${ref.objectNumber}:${ref.generation}`
 const fontCacheKey = (usedFonts: Set<string> | undefined): string => {
   if (!usedFonts) return '*'
   return [...usedFonts].sort().join('\0')
+}
+
+const addAll = <T>(target: Set<T>, source: Set<T>): void => {
+  for (const item of source) target.add(item)
 }
 
 const fontFileFormat = (descriptor: PdfDict, stream: PdfStream): string | undefined => {
