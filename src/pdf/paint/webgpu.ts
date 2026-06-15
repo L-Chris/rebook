@@ -1630,9 +1630,8 @@ function createTextureBinding(
       webGpuTextureUsage('COPY_DST') |
       webGpuTextureUsage('RENDER_ATTACHMENT'),
   })
-  const pipeline = getTexturePipeline(bundle.device, bundle.format, pipelines)
   const bindGroup = bundle.device.createBindGroup({
-    layout: (pipeline as { getBindGroupLayout(index: number): unknown }).getBindGroupLayout(0),
+    layout: getTextureBindGroupLayout(bundle.device, pipelines),
     entries: [
       { binding: 0, resource: bundle.sampler },
       { binding: 1, resource: texture.createView() },
@@ -1765,7 +1764,7 @@ fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
     `,
   })
   const pipeline = device.createRenderPipeline({
-    layout: 'auto',
+    layout: getTexturePipelineLayout(device, cache),
     vertex: {
       module,
       entryPoint: 'vertexMain',
@@ -1788,6 +1787,31 @@ fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
   })
   cache.set(key, pipeline)
   return pipeline
+}
+
+function getTextureBindGroupLayout(device: WebGpuDevice, cache: Map<string, unknown>): unknown {
+  const key = 'texture-bind-group-layout'
+  const cached = cache.get(key)
+  if (cached) return cached
+  const layout = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: webGpuShaderStage('FRAGMENT'), sampler: { type: 'filtering' } },
+      { binding: 1, visibility: webGpuShaderStage('FRAGMENT'), texture: { sampleType: 'float', viewDimension: '2d' } },
+    ],
+  })
+  cache.set(key, layout)
+  return layout
+}
+
+function getTexturePipelineLayout(device: WebGpuDevice, cache: Map<string, unknown>): unknown {
+  const key = 'texture-pipeline-layout'
+  const cached = cache.get(key)
+  if (cached) return cached
+  const layout = device.createPipelineLayout({
+    bindGroupLayouts: [getTextureBindGroupLayout(device, cache)],
+  })
+  cache.set(key, layout)
+  return layout
 }
 
 function alphaBlend(): unknown {
@@ -1844,6 +1868,8 @@ type WebGpuDevice = {
   queue: WebGpuQueue
   createSampler(descriptor?: unknown): unknown
   createShaderModule(descriptor: unknown): unknown
+  createBindGroupLayout(descriptor: unknown): unknown
+  createPipelineLayout(descriptor: unknown): unknown
   createRenderPipeline(descriptor: unknown): unknown
   createBindGroup(descriptor: unknown): unknown
   createTexture(descriptor: unknown): WebGpuTexture
@@ -1897,6 +1923,14 @@ function webGpuBufferUsage(name: 'VERTEX' | 'COPY_DST'): number {
     COPY_DST: 0x08,
   }
   return usage?.[name] ?? fallback[name]
+}
+
+function webGpuShaderStage(name: 'FRAGMENT'): number {
+  const stage = (globalThis as { GPUShaderStage?: Record<string, number> }).GPUShaderStage
+  const fallback = {
+    FRAGMENT: 0x02,
+  }
+  return stage?.[name] ?? fallback[name]
 }
 
 function alignTo(value: number, alignment: number): number {
