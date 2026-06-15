@@ -55,7 +55,12 @@ export interface WebGpuRenderTimings {
   readonly fontMs: number
   readonly buildMs: number
   readonly replayMs: number
+  readonly textMs: number
+  readonly pathMs: number
+  readonly imageMs: number
+  readonly unsupportedMs: number
   readonly finishMs: number
+  readonly uploadMs: number
   readonly renderMs: number
 }
 
@@ -125,7 +130,7 @@ export class WebGpuRenderer implements PdfRenderer<HTMLCanvasElement, WebGpuRend
     if (target.width !== width) target.width = width
     if (target.height !== height) target.height = height
     const renderStarted = now()
-    renderWebGpuPage(target, page, bundle, this.pipelines, this.textureCache, this.options)
+    const renderDetail = renderWebGpuPage(target, page, bundle, this.pipelines, this.textureCache, this.options)
     const renderMs = now() - renderStarted
     const result = {
       pageIndex: options.pageIndex,
@@ -147,7 +152,12 @@ export class WebGpuRenderer implements PdfRenderer<HTMLCanvasElement, WebGpuRend
         fontMs: build.timings.fontMs,
         buildMs: build.timings.buildMs,
         replayMs: build.timings.replayMs,
+        textMs: build.timings.textMs,
+        pathMs: build.timings.pathMs,
+        imageMs: build.timings.imageMs,
+        unsupportedMs: build.timings.unsupportedMs,
         finishMs: build.timings.finishMs,
+        uploadMs: build.timings.uploadMs + renderDetail.uploadMs,
         renderMs,
       },
     }
@@ -177,14 +187,21 @@ export class WebGpuRenderer implements PdfRenderer<HTMLCanvasElement, WebGpuRend
         fontMs: 0,
         buildMs: 0,
         replayMs: 0,
+        textMs: 0,
+        pathMs: 0,
+        imageMs: 0,
+        unsupportedMs: 0,
         finishMs: 0,
+        uploadMs: 0,
       },
     }
     const build = await this.getOrBuildPage(context.document, options.pageIndex, scale, {
       ...this.emptyBuildTimings(totalStarted),
       deviceMs,
     })
+    const uploadStarted = now()
     prepareWebGpuPageResources(build.page, bundle, this.pipelines, this.textureCache)
+    const uploadMs = now() - uploadStarted
     if (!build.cacheHit && !build.cachedForReuse) build.page.destroy()
     return {
       pageIndex: options.pageIndex,
@@ -192,6 +209,7 @@ export class WebGpuRenderer implements PdfRenderer<HTMLCanvasElement, WebGpuRend
       prepared: true,
       timings: {
         ...build.timings,
+        uploadMs,
         totalMs: now() - totalStarted,
       },
     }
@@ -286,6 +304,7 @@ export class WebGpuRenderer implements PdfRenderer<HTMLCanvasElement, WebGpuRend
     const finishStarted = now()
     const page = await builder.finish()
     const finishMs = now() - finishStarted
+    const builderTimings = builder.getTimings()
     if (page.unsupportedOps > 0 && (this.options.fallbackOnUnsupported ?? true)) {
       const unsupportedOps = page.unsupportedOps
       const unsupportedReasons = page.unsupportedReasons
@@ -307,7 +326,12 @@ export class WebGpuRenderer implements PdfRenderer<HTMLCanvasElement, WebGpuRend
         fontMs,
         buildMs: replayMs + finishMs,
         replayMs,
+        textMs: builderTimings.textMs,
+        pathMs: builderTimings.pathMs,
+        imageMs: builderTimings.imageMs,
+        unsupportedMs: builderTimings.unsupportedMs,
         finishMs,
+        uploadMs: 0,
       },
     }
   }
@@ -321,7 +345,12 @@ export class WebGpuRenderer implements PdfRenderer<HTMLCanvasElement, WebGpuRend
       fontMs: 0,
       buildMs: 0,
       replayMs: 0,
+      textMs: 0,
+      pathMs: 0,
+      imageMs: 0,
+      unsupportedMs: 0,
       finishMs: 0,
+      uploadMs: 0,
     }
   }
 
@@ -451,6 +480,10 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
   private glyphs = 0
   private paths = 0
   private images = 0
+  private textMs = 0
+  private pathMs = 0
+  private imageMs = 0
+  private unsupportedMs = 0
   private readonly unsupportedReasons = new Map<string, number>()
   private readonly clipRegions = new Map<string, WebGpuClipRegion>()
 
@@ -462,88 +495,113 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
   ) {}
 
   path(op: Extract<PdfDisplayOp, { type: 'path' }>, state: PdfDrawingState): void {
-    if (state.blendMode !== 'normal') {
-      this.addUnsupported(`path blendMode:${state.blendMode}`)
-      return
-    }
-    if (op.fill || op.stroke) {
-      this.addUnsupported(`path pattern:${op.fill ? 'fill' : ''}${op.stroke ? 'stroke' : ''}`)
-      return
-    }
-    const vertices: number[] = []
-    if (paintsPathFill(op.paint)) {
-      for (const triangle of tessellatePathFill(op.segments, state.transform)) {
-        pushSolidTriangle(vertices, triangle, state.fillColor, state.fillAlpha, this.displayList)
+    const started = now()
+    try {
+      if (state.blendMode !== 'normal') {
+        this.addUnsupported(`path blendMode:${state.blendMode}`)
+        return
       }
-    }
-    if (paintsPathStroke(op.paint)) {
-      for (const triangle of tessellatePathStroke(op.segments, state)) {
-        pushSolidTriangle(vertices, triangle, state.strokeColor, state.strokeAlpha, this.displayList)
+      if (op.fill || op.stroke) {
+        this.addUnsupported(`path pattern:${op.fill ? 'fill' : ''}${op.stroke ? 'stroke' : ''}`)
+        return
       }
+      const vertices: number[] = []
+      if (paintsPathFill(op.paint)) {
+        for (const triangle of tessellatePathFill(op.segments, state.transform)) {
+          pushSolidTriangle(vertices, triangle, state.fillColor, state.fillAlpha, this.displayList)
+        }
+      }
+      if (paintsPathStroke(op.paint)) {
+        for (const triangle of tessellatePathStroke(op.segments, state)) {
+          pushSolidTriangle(vertices, triangle, state.strokeColor, state.strokeAlpha, this.displayList)
+        }
+      }
+      if (!vertices.length) return
+      this.paths++
+      this.pushCommand({
+        kind: 'solid',
+        vertices,
+        ...(state.clipRect ? { scissor: state.clipRect } : {}),
+        ...this.commandClip(state),
+      })
+    } finally {
+      this.pathMs += now() - started
     }
-    if (!vertices.length) return
-    this.paths++
-    this.pushCommand({
-      kind: 'solid',
-      vertices,
-      ...(state.clipRect ? { scissor: state.clipRect } : {}),
-      ...this.commandClip(state),
-    })
   }
 
   async image(op: Extract<PdfDisplayOp, { type: 'image' }>, state: PdfDrawingState): Promise<void> {
-    if (state.blendMode !== 'normal') {
-      this.addUnsupported(`image blendMode:${state.blendMode}`)
-      return
+    const started = now()
+    try {
+      if (state.blendMode !== 'normal') {
+        this.addUnsupported(`image blendMode:${state.blendMode}`)
+        return
+      }
+      const texture = await imageTextureSource(op.image)
+      const points = [
+        transformPoint(0, 1, state.transform),
+        transformPoint(1, 1, state.transform),
+        transformPoint(1, 0, state.transform),
+        transformPoint(0, 0, state.transform),
+      ]
+      const vertices = texturedQuadVertices(points, [
+        [0, 0],
+        [1, 0],
+        [1, 1],
+        [0, 1],
+      ], [1, 1, 1], state.fillAlpha, this.displayList)
+      this.images++
+      this.pushCommand({
+        kind: 'texture',
+        vertices,
+        texture,
+        ...(state.clipRect ? { scissor: state.clipRect } : {}),
+        ...this.commandClip(state),
+      })
+    } finally {
+      this.imageMs += now() - started
     }
-    const texture = await imageTextureSource(op.image)
-    const points = [
-      transformPoint(0, 1, state.transform),
-      transformPoint(1, 1, state.transform),
-      transformPoint(1, 0, state.transform),
-      transformPoint(0, 0, state.transform),
-    ]
-    const vertices = texturedQuadVertices(points, [
-      [0, 0],
-      [1, 0],
-      [1, 1],
-      [0, 1],
-    ], [1, 1, 1], state.fillAlpha, this.displayList)
-    this.images++
-    this.pushCommand({
-      kind: 'texture',
-      vertices,
-      texture,
-      ...(state.clipRect ? { scissor: state.clipRect } : {}),
-      ...this.commandClip(state),
-    })
   }
 
   text(op: Extract<PdfDisplayOp, { type: 'text' }>, state: PdfDrawingState): void {
-    if (state.blendMode !== 'normal' || !paintsVisibleText(op.run)) return
-    if (paintsTextStroke(op.run.renderingMode)) {
-      this.addUnsupported(`text stroke:${op.run.renderingMode ?? 'unknown'}`)
-      return
-    }
-    if (!paintsTextFill(op.run.renderingMode)) return
+    const started = now()
+    try {
+      if (state.blendMode !== 'normal' || !paintsVisibleText(op.run)) return
+      if (paintsTextStroke(op.run.renderingMode)) {
+        this.addUnsupported(`text stroke:${op.run.renderingMode ?? 'unknown'}`)
+        return
+      }
+      if (!paintsTextFill(op.run.renderingMode)) return
 
-    const vertices = this.textVertices(op.run, state)
-    if (!vertices.length) return
-    this.pushCommand({
-      kind: 'texture',
-      vertices,
-      texture: this.atlas,
-      ...(state.clipRect ? { scissor: state.clipRect } : {}),
-      ...this.commandClip(state),
-    })
+      const vertices = this.textVertices(op.run, state)
+      if (!vertices.length) return
+      this.pushCommand({
+        kind: 'texture',
+        vertices,
+        texture: this.atlas,
+        ...(state.clipRect ? { scissor: state.clipRect } : {}),
+        ...this.commandClip(state),
+      })
+    } finally {
+      this.textMs += now() - started
+    }
   }
 
   shading(): void {
-    this.addUnsupported('shading')
+    const started = now()
+    try {
+      this.addUnsupported('shading')
+    } finally {
+      this.unsupportedMs += now() - started
+    }
   }
 
   unsupported(op: PdfDisplayOp, state: PdfDrawingState, reason: string): void {
-    this.addUnsupported(`${op.type}: ${reason}`)
+    const started = now()
+    try {
+      this.addUnsupported(`${op.type}: ${reason}`)
+    } finally {
+      this.unsupportedMs += now() - started
+    }
   }
 
   async finish(): Promise<WebGpuPage> {
@@ -575,6 +633,15 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
       },
     }
     return page
+  }
+
+  getTimings(): Pick<WebGpuRenderTimings, 'textMs' | 'pathMs' | 'imageMs' | 'unsupportedMs'> {
+    return {
+      textMs: this.textMs,
+      pathMs: this.pathMs,
+      imageMs: this.imageMs,
+      unsupportedMs: this.unsupportedMs,
+    }
   }
 
   private textVertices(run: PdfTextRun, state: PdfDrawingState): number[] {
@@ -703,13 +770,8 @@ class GlyphAtlas implements WebGpuTextureSource {
     const cached = this.glyphs.get(key)
     if (cached) return cached
 
-    this.context.font = font
-    const metrics = this.context.measureText(char)
-    const advance = Math.max(0, metrics.width)
-    const ascent = Math.max(1, metrics.actualBoundingBoxAscent || run.fontSize * scale * 0.8)
-    const descent = Math.max(0, metrics.actualBoundingBoxDescent || run.fontSize * scale * 0.2)
-    const left = Math.max(0, metrics.actualBoundingBoxLeft || 0)
-    const right = Math.max(advance, metrics.actualBoundingBoxRight || advance)
+    const metrics = this.measureGlyph(char, font, run, scale)
+    const { advance, ascent, descent, left, right } = metrics
     const glyphWidth = Math.ceil(left + right)
     const glyphHeight = Math.ceil(ascent + descent)
     if (!glyphWidth || !glyphHeight || !char.trim()) {
@@ -781,6 +843,17 @@ class GlyphAtlas implements WebGpuTextureSource {
     return glyph
   }
 
+  private measureGlyph(char: string, font: string, run: PdfTextRun, scale: number): GlyphMeasure {
+    this.context.font = font
+    const metrics = this.context.measureText(char)
+    const advance = Math.max(0, metrics.width)
+    const ascent = Math.max(1, metrics.actualBoundingBoxAscent || run.fontSize * scale * 0.8)
+    const descent = Math.max(0, metrics.actualBoundingBoxDescent || run.fontSize * scale * 0.2)
+    const left = Math.max(0, metrics.actualBoundingBoxLeft || 0)
+    const right = Math.max(advance, metrics.actualBoundingBoxRight || advance)
+    return { advance, ascent, descent, left, right }
+  }
+
   async flush(): Promise<void> {
     this.flushed = true
   }
@@ -804,6 +877,14 @@ class GlyphAtlas implements WebGpuTextureSource {
   get cacheScope(): 'renderer' {
     return 'renderer'
   }
+}
+
+interface GlyphMeasure {
+  readonly advance: number
+  readonly ascent: number
+  readonly descent: number
+  readonly left: number
+  readonly right: number
 }
 
 function textWidthScale(run: PdfTextRun, measured: number): number {
@@ -1149,13 +1230,16 @@ function renderWebGpuPage(
   pipelines: Map<string, unknown>,
   rendererTextureCache: Map<WebGpuTextureSource, WebGpuTextureBinding>,
   options: WebGpuRendererOptions,
-): void {
+): { readonly uploadMs: number } {
   const context = canvas.getContext('webgpu') as WebGpuCanvasContext | null
   if (!context) throw new Error('WebGPU canvas context is unavailable')
   context.configure({ device: bundle.device, format: bundle.format, alphaMode: 'premultiplied' })
 
   const renderTextureCache = new Map<WebGpuTextureSource, WebGpuTextureBinding>()
+  const uploadStarted = now()
   const prepared = getPreparedWebGpuPage(page, bundle.device, bundle.device.queue)
+  prepareWebGpuDrawTextures(page, bundle, pipelines, rendererTextureCache, renderTextureCache, true)
+  const uploadMs = now() - uploadStarted
   const encoder = bundle.device.createCommandEncoder()
   const targetView = context.getCurrentTexture().createView()
   const stencilTexture = page.commands.some(command => command.clip)
@@ -1219,6 +1303,7 @@ function renderWebGpuPage(
   bundle.device.queue.submit([encoder.finish()])
   stencilTexture?.destroy?.()
   for (const binding of renderTextureCache.values()) binding.texture.destroy?.()
+  return { uploadMs }
 }
 
 function prepareWebGpuPageResources(
@@ -1228,13 +1313,28 @@ function prepareWebGpuPageResources(
   rendererTextureCache: Map<WebGpuTextureSource, WebGpuTextureBinding>,
 ): void {
   getPreparedWebGpuPage(page, bundle.device, bundle.device.queue)
+  prepareWebGpuDrawTextures(page, bundle, pipelines, rendererTextureCache, new Map(), false)
   for (const command of page.commands) {
-    if (command.kind === 'texture' && command.texture.cacheScope !== 'render') {
-      getTextureBinding(bundle, command.texture, rendererTextureCache, new Map(), pipelines)
-    }
     for (const path of command.clip?.paths ?? []) {
       if (path.vertices.length) getPreparedClipPath(path, bundle.device, bundle.device.queue)
     }
+  }
+}
+
+function prepareWebGpuDrawTextures(
+  page: WebGpuPage,
+  bundle: WebGpuDeviceBundle,
+  pipelines: Map<string, unknown>,
+  rendererTextureCache: Map<WebGpuTextureSource, WebGpuTextureBinding>,
+  renderTextureCache: Map<WebGpuTextureSource, WebGpuTextureBinding>,
+  includeRenderScoped: boolean,
+): void {
+  const seen = new Set<WebGpuTextureSource>()
+  for (const command of page.commands) {
+    if (command.kind !== 'texture' || seen.has(command.texture)) continue
+    if (!includeRenderScoped && command.texture.cacheScope === 'render') continue
+    seen.add(command.texture)
+    getTextureBinding(bundle, command.texture, rendererTextureCache, renderTextureCache, pipelines)
   }
 }
 

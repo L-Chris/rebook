@@ -1548,7 +1548,7 @@
         function summarizeWebGpuPageDetails(pages) {
             const entries = pages.flatMap(page => page.webGpu ?? [])
             if (!entries.length) return null
-            const timingKeys = ['totalMs', 'deviceMs', 'pendingMs', 'displayListMs', 'fontMs', 'buildMs', 'replayMs', 'finishMs', 'renderMs']
+            const timingKeys = ['totalMs', 'deviceMs', 'pendingMs', 'displayListMs', 'fontMs', 'buildMs', 'replayMs', 'textMs', 'pathMs', 'imageMs', 'unsupportedMs', 'finishMs', 'uploadMs', 'renderMs']
             const totals = Object.fromEntries(timingKeys.map(key => [key, 0]))
             for (const entry of entries) {
                 const timings = entry.timings ?? {}
@@ -1568,7 +1568,7 @@
                     .map(item => `fallback page ${item.pageIndex + 1}: ${item.from} -> ${item.to}, ${item.reason}`)
                 const webGpuDetails = result.webGpu ? [
                     `cache: ${result.webGpu.cacheHits}/${result.webGpu.samples} hit${result.webGpu.cacheHits === 1 ? '' : 's'}`,
-                    `stages/page: pending ${formatMs(result.webGpu.perPage.pendingMs)}, displayList ${formatMs(result.webGpu.perPage.displayListMs)}, font ${formatMs(result.webGpu.perPage.fontMs)}, build ${formatMs(result.webGpu.perPage.buildMs)}, render ${formatMs(result.webGpu.perPage.renderMs)}, total ${formatMs(result.webGpu.perPage.totalMs)}`,
+                    `stages/page: pending ${formatMs(result.webGpu.perPage.pendingMs)}, displayList ${formatMs(result.webGpu.perPage.displayListMs)}, font ${formatMs(result.webGpu.perPage.fontMs)}, build ${formatMs(result.webGpu.perPage.buildMs)}, text ${formatMs(result.webGpu.perPage.textMs)}, path ${formatMs(result.webGpu.perPage.pathMs)}, image ${formatMs(result.webGpu.perPage.imageMs)}, upload ${formatMs(result.webGpu.perPage.uploadMs)}, render ${formatMs(result.webGpu.perPage.renderMs)}, total ${formatMs(result.webGpu.perPage.totalMs)}`,
                 ] : []
                 return [
                 `${result.requested} -> ${result.actual}${result.fallback ? ' (fallback)' : ''}`,

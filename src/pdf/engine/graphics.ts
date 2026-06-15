@@ -1245,10 +1245,42 @@ const compactTextDisplayOps = (ops: PdfDisplayOp[]): PdfDisplayOp[] => {
       index += span.consumed
       continue
     }
+    const plainSpan = collectPlainTextDisplaySpan(ops, index)
+    if (plainSpan && plainSpan.sequenceCount > 1) {
+      compacted.push({ type: 'text', run: { ...plainSpan.run, text: plainSpan.text, width: plainSpan.width } })
+      index += plainSpan.consumed
+      continue
+    }
     compacted.push(ops[index])
     index++
   }
   return compacted
+}
+
+const collectPlainTextDisplaySpan = (ops: PdfDisplayOp[], startIndex: number): PlainTextDisplaySpan | undefined => {
+  const first = plainTextOpAt(ops, startIndex)
+  if (!first) return undefined
+  let text = first.text
+  let width = textDisplayRunWidth(first)
+  let consumed = 1
+  let sequenceCount = 1
+  let previous = first
+  for (let index = startIndex + 1; index < ops.length; index++) {
+    const next = plainTextOpAt(ops, index)
+    if (!next || !sameTextDisplayStyle(first, next) || !canAppendPlainTextDisplayOp(previous, next)) break
+    width = Math.max(width, next.x - first.x + textDisplayRunWidth(next))
+    text += next.text
+    consumed++
+    sequenceCount++
+    previous = next
+  }
+  return { run: first, text, width, consumed, sequenceCount }
+}
+
+const plainTextOpAt = (ops: PdfDisplayOp[], index: number): PdfTextRun | undefined => {
+  const op = ops[index]
+  if (op?.type !== 'text' || !paintsDisplayText(op.run)) return undefined
+  return op.run
 }
 
 const collectTextDisplaySpan = (ops: PdfDisplayOp[], startIndex: number): TextDisplaySpan | undefined => {
@@ -1294,6 +1326,14 @@ interface TextDisplaySpan extends TextDisplaySequence {
   sequenceCount: number
 }
 
+interface PlainTextDisplaySpan {
+  run: PdfTextRun
+  text: string
+  width: number
+  consumed: number
+  sequenceCount: number
+}
+
 const sameTextDisplayStyle = (left: PdfTextRun, right: PdfTextRun): boolean =>
   left.fontSize === right.fontSize &&
   left.fontName === right.fontName &&
@@ -1310,6 +1350,12 @@ const canAppendTextDisplayOp = (previous: TextDisplaySequence, next: TextDisplay
   const expected = textDisplayRunWidth(previous.run)
   const tolerance = Math.max(0.5, previous.run.fontSize * 0.1)
   return Math.abs(offset.y) <= tolerance && Math.abs(offset.x - expected) <= tolerance
+}
+
+const canAppendPlainTextDisplayOp = (previous: PdfTextRun, next: PdfTextRun): boolean => {
+  const expected = previous.x + textDisplayRunWidth(previous)
+  const tolerance = Math.max(0.5, previous.fontSize * 0.1)
+  return Math.abs(next.y - previous.y) <= tolerance && Math.abs(next.x - expected) <= tolerance
 }
 
 const textDisplayRunWidth = (run: PdfTextRun): number => run.width ?? Math.max(1, run.fontSize) * run.text.length
