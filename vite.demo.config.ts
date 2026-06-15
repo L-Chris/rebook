@@ -17,6 +17,6 @@ export default defineConfig({
   server: {
     port: 3131,
     host: true,
-    allowedHosts: ['pi.tailc1b810.ts.net'],
+    allowedHosts: ['pi.tailc1b810.ts.net', 'read.rethinkos.com'],
   },
 })

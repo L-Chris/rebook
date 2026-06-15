@@ -29,6 +29,7 @@ export interface PdfDrawingState {
   readonly strokeColor: PdfColor
   readonly fillColor: PdfColor
   readonly clipRect?: PdfRectBounds
+  readonly clipPaths?: readonly PdfClipPath[]
 }
 
 export interface PdfRectBounds {
@@ -36,6 +37,15 @@ export interface PdfRectBounds {
   readonly minY: number
   readonly maxX: number
   readonly maxY: number
+}
+
+export interface PdfClipPath {
+  readonly id: number
+  readonly segments: readonly PdfPathSegment[]
+  readonly transform: PdfMatrix
+  readonly rule: PdfClipRule
+  readonly rect?: PdfRectBounds
+  readonly bounds?: PdfRectBounds
 }
 
 export interface PdfDrawingPipeline {
@@ -75,6 +85,7 @@ export async function replayPdfDisplayList(
 ): Promise<void> {
   let state = createInitialDrawingState()
   const stack: PdfDrawingState[] = []
+  let clipId = 0
   await pipeline.beginPage?.(displayList)
 
   for (const op of displayList.ops) {
@@ -120,9 +131,21 @@ export async function replayPdfDisplayList(
         break
       case 'clip': {
         const rect = clipRectFromPath(op.segments, state.transform, op.rule)
+        const bounds = rect ?? pathBounds(op.segments, state.transform)
+        const clipPath: PdfClipPath = {
+          id: ++clipId,
+          segments: op.segments,
+          transform: [...state.transform],
+          rule: op.rule,
+          ...(rect ? { rect } : {}),
+          ...(bounds ? { bounds } : {}),
+        }
+        state = {
+          ...state,
+          clipPaths: [...(state.clipPaths ?? []), clipPath],
+          ...(bounds ? { clipRect: intersectRectBounds(state.clipRect, bounds) } : {}),
+        }
         await pipeline.clip?.(op, state)
-        if (rect) state = { ...state, clipRect: intersectRectBounds(state.clipRect, rect) }
-        else await pipeline.unsupported?.(op, state, 'non-rectangular clip')
         break
       }
       case 'path':
@@ -218,6 +241,12 @@ function cloneDrawingState(state: PdfDrawingState): PdfDrawingState {
     strokeColor: [...state.strokeColor],
     fillColor: [...state.fillColor],
     ...(state.clipRect ? { clipRect: { ...state.clipRect } } : {}),
+    ...(state.clipPaths ? { clipPaths: state.clipPaths.map(clip => ({
+      ...clip,
+      transform: [...clip.transform],
+      ...(clip.rect ? { rect: { ...clip.rect } } : {}),
+      ...(clip.bounds ? { bounds: { ...clip.bounds } } : {}),
+    })) } : {}),
   }
 }
 

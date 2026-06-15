@@ -260,7 +260,8 @@
     "verify:pdf": "npm run verify:package && npm run verify:pdf:perf",
     "verify:pdf:perf": "npm run build && node scripts/benchmark-fixed-document.mjs",
     "benchmark:pdfjs": "npm run build && node scripts/compare-pdfjs.mjs",
-    "benchmark:fixed-painters": "npm run build && node scripts/benchmark-fixed-painters.mjs"
+    "benchmark:fixed-painters": "npm run build && node scripts/benchmark-fixed-painters.mjs",
+    "benchmark:demo-pdf-painters": "node scripts/benchmark-demo-pdf-painters.mjs"
   },
   "keywords": [
     "ebook",
@@ -291,6 +292,7 @@
     "fflate": "^0.8.3",
     "linkedom": "^0.18.12",
     "pdfjs-dist": "^6.0.227",
+    "playwright-core": "^1.60.0",
     "typescript": "^5.7.0",
     "vite": "^6.0.0",
     "vite-plugin-dts": "^4.3.0",
@@ -298,8 +300,8 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "@napi-rs/canvas": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@napi-rs/canvas": "^1.0.0",
     "@xmldom/xmldom": "^0.9.10",
     "zod": "^4.4.3"
   },

@@ -694,7 +694,6 @@
             UnsupportedFormatError,
             AdapterRequiredError,
             exportFirstSections,
-            isBrowserWebGpuSupported,
             registerBuiltInParsers,
             setRebookDebug,
         } from '../src/index.ts'
@@ -839,6 +838,8 @@
         let ttsAbortController = null
         let fixedBenchmarkToken = 0
         let fixedBenchmarkRunning = false
+        let fixedPerformanceStatusToken = 0
+        let webGpuCapabilityPromise = null
 
         const loadConfig = () => {
             try {
@@ -1069,6 +1070,7 @@
         }
 
         const updateFixedPerformanceFields = () => {
+            const token = ++fixedPerformanceStatusToken
             const isPdf = currentBook?.fixedDocument?.format === 'pdf'
             pdfBenchmarkPagesRow.style.display = pdfBenchmarkCheck.checked ? 'flex' : 'none'
             btnPdfBenchmark.disabled = !isPdf || fixedBenchmarkRunning
@@ -1084,9 +1086,14 @@
                 pdfBenchmarkResult.textContent = ''
                 return
             }
-            pdfBenchmarkStatus.textContent = isBrowserWebGpuSupported()
-                ? `${formatCurrentPainterStatus()} WebGPU available.`
-                : `${formatCurrentPainterStatus()} WebGPU unavailable in this browser/context; only Canvas2D baseline can be measured.`
+            pdfBenchmarkStatus.textContent = `${formatCurrentPainterStatus()} Checking WebGPU adapter...`
+            void updateFixedPerformanceWebGpuStatus(token)
+        }
+
+        async function updateFixedPerformanceWebGpuStatus(token) {
+            const capability = await getBrowserWebGpuCapability()
+            if (token !== fixedPerformanceStatusToken || !pdfBenchmarkCheck.checked || currentBook?.fixedDocument?.format !== 'pdf') return
+            pdfBenchmarkStatus.textContent = `${formatCurrentPainterStatus()} ${formatWebGpuCapability(capability)}`
         }
 
         const formatCurrentPainterStatus = () => {
@@ -1354,7 +1361,8 @@
 
             try {
                 const results = []
-                const painters = getFixedBenchmarkPainters()
+                const webGpuCapability = await getBrowserWebGpuCapability()
+                const painters = getFixedBenchmarkPainters(webGpuCapability)
                 for (const fixedPainter of painters) {
                     if (token !== fixedBenchmarkToken) return
                     pdfBenchmarkStatus.textContent = `Benchmarking ${fixedPainter} painter...`
@@ -1363,12 +1371,12 @@
                     pdfBenchmarkResult.textContent = formatFixedPainterBenchmarkResults(results)
                 }
                 if (token !== fixedBenchmarkToken) return
-                pdfBenchmarkStatus.textContent = isBrowserWebGpuSupported()
+                pdfBenchmarkStatus.textContent = webGpuCapability.adapterPresent
                     ? 'PDF painter comparison finished.'
-                    : 'PDF painter baseline finished. WebGPU is unavailable in this browser/context, so the WebGPU pass was skipped.'
+                    : `PDF painter baseline finished. ${formatWebGpuCapability(webGpuCapability)}`
                 debugDemo('pdf painter benchmark', {
                     pages: pageLimit,
-                    webgpuSupported: isBrowserWebGpuSupported(),
+                    webgpu: webGpuCapability,
                     results,
                 })
             } catch (error) {
@@ -1416,7 +1424,7 @@
                 return {
                     requested: fixedPainter,
                     actual,
-                    fallback: fixedPainter === 'webgpu' && !actual.includes('webgpu'),
+                    fallback: fixedPainter === 'webgpu' && pages.some(page => page.fallbacks.length > 0),
                     pages: pageCount,
                     openMs: roundDebugNumber(openMs),
                     paintMs: roundDebugNumber(paintMs),
@@ -1431,10 +1439,52 @@
             }
         }
 
-        function getFixedBenchmarkPainters() {
-            return isBrowserWebGpuSupported()
+        function getFixedBenchmarkPainters(webGpuCapability) {
+            return webGpuCapability.adapterPresent
                 ? ['canvas', 'webgpu']
                 : ['canvas']
+        }
+
+        async function getBrowserWebGpuCapability() {
+            webGpuCapabilityPromise ??= detectBrowserWebGpuCapability()
+            return webGpuCapabilityPromise
+        }
+
+        async function detectBrowserWebGpuCapability() {
+            if (!navigator.gpu) {
+                return { apiExposed: false, adapterPresent: false, adapterInfo: null, error: null }
+            }
+            try {
+                const adapter = await navigator.gpu.requestAdapter()
+                return {
+                    apiExposed: true,
+                    adapterPresent: Boolean(adapter),
+                    adapterInfo: adapter?.info ? Object.fromEntries(Object.entries(adapter.info)) : null,
+                    error: null,
+                }
+            } catch (error) {
+                return {
+                    apiExposed: true,
+                    adapterPresent: false,
+                    adapterInfo: null,
+                    error: formatErrorDetail(error),
+                }
+            }
+        }
+
+        function formatWebGpuCapability(capability) {
+            if (!capability.apiExposed) return 'WebGPU API unavailable in this browser/context; only Canvas2D baseline can be measured.'
+            if (!capability.adapterPresent) {
+                const detail = capability.error ? ` (${capability.error})` : ''
+                return `WebGPU API exposed, but requestAdapter() returned null${detail}; only Canvas2D baseline can be measured.`
+            }
+            return `WebGPU adapter available${formatWebGpuAdapterInfo(capability.adapterInfo)}.`
+        }
+
+        function formatWebGpuAdapterInfo(info) {
+            if (!info || typeof info !== 'object') return ''
+            const parts = [info.vendor, info.architecture, info.device, info.description].filter(Boolean)
+            return parts.length ? ` (${parts.join(' / ')})` : ''
         }
 
         function createBenchmarkContainer() {
@@ -1461,6 +1511,14 @@
             return {
                 pageIndex: surface?.pageIndex ?? expectedPageIndex,
                 backends: [...new Set(paints.map(item => item.backend))],
+                fallbacks: paints
+                    .filter(item => item.fallbackFrom)
+                    .map(item => ({
+                        pageIndex: item.pageIndex ?? surface?.pageIndex ?? expectedPageIndex,
+                        from: item.fallbackFrom,
+                        to: item.backend,
+                        reason: item.fallbackReason ?? 'unknown',
+                    })),
                 paintMs: roundDebugNumber(paints.reduce((sum, item) => sum + item.ms, 0)),
                 navigationMs: roundDebugNumber(navigationMs),
             }
@@ -1483,13 +1541,19 @@
         }
 
         function formatFixedPainterBenchmarkResults(results) {
-            return results.map(result => [
+            return results.map(result => {
+                const fallbacks = result.pageSamples
+                    .flatMap(page => page.fallbacks)
+                    .map(item => `fallback page ${item.pageIndex + 1}: ${item.from} -> ${item.to}, ${item.reason}`)
+                return [
                 `${result.requested} -> ${result.actual}${result.fallback ? ' (fallback)' : ''}`,
                 `pages: ${result.pages}`,
                 `paint: ${formatMs(result.paintMs)} total, ${formatMs(result.paintMsPerPage)}/page`,
                 `nav: ${formatMs(result.navigationMs)} total, ${formatMs(result.navigationMsPerPage)}/page`,
                 `open: ${formatMs(result.openMs)} (parse + first render, shown for context)`,
-            ].join('\n')).join('\n\n')
+                ...fallbacks,
+                ].join('\n')
+            }).join('\n\n')
         }
 
         function formatMs(value) {

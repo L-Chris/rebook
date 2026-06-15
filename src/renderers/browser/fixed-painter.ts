@@ -7,6 +7,7 @@ import type { BrowserFixedVisualRenderContext } from './fixed-visual'
 import { isPdfFixedDocument } from '../../pdf/fixed-document'
 import { BrowserFixedPdfCanvasRenderer } from './fixed-pdf-canvas'
 import { BrowserFixedPdfWebGpuRenderer } from './fixed-pdf-webgpu'
+import { WebGpuUnsupportedError } from '../../pdf/paint/webgpu'
 
 export type BrowserFixedPainterMatch = boolean | number
 export type BrowserFixedPainterPreference = 'canvas' | 'webgpu' | 'auto'
@@ -16,6 +17,9 @@ export interface BrowserFixedPaintMetric {
     readonly id: string
     readonly backend: BrowserFixedPaintBackend
     readonly ms: number
+    readonly fallbackFrom?: BrowserFixedPaintBackend
+    readonly fallbackReason?: string
+    readonly pageIndex?: number
 }
 
 export interface BrowserFixedPaintResult {
@@ -226,8 +230,22 @@ export class BrowserFixedWebGpuPainter implements BrowserFixedPainter {
                     canvas.remove()
                 },
             }
-        } catch {
+        } catch (error) {
             canvas.remove()
+            if (error instanceof WebGpuUnsupportedError) {
+                const fallback = await this.canvasPainter.paint(context)
+                if (!fallback) return null
+                return {
+                    ...fallback,
+                    paint: {
+                        ...fallback.paint,
+                        fallbackFrom: this.backend,
+                        fallbackReason: error.unsupportedReasons.join(', ') || error.message,
+                        pageIndex: context.page.index,
+                        ms: now() - start,
+                    },
+                }
+            }
             return null
         }
     }

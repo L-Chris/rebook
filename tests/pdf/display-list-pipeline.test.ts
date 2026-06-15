@@ -48,6 +48,39 @@ describe('PDF display-list pipeline', () => {
     expect(colors).toEqual([[0, 1, 0], [1, 0, 0]])
     expect(clipped).toEqual([true, false])
   })
+
+  it('keeps non-rectangular clip paths in drawing state', async () => {
+    const states: PdfDrawingState[] = []
+    const unsupported: string[] = []
+    const ops: PdfDisplayOp[] = [
+      {
+        type: 'clip',
+        rule: 'nonzero',
+        segments: [
+          { type: 'moveTo', x: 0, y: 0 },
+          { type: 'lineTo', x: 10, y: 0 },
+          { type: 'lineTo', x: 5, y: 10 },
+          { type: 'closePath' },
+        ],
+      },
+      { type: 'path', paint: 'fill', segments: [{ type: 'rect', x: 0, y: 0, width: 1, height: 1 }] },
+    ]
+
+    await replayPdfDisplayList(page(ops), {
+      path: (_op, state) => {
+        states.push(state)
+      },
+      unsupported: (_op, _state, reason) => {
+        unsupported.push(reason)
+      },
+    })
+
+    expect(unsupported).toEqual([])
+    expect(states).toHaveLength(1)
+    expect(states[0].clipPaths).toHaveLength(1)
+    expect(states[0].clipPaths?.[0].rect).toBeUndefined()
+    expect(states[0].clipRect).toEqual({ minX: 0, minY: 0, maxX: 10, maxY: 10 })
+  })
 })
 
 function page(ops: PdfDisplayOp[]): PdfPageDisplayList {

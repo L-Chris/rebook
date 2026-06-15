@@ -19,6 +19,7 @@ import {
   pdfTextFont,
   replayPdfDisplayList,
   transformRectBounds,
+  type PdfClipPath,
   type PdfDrawingPipeline,
   type PdfDrawingState,
   type PdfRectBounds,
@@ -28,6 +29,9 @@ export interface WebGpuRendererOptions {
   readonly clear?: boolean
   readonly background?: readonly [number, number, number, number]
   readonly fallbackOnUnsupported?: boolean
+  /** Rasterize glyph atlas at a higher scale before sampling it on the GPU. */
+  readonly textOversample?: number
+  readonly glyphAtlasSize?: number
 }
 
 export interface WebGpuRenderResult extends PdfPageRenderResult {
@@ -37,6 +41,18 @@ export interface WebGpuRenderResult extends PdfPageRenderResult {
   readonly paths: number
   readonly images: number
   readonly unsupportedOps: number
+  readonly unsupportedReasons: readonly string[]
+}
+
+export class WebGpuUnsupportedError extends Error {
+  constructor(
+    message: string,
+    readonly unsupportedOps: number,
+    readonly unsupportedReasons: readonly string[],
+  ) {
+    super(message)
+    this.name = 'WebGpuUnsupportedError'
+  }
 }
 
 export class WebGpuRenderer implements PdfRenderer<HTMLCanvasElement, WebGpuRenderResult> {
@@ -45,17 +61,22 @@ export class WebGpuRenderer implements PdfRenderer<HTMLCanvasElement, WebGpuRend
   private devicePromise: Promise<WebGpuDeviceBundle | null> | null = null
   private readonly pipelines = new Map<string, unknown>()
   private readonly registeredFontIds = new Set<string>()
+  private readonly glyphAtlas: GlyphAtlas
 
-  constructor(private readonly options: WebGpuRendererOptions = {}) {}
+  constructor(private readonly options: WebGpuRendererOptions = {}) {
+    this.glyphAtlas = new GlyphAtlas(options.glyphAtlasSize ?? 2048)
+  }
 
   async renderPage(
     context: PdfRenderContext,
     target: HTMLCanvasElement,
     options: PdfRenderPageOptions,
   ): Promise<WebGpuRenderResult> {
-    const bundle = await this.getDeviceBundle()
+    const [bundle, displayList] = await Promise.all([
+      this.getDeviceBundle(),
+      context.document.getPageDisplayList(options.pageIndex),
+    ])
     if (!bundle) throw new Error('WebGPU is unavailable')
-    const displayList = await context.document.getPageDisplayList(options.pageIndex)
     const scale = options.scale ?? 1
     const width = Math.ceil(displayList.width * scale)
     const height = Math.ceil(displayList.height * scale)
@@ -63,12 +84,23 @@ export class WebGpuRenderer implements PdfRenderer<HTMLCanvasElement, WebGpuRend
     if (target.height !== height) target.height = height
 
     await this.registerDisplayListFonts(displayList)
-    const builder = new WebGpuDisplayListBuilder(displayList, scale)
+    const builder = new WebGpuDisplayListBuilder(
+      displayList,
+      scale,
+      normalizeTextOversample(this.options.textOversample),
+      this.glyphAtlas,
+    )
     await replayPdfDisplayList(displayList, builder, { ignoreInvisibleText: true })
     const page = await builder.finish()
     if (page.unsupportedOps > 0 && (this.options.fallbackOnUnsupported ?? true)) {
+      const unsupportedOps = page.unsupportedOps
+      const unsupportedReasons = page.unsupportedReasons
       page.destroy()
-      throw new Error(`WebGPU PDF renderer does not support ${page.unsupportedOps} drawing op(s) on this page`)
+      throw new WebGpuUnsupportedError(
+        `WebGPU PDF renderer does not support ${unsupportedOps} drawing op(s) on this page: ${unsupportedReasons.join(', ')}`,
+        unsupportedOps,
+        unsupportedReasons,
+      )
     }
 
     renderWebGpuPage(target, page, bundle, this.pipelines, this.options)
@@ -82,6 +114,7 @@ export class WebGpuRenderer implements PdfRenderer<HTMLCanvasElement, WebGpuRend
       paths: page.paths,
       images: page.images,
       unsupportedOps: page.unsupportedOps,
+      unsupportedReasons: page.unsupportedReasons,
     }
     page.destroy()
     return result
@@ -118,41 +151,61 @@ interface WebGpuPage {
   readonly paths: number
   readonly images: number
   readonly unsupportedOps: number
+  readonly unsupportedReasons: readonly string[]
   readonly atlas?: GlyphAtlasSnapshot
   destroy(): void
 }
 
 type WebGpuDrawCommand =
-  | { readonly kind: 'solid'; readonly vertices: Float32Array; readonly scissor?: PdfRectBounds }
-  | { readonly kind: 'texture'; readonly vertices: Float32Array; readonly texture: WebGpuTextureSource; readonly scissor?: PdfRectBounds }
+  | { readonly kind: 'solid'; readonly vertices: Float32Array; readonly scissor?: PdfRectBounds; readonly clip?: WebGpuClipRegion }
+  | { readonly kind: 'texture'; readonly vertices: Float32Array; readonly texture: WebGpuTextureSource; readonly scissor?: PdfRectBounds; readonly clip?: WebGpuClipRegion }
 
 type MutableWebGpuDrawCommand =
-  | { readonly kind: 'solid'; readonly vertices: number[]; readonly scissor?: PdfRectBounds }
-  | { readonly kind: 'texture'; readonly vertices: number[]; readonly texture: WebGpuTextureSource; readonly scissor?: PdfRectBounds }
+  | { readonly kind: 'solid'; readonly vertices: number[]; readonly scissor?: PdfRectBounds; readonly clip?: WebGpuClipRegion }
+  | { readonly kind: 'texture'; readonly vertices: number[]; readonly texture: WebGpuTextureSource; readonly scissor?: PdfRectBounds; readonly clip?: WebGpuClipRegion }
+
+interface WebGpuClipRegion {
+  readonly key: string
+  readonly paths: readonly WebGpuClipPath[]
+}
+
+interface WebGpuClipPath {
+  readonly id: number
+  readonly vertices: Float32Array
+}
 
 interface WebGpuTextureSource {
   readonly source: unknown
   readonly width: number
   readonly height: number
+  readonly copyWidth?: number
+  readonly copyHeight?: number
   destroy?(): void
 }
 
 class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
   private readonly commands: MutableWebGpuDrawCommand[] = []
-  private readonly atlas = new GlyphAtlas(2048)
   private unsupportedOps = 0
   private glyphs = 0
   private paths = 0
   private images = 0
+  private readonly unsupportedReasons = new Map<string, number>()
+  private readonly clipRegions = new Map<string, WebGpuClipRegion>()
 
   constructor(
     private readonly displayList: PdfPageDisplayList,
     private readonly scale: number,
+    private readonly textOversample: number,
+    private readonly atlas: GlyphAtlas,
   ) {}
 
   path(op: Extract<PdfDisplayOp, { type: 'path' }>, state: PdfDrawingState): void {
-    if (state.blendMode !== 'normal' || op.fill || op.stroke) {
-      this.unsupportedOps++
+    if (state.blendMode !== 'normal') {
+      this.addUnsupported(`path blendMode:${state.blendMode}`)
+      return
+    }
+    if (op.fill || op.stroke) {
+      this.addUnsupported(`path pattern:${op.fill ? 'fill' : ''}${op.stroke ? 'stroke' : ''}`)
       return
     }
     const vertices: number[] = []
@@ -172,12 +225,13 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
       kind: 'solid',
       vertices,
       ...(state.clipRect ? { scissor: state.clipRect } : {}),
+      ...this.commandClip(state),
     })
   }
 
   async image(op: Extract<PdfDisplayOp, { type: 'image' }>, state: PdfDrawingState): Promise<void> {
     if (state.blendMode !== 'normal') {
-      this.unsupportedOps++
+      this.addUnsupported(`image blendMode:${state.blendMode}`)
       return
     }
     const texture = await imageTextureSource(op.image)
@@ -199,13 +253,14 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
       vertices,
       texture,
       ...(state.clipRect ? { scissor: state.clipRect } : {}),
+      ...this.commandClip(state),
     })
   }
 
   text(op: Extract<PdfDisplayOp, { type: 'text' }>, state: PdfDrawingState): void {
     if (state.blendMode !== 'normal' || !paintsVisibleText(op.run)) return
     if (paintsTextStroke(op.run.renderingMode)) {
-      this.unsupportedOps++
+      this.addUnsupported(`text stroke:${op.run.renderingMode ?? 'unknown'}`)
       return
     }
     if (!paintsTextFill(op.run.renderingMode)) return
@@ -217,15 +272,16 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
       vertices,
       texture: this.atlas,
       ...(state.clipRect ? { scissor: state.clipRect } : {}),
+      ...this.commandClip(state),
     })
   }
 
   shading(): void {
-    this.unsupportedOps++
+    this.addUnsupported('shading')
   }
 
-  unsupported(): void {
-    this.unsupportedOps++
+  unsupported(op: PdfDisplayOp, state: PdfDrawingState, reason: string): void {
+    this.addUnsupported(`${op.type}: ${reason}`)
   }
 
   async finish(): Promise<WebGpuPage> {
@@ -243,6 +299,7 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
       paths: this.paths,
       images: this.images,
       unsupportedOps: this.unsupportedOps,
+      unsupportedReasons: this.getUnsupportedReasons(),
       atlas,
       destroy() {
         atlas?.destroy?.()
@@ -255,17 +312,18 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
 
   private textVertices(run: PdfTextRun, state: PdfDrawingState): number[] {
     const color = run.fillColor ?? state.fillColor
-    const textScale = textWidthScale(run, this.atlas, this.scale)
+    const glyphScale = this.scale * this.textOversample
+    const textScale = textWidthScale(run, this.atlas, glyphScale)
     const vertices: number[] = []
     let cursor = 0
     for (const char of Array.from(run.text)) {
-      const glyph = this.atlas.getGlyph(run, char, this.scale)
-      const advance = glyph.advance / this.scale
+      const glyph = this.atlas.getGlyph(run, char, glyphScale)
+      const advance = glyph.advance / glyphScale
       if (glyph.visible) {
-        const left = run.x + cursor + glyph.left / this.scale * textScale
-        const right = run.x + cursor + glyph.right / this.scale * textScale
-        const bottom = run.y - glyph.descent / this.scale
-        const top = run.y + glyph.ascent / this.scale
+        const left = run.x + cursor + glyph.left / glyphScale * textScale
+        const right = run.x + cursor + glyph.right / glyphScale * textScale
+        const bottom = run.y - glyph.descent / glyphScale
+        const top = run.y + glyph.ascent / glyphScale
         const points = [
           transformPoint(left, bottom, state.transform),
           transformPoint(right, bottom, state.transform),
@@ -287,6 +345,42 @@ class WebGpuDisplayListBuilder implements PdfDrawingPipeline {
       return
     }
     this.commands.push(command)
+  }
+
+  private commandClip(state: PdfDrawingState): { readonly clip: WebGpuClipRegion } | Record<string, never> {
+    const clipPaths = state.clipPaths?.filter(clip => !clip.rect) ?? []
+    if (!clipPaths.length) return {}
+    if (clipPaths.length > 255) {
+      this.addUnsupported('clip: more than 255 nested non-rectangular clips')
+      return {}
+    }
+    return { clip: this.getClipRegion(clipPaths) }
+  }
+
+  private getClipRegion(clipPaths: readonly PdfClipPath[]): WebGpuClipRegion {
+    const key = clipPaths.map(clip => clip.id).join(':')
+    const cached = this.clipRegions.get(key)
+    if (cached) return cached
+    const region = {
+      key,
+      paths: clipPaths.map(clip => ({
+        id: clip.id,
+        vertices: clipPathVertices(clip, this.displayList),
+      })),
+    }
+    this.clipRegions.set(key, region)
+    return region
+  }
+
+  private addUnsupported(reason: string): void {
+    this.unsupportedOps++
+    this.unsupportedReasons.set(reason, (this.unsupportedReasons.get(reason) ?? 0) + 1)
+  }
+
+  private getUnsupportedReasons(): string[] {
+    return Array.from(this.unsupportedReasons.entries())
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .map(([reason, count]) => count > 1 ? `${reason} x${count}` : reason)
   }
 }
 
@@ -319,6 +413,8 @@ class GlyphAtlas implements WebGpuTextureSource {
   private x = 1
   private y = 1
   private rowHeight = 0
+  private usedWidth = 1
+  private usedHeight = 1
   private flushed = false
 
   constructor(size: number) {
@@ -399,14 +495,16 @@ class GlyphAtlas implements WebGpuTextureSource {
     ] as const
     const glyph = {
       uv,
-        left: -left - padding,
-        right: right + padding,
-        ascent: ascent + padding,
-        descent: descent + padding,
+      left: -left - padding,
+      right: right + padding,
+      ascent: ascent + padding,
+      descent: descent + padding,
       advance,
       visible: true,
     }
     this.glyphs.set(key, glyph)
+    this.usedWidth = Math.max(this.usedWidth, this.x + width)
+    this.usedHeight = Math.max(this.usedHeight, this.y + height)
     this.x += width + 1
     this.rowHeight = Math.max(this.rowHeight, height)
     this.flushed = false
@@ -420,6 +518,14 @@ class GlyphAtlas implements WebGpuTextureSource {
   snapshot(): GlyphAtlasSnapshot {
     return this
   }
+
+  get copyWidth(): number {
+    return Math.min(this.width, Math.max(1, Math.ceil(this.usedWidth)))
+  }
+
+  get copyHeight(): number {
+    return Math.min(this.height, Math.max(1, Math.ceil(this.usedHeight)))
+  }
 }
 
 function textWidthScale(run: PdfTextRun, atlas: GlyphAtlas, scale: number): number {
@@ -432,9 +538,13 @@ function textWidthScale(run: PdfTextRun, atlas: GlyphAtlas, scale: number): numb
 }
 
 function canBatchCommands(left: MutableWebGpuDrawCommand, right: MutableWebGpuDrawCommand): boolean {
-  if (left.kind !== right.kind || !sameScissor(left.scissor, right.scissor)) return false
+  if (left.kind !== right.kind || !sameScissor(left.scissor, right.scissor) || !sameClipRegion(left.clip, right.clip)) return false
   if (left.kind === 'texture' && right.kind === 'texture') return left.texture === right.texture
   return left.kind === 'solid' && right.kind === 'solid'
+}
+
+function sameClipRegion(left?: WebGpuClipRegion, right?: WebGpuClipRegion): boolean {
+  return left === right || left?.key === right?.key
 }
 
 function sameScissor(left?: PdfRectBounds, right?: PdfRectBounds): boolean {
@@ -452,6 +562,17 @@ function appendVertices(target: number[], source: readonly number[]): void {
 function tessellatePathFill(segments: readonly PdfPathSegment[], matrix: PdfMatrix): Point[][] {
   return flattenPath(segments, matrix)
     .flatMap(path => triangulateSimplePolygon(path.points))
+}
+
+function clipPathVertices(clip: PdfClipPath, displayList: PdfPageDisplayList): Float32Array {
+  const vertices: number[] = []
+  for (const triangle of tessellatePathFill(clip.segments, clip.transform)) {
+    for (const point of triangle) {
+      const [x, y] = clipPosition(point, displayList)
+      vertices.push(x, y)
+    }
+  }
+  return new Float32Array(vertices)
 }
 
 function tessellatePathStroke(segments: readonly PdfPathSegment[], state: PdfDrawingState): Point[][] {
@@ -704,39 +825,186 @@ function renderWebGpuPage(
   const textureCache = new Map<WebGpuTextureSource, WebGpuTextureBinding>()
   const vertexBuffers: WebGpuBuffer[] = []
   const encoder = bundle.device.createCommandEncoder()
-  const pass = encoder.beginRenderPass({
-    colorAttachments: [{
-      view: context.getCurrentTexture().createView(),
-      clearValue: clearValue(options.background),
-      loadOp: options.clear === false ? 'load' : 'clear',
-      storeOp: 'store',
-    }],
-  })
+  const targetView = context.getCurrentTexture().createView()
+  const stencilTexture = page.commands.some(command => command.clip)
+    ? bundle.device.createTexture({
+      size: [canvas.width, canvas.height],
+      format: webGpuStencilFormat,
+      usage: webGpuTextureUsage('RENDER_ATTACHMENT'),
+    })
+    : null
+  let cleared = false
+  let pass: WebGpuRenderPassEncoder | null = null
+  const beginPass = (stencil: boolean): WebGpuRenderPassEncoder => {
+    const current = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: targetView,
+        clearValue: clearValue(options.background),
+        loadOp: cleared || options.clear === false ? 'load' : 'clear',
+        storeOp: 'store',
+      }],
+      ...(stencil && stencilTexture ? {
+        depthStencilAttachment: {
+          view: stencilTexture.createView(),
+          depthClearValue: 1,
+          depthLoadOp: 'clear',
+          depthStoreOp: 'discard',
+          stencilClearValue: 0,
+          stencilLoadOp: 'clear',
+          stencilStoreOp: 'discard',
+        },
+      } : {}),
+    })
+    cleared = true
+    return current
+  }
+
+  if (!page.commands.length) {
+    pass = beginPass(false)
+    pass.end()
+    pass = null
+  }
 
   for (const command of page.commands) {
-    if (!setScissor(pass, command.scissor, page, canvas)) continue
-    if (command.kind === 'solid') {
-      const pipeline = getSolidPipeline(bundle.device, bundle.format, pipelines)
-      const buffer = createVertexBuffer(bundle.device, bundle.device.queue, command.vertices)
-      vertexBuffers.push(buffer)
-      pass.setPipeline(pipeline)
-      pass.setVertexBuffer(0, buffer)
-      pass.draw(command.vertices.length / 6)
-    } else {
-      const pipeline = getTexturePipeline(bundle.device, bundle.format, pipelines)
-      const binding = getTextureBinding(bundle, command.texture, textureCache, pipelines)
-      const buffer = createVertexBuffer(bundle.device, bundle.device.queue, command.vertices)
-      vertexBuffers.push(buffer)
-      pass.setPipeline(pipeline)
-      pass.setBindGroup(0, binding.bindGroup)
-      pass.setVertexBuffer(0, buffer)
-      pass.draw(command.vertices.length / 8)
+    if (command.clip) {
+      pass?.end()
+      pass = null
+      const clippedPass = beginPass(true)
+      if (setScissor(clippedPass, command.scissor, page, canvas)) {
+        renderClipRegion(clippedPass, command.clip, bundle, pipelines, vertexBuffers)
+        drawWebGpuCommand(clippedPass, command, page, canvas, bundle, pipelines, textureCache, vertexBuffers, true)
+      }
+      clippedPass.end()
+      continue
     }
+
+    pass ??= beginPass(false)
+    drawWebGpuCommand(pass, command, page, canvas, bundle, pipelines, textureCache, vertexBuffers, false)
   }
-  pass.end()
+
+  pass?.end()
   bundle.device.queue.submit([encoder.finish()])
+  stencilTexture?.destroy?.()
   for (const binding of textureCache.values()) binding.texture.destroy?.()
   for (const buffer of vertexBuffers) buffer.destroy?.()
+}
+
+function drawWebGpuCommand(
+  pass: WebGpuRenderPassEncoder,
+  command: WebGpuDrawCommand,
+  page: WebGpuPage,
+  canvas: HTMLCanvasElement,
+  bundle: WebGpuDeviceBundle,
+  pipelines: Map<string, unknown>,
+  textureCache: Map<WebGpuTextureSource, WebGpuTextureBinding>,
+  vertexBuffers: WebGpuBuffer[],
+  stencil: boolean,
+): void {
+  if (!setScissor(pass, command.scissor, page, canvas)) return
+  if (stencil && command.clip) pass.setStencilReference?.(command.clip.paths.length)
+  if (command.kind === 'solid') {
+    const pipeline = getSolidPipeline(bundle.device, bundle.format, pipelines, stencil)
+    const buffer = createVertexBuffer(bundle.device, bundle.device.queue, command.vertices)
+    vertexBuffers.push(buffer)
+    pass.setPipeline(pipeline)
+    pass.setVertexBuffer(0, buffer)
+    pass.draw(command.vertices.length / 6)
+  } else {
+    const pipeline = getTexturePipeline(bundle.device, bundle.format, pipelines, stencil)
+    const binding = getTextureBinding(bundle, command.texture, textureCache, pipelines)
+    const buffer = createVertexBuffer(bundle.device, bundle.device.queue, command.vertices)
+    vertexBuffers.push(buffer)
+    pass.setPipeline(pipeline)
+    pass.setBindGroup(0, binding.bindGroup)
+    pass.setVertexBuffer(0, buffer)
+    pass.draw(command.vertices.length / 8)
+  }
+}
+
+function renderClipRegion(
+  pass: WebGpuRenderPassEncoder,
+  clip: WebGpuClipRegion,
+  bundle: WebGpuDeviceBundle,
+  pipelines: Map<string, unknown>,
+  vertexBuffers: WebGpuBuffer[],
+): void {
+  const pipeline = getClipMaskPipeline(bundle.device, bundle.format, pipelines)
+  pass.setPipeline(pipeline)
+  for (let index = 0; index < clip.paths.length; index++) {
+    const path = clip.paths[index]
+    if (!path.vertices.length) continue
+    const buffer = createVertexBuffer(bundle.device, bundle.device.queue, path.vertices)
+    vertexBuffers.push(buffer)
+    pass.setStencilReference?.(index)
+    pass.setVertexBuffer(0, buffer)
+    pass.draw(path.vertices.length / 2)
+  }
+}
+
+const webGpuStencilFormat = 'depth24plus-stencil8'
+
+function clippedStencilState(): unknown {
+  return {
+    format: webGpuStencilFormat,
+    depthWriteEnabled: false,
+    depthCompare: 'always',
+    stencilFront: { compare: 'equal', failOp: 'keep', depthFailOp: 'keep', passOp: 'keep' },
+    stencilBack: { compare: 'equal', failOp: 'keep', depthFailOp: 'keep', passOp: 'keep' },
+  }
+}
+
+function clipMaskStencilState(): unknown {
+  return {
+    format: webGpuStencilFormat,
+    depthWriteEnabled: false,
+    depthCompare: 'always',
+    stencilFront: { compare: 'equal', failOp: 'keep', depthFailOp: 'keep', passOp: 'increment-clamp' },
+    stencilBack: { compare: 'equal', failOp: 'keep', depthFailOp: 'keep', passOp: 'increment-clamp' },
+  }
+}
+
+function colorWriteMaskNone(): number {
+  const write = (globalThis as { GPUColorWrite?: Record<string, number> }).GPUColorWrite
+  return write?.RED !== undefined ? 0 : 0
+}
+
+function getClipMaskPipeline(device: WebGpuDevice, format: string, cache: Map<string, unknown>): unknown {
+  const key = `clip-mask:${format}`
+  const cached = cache.get(key)
+  if (cached) return cached
+  const module = device.createShaderModule({
+    code: `
+@vertex
+fn vertexMain(@location(0) position: vec2f) -> @builtin(position) vec4f {
+  return vec4f(position, 0.0, 1.0);
+}
+
+@fragment
+fn fragmentMain() -> @location(0) vec4f {
+  return vec4f(0.0, 0.0, 0.0, 0.0);
+}
+    `,
+  })
+  const pipeline = device.createRenderPipeline({
+    layout: 'auto',
+    vertex: {
+      module,
+      entryPoint: 'vertexMain',
+      buffers: [{
+        arrayStride: 8,
+        attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }],
+      }],
+    },
+    fragment: {
+      module,
+      entryPoint: 'fragmentMain',
+      targets: [{ format, writeMask: colorWriteMaskNone() }],
+    },
+    depthStencil: clipMaskStencilState(),
+    primitive: { topology: 'triangle-list' },
+  })
+  cache.set(key, pipeline)
+  return pipeline
 }
 
 function clearValue(background: readonly [number, number, number, number] | undefined): unknown {
@@ -780,7 +1048,11 @@ function getTextureBinding(
       webGpuTextureUsage('COPY_DST') |
       webGpuTextureUsage('RENDER_ATTACHMENT'),
   })
-  bundle.device.queue.copyExternalImageToTexture({ source: source.source }, { texture }, [source.width, source.height])
+  bundle.device.queue.copyExternalImageToTexture(
+    { source: source.source },
+    { texture },
+    [source.copyWidth ?? source.width, source.copyHeight ?? source.height],
+  )
   const pipeline = getTexturePipeline(bundle.device, bundle.format, pipelines)
   const bindGroup = bundle.device.createBindGroup({
     layout: (pipeline as { getBindGroupLayout(index: number): unknown }).getBindGroupLayout(0),
@@ -803,8 +1075,8 @@ function createVertexBuffer(device: WebGpuDevice, queue: WebGpuQueue, vertices: 
   return buffer
 }
 
-function getSolidPipeline(device: WebGpuDevice, format: string, cache: Map<string, unknown>): unknown {
-  const key = `solid:${format}`
+function getSolidPipeline(device: WebGpuDevice, format: string, cache: Map<string, unknown>, stencil = false): unknown {
+  const key = `solid:${format}:${stencil ? 'stencil' : 'plain'}`
   const cached = cache.get(key)
   if (cached) return cached
   const module = device.createShaderModule({
@@ -846,14 +1118,15 @@ fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
       entryPoint: 'fragmentMain',
       targets: [{ format, blend: alphaBlend() }],
     },
+    ...(stencil ? { depthStencil: clippedStencilState() } : {}),
     primitive: { topology: 'triangle-list' },
   })
   cache.set(key, pipeline)
   return pipeline
 }
 
-function getTexturePipeline(device: WebGpuDevice, format: string, cache: Map<string, unknown>): unknown {
-  const key = `texture:${format}`
+function getTexturePipeline(device: WebGpuDevice, format: string, cache: Map<string, unknown>, stencil = false): unknown {
+  const key = `texture:${format}:${stencil ? 'stencil' : 'plain'}`
   const cached = cache.get(key)
   if (cached) return cached
   const module = device.createShaderModule({
@@ -901,6 +1174,7 @@ fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
       entryPoint: 'fragmentMain',
       targets: [{ format, blend: alphaBlend() }],
     },
+    ...(stencil ? { depthStencil: clippedStencilState() } : {}),
     primitive: { topology: 'triangle-list' },
   })
   cache.set(key, pipeline)
@@ -912,6 +1186,11 @@ function alphaBlend(): unknown {
     color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
     alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
   }
+}
+
+function normalizeTextOversample(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 2
+  return Math.max(1, Math.min(4, value))
 }
 
 async function createWebGpuDeviceBundle(): Promise<WebGpuDeviceBundle | null> {
@@ -978,6 +1257,7 @@ type WebGpuRenderPassEncoder = {
   setBindGroup(index: number, bindGroup: unknown): void
   setVertexBuffer(slot: number, buffer: unknown): void
   setScissorRect?(x: number, y: number, width: number, height: number): void
+  setStencilReference?(reference: number): void
   draw(vertexCount: number): void
   end(): void
 }

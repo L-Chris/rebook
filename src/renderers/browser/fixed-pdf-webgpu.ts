@@ -20,6 +20,7 @@ export interface BrowserFixedPdfWebGpuRenderResult extends FixedPageRenderResult
     readonly paths: number
     readonly images: number
     readonly unsupportedOps: number
+    readonly unsupportedReasons: readonly string[]
 }
 
 export interface BrowserFixedPdfWebGpuRendererConfig extends WebGpuRendererOptions {
@@ -71,6 +72,7 @@ export class BrowserFixedPdfWebGpuRenderer implements FixedPageRenderer<HTMLCanv
             paths: result.paths,
             images: result.images,
             unsupportedOps: result.unsupportedOps,
+            unsupportedReasons: result.unsupportedReasons,
         }
     }
 
