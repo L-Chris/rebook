@@ -7,7 +7,7 @@ import type { BrowserFixedVisualRenderContext } from './fixed-visual'
 import { isPdfFixedDocument } from '../../pdf/fixed-document'
 import { BrowserFixedPdfCanvasRenderer } from './fixed-pdf-canvas'
 import { BrowserFixedPdfWebGpuRenderer } from './fixed-pdf-webgpu'
-import { WebGpuUnsupportedError } from '../../pdf/paint/webgpu'
+import { WebGpuUnsupportedError, type WebGpuRenderTimings } from '../../pdf/paint/webgpu'
 
 export type BrowserFixedPainterMatch = boolean | number
 export type BrowserFixedPainterPreference = 'canvas' | 'webgpu' | 'auto'
@@ -20,6 +20,12 @@ export interface BrowserFixedPaintMetric {
     readonly fallbackFrom?: BrowserFixedPaintBackend
     readonly fallbackReason?: string
     readonly pageIndex?: number
+    readonly webGpu?: BrowserFixedWebGpuPaintDetail
+}
+
+export interface BrowserFixedWebGpuPaintDetail {
+    readonly cacheHit: boolean
+    readonly timings: WebGpuRenderTimings
 }
 
 export interface BrowserFixedPaintResult {
@@ -34,6 +40,7 @@ export interface BrowserFixedPainter {
     readonly backend: BrowserFixedPaintBackend
     match(document: FixedDocument): BrowserFixedPainterMatch
     paint(context: BrowserFixedVisualRenderContext): Promise<BrowserFixedPaintResult | null> | BrowserFixedPaintResult | null
+    prewarm?(context: BrowserFixedVisualRenderContext): Promise<void> | void
     destroy?(): Promise<void> | void
 }
 
@@ -171,6 +178,20 @@ export class BrowserFixedWebGpuPainter implements BrowserFixedPainter {
         }
     }
 
+    async prewarm(context: BrowserFixedVisualRenderContext): Promise<void> {
+        if (!isPdfFixedDocument(context.document)) return
+        try {
+            await this.pdfRenderer.prewarmPage(context.document, context.page.index, {
+                scale: context.scale,
+                devicePixelRatio: this.getDevicePixelRatio(),
+                intent: 'display',
+                textLayer: false,
+            })
+        } catch {
+            // Prewarming is opportunistic; failed pages still render through the normal path.
+        }
+    }
+
     destroy(): void {
         this.pipelineByFormat.clear()
         this.pdfRenderer.destroy()
@@ -218,6 +239,9 @@ export class BrowserFixedWebGpuPainter implements BrowserFixedPainter {
             canvas.dataset.rebookFixedWebgpuGlyphs = String(result.glyphs)
             canvas.dataset.rebookFixedWebgpuPaths = String(result.paths)
             canvas.dataset.rebookFixedWebgpuImages = String(result.images)
+            canvas.dataset.rebookFixedWebgpuCacheHit = String(result.cacheHit)
+            canvas.dataset.rebookFixedWebgpuBuildMs = String(result.timings.buildMs)
+            canvas.dataset.rebookFixedWebgpuRenderMs = String(result.timings.renderMs)
             return {
                 element: canvas,
                 contentKind: 'texture',
@@ -225,6 +249,10 @@ export class BrowserFixedWebGpuPainter implements BrowserFixedPainter {
                     id: this.id,
                     backend: this.backend,
                     ms: now() - start,
+                    webGpu: {
+                        cacheHit: result.cacheHit,
+                        timings: result.timings,
+                    },
                 },
                 destroy() {
                     canvas.remove()

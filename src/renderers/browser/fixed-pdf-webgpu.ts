@@ -11,6 +11,7 @@ import {
     createWebGpuRenderer,
     type WebGpuRenderer,
     type WebGpuRendererOptions,
+    type WebGpuRenderTimings,
 } from '../../pdf/paint/webgpu'
 
 export interface BrowserFixedPdfWebGpuRenderResult extends FixedPageRenderResult {
@@ -21,6 +22,8 @@ export interface BrowserFixedPdfWebGpuRenderResult extends FixedPageRenderResult
     readonly images: number
     readonly unsupportedOps: number
     readonly unsupportedReasons: readonly string[]
+    readonly cacheHit: boolean
+    readonly timings: WebGpuRenderTimings
 }
 
 export interface BrowserFixedPdfWebGpuRendererConfig extends WebGpuRendererOptions {
@@ -73,7 +76,26 @@ export class BrowserFixedPdfWebGpuRenderer implements FixedPageRenderer<HTMLCanv
             images: result.images,
             unsupportedOps: result.unsupportedOps,
             unsupportedReasons: result.unsupportedReasons,
+            cacheHit: result.cacheHit,
+            timings: result.timings,
         }
+    }
+
+    async prewarmPage(
+        document: FixedDocument,
+        pageIndex: number,
+        options: FixedPageRenderOptions = {},
+    ): Promise<void> {
+        if (!isPdfFixedDocument(document)) {
+            throw new UnsupportedFormatError('BrowserFixedPdfWebGpuRenderer requires a PDF fixed document')
+        }
+
+        const page = await document.getPage(pageIndex)
+        const viewport = createFixedPageViewport(page, options)
+        await this.renderer.prewarmPage(
+            { document },
+            { pageIndex, scale: viewport.scale * viewport.devicePixelRatio },
+        )
     }
 
     destroy(): void {

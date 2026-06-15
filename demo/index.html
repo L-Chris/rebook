@@ -1421,6 +1421,7 @@
                 const navigationMs = pages.reduce((sum, page) => sum + page.navigationMs, 0)
                 const backends = [...new Set(pages.flatMap(page => page.backends))]
                 const actual = backends.join('+') || 'none'
+                const webGpu = summarizeWebGpuPageDetails(pages)
                 return {
                     requested: fixedPainter,
                     actual,
@@ -1431,6 +1432,7 @@
                     navigationMs: roundDebugNumber(navigationMs),
                     paintMsPerPage: roundDebugNumber(paintMs / Math.max(1, pageCount)),
                     navigationMsPerPage: roundDebugNumber(navigationMs / Math.max(1, pageCount - 1)),
+                    webGpu,
                     pageSamples: pages.slice(0, 6),
                 }
             } finally {
@@ -1519,6 +1521,9 @@
                         to: item.backend,
                         reason: item.fallbackReason ?? 'unknown',
                     })),
+                webGpu: paints
+                    .map(item => item.webGpu)
+                    .filter(Boolean),
                 paintMs: roundDebugNumber(paints.reduce((sum, item) => sum + item.ms, 0)),
                 navigationMs: roundDebugNumber(navigationMs),
             }
@@ -1540,17 +1545,38 @@
             )
         }
 
+        function summarizeWebGpuPageDetails(pages) {
+            const entries = pages.flatMap(page => page.webGpu ?? [])
+            if (!entries.length) return null
+            const timingKeys = ['totalMs', 'deviceMs', 'pendingMs', 'displayListMs', 'fontMs', 'buildMs', 'replayMs', 'finishMs', 'renderMs']
+            const totals = Object.fromEntries(timingKeys.map(key => [key, 0]))
+            for (const entry of entries) {
+                const timings = entry.timings ?? {}
+                for (const key of timingKeys) totals[key] += Number(timings[key]) || 0
+            }
+            return {
+                samples: entries.length,
+                cacheHits: entries.filter(entry => entry.cacheHit).length,
+                perPage: Object.fromEntries(timingKeys.map(key => [key, roundDebugNumber(totals[key] / entries.length)])),
+            }
+        }
+
         function formatFixedPainterBenchmarkResults(results) {
             return results.map(result => {
                 const fallbacks = result.pageSamples
                     .flatMap(page => page.fallbacks)
                     .map(item => `fallback page ${item.pageIndex + 1}: ${item.from} -> ${item.to}, ${item.reason}`)
+                const webGpuDetails = result.webGpu ? [
+                    `cache: ${result.webGpu.cacheHits}/${result.webGpu.samples} hit${result.webGpu.cacheHits === 1 ? '' : 's'}`,
+                    `stages/page: pending ${formatMs(result.webGpu.perPage.pendingMs)}, displayList ${formatMs(result.webGpu.perPage.displayListMs)}, font ${formatMs(result.webGpu.perPage.fontMs)}, build ${formatMs(result.webGpu.perPage.buildMs)}, render ${formatMs(result.webGpu.perPage.renderMs)}, total ${formatMs(result.webGpu.perPage.totalMs)}`,
+                ] : []
                 return [
                 `${result.requested} -> ${result.actual}${result.fallback ? ' (fallback)' : ''}`,
                 `pages: ${result.pages}`,
                 `paint: ${formatMs(result.paintMs)} total, ${formatMs(result.paintMsPerPage)}/page`,
                 `nav: ${formatMs(result.navigationMs)} total, ${formatMs(result.navigationMsPerPage)}/page`,
                 `open: ${formatMs(result.openMs)} (parse + first render, shown for context)`,
+                ...webGpuDetails,
                 ...fallbacks,
                 ].join('\n')
             }).join('\n\n')

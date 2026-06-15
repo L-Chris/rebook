@@ -895,6 +895,75 @@ describe('BrowserRenderer', () => {
         reader.destroy()
     })
 
+    it('prewarms the next fixed page while idle after rendering the current page', async () => {
+        vi.useFakeTimers()
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '420')
+        container.setAttribute('data-height', '520')
+        document.body.appendChild(container)
+
+        class RecordingFixedContentRenderer extends BrowserFixedContentRenderer {
+            readonly prewarmed: number[] = []
+
+            override async prewarmSurface(context: Parameters<BrowserFixedContentRenderer['prewarmSurface']>[0]): Promise<void> {
+                if ('pages' in context) {
+                    this.prewarmed.push(...context.pages.map(item => item.context.page.index))
+                    return
+                }
+                this.prewarmed.push(context.page.index)
+            }
+        }
+
+        const fixedContentRenderer = new RecordingFixedContentRenderer()
+        const book: Book = {
+            sections: [],
+            pageList: [
+                { label: '1', href: 'pdf:page:0' },
+                { label: '2', href: 'pdf:page:1' },
+                { label: '3', href: 'pdf:page:2' },
+            ],
+            fixedDocument: {
+                kind: 'fixed-document',
+                format: 'pdf',
+                pageCount: 3,
+                getPage: pageIndex => ({ index: pageIndex, width: 300, height: 420 }),
+                getPages: () => [
+                    { index: 0, width: 300, height: 420 },
+                    { index: 1, width: 300, height: 420 },
+                    { index: 2, width: 300, height: 420 },
+                ],
+                getPageText: pageIndex => ({
+                    pageIndex,
+                    width: 300,
+                    height: 420,
+                    text: `Fixed page ${pageIndex + 1}`,
+                    runs: [{
+                        text: `Fixed page ${pageIndex + 1}`,
+                        transform: [18, 0, 0, 18, 48, 48],
+                        fontSize: 18,
+                    }],
+                }),
+            },
+            resolveHref: href => {
+                const match = href.match(/^pdf:page:(\d+)$/)
+                return match ? { index: Number(match[1]) } : null
+            },
+        }
+
+        const reader = createReader({ container, fixedContentRenderer })
+        await reader.openBook(book)
+        await vi.advanceTimersByTimeAsync(90)
+
+        expect(fixedContentRenderer.prewarmed).toContain(1)
+
+        await reader.next()
+        await vi.advanceTimersByTimeAsync(90)
+
+        expect(fixedContentRenderer.prewarmed).toContain(2)
+        reader.destroy()
+        vi.useRealTimers()
+    })
+
     it('centers short fixed pages vertically and navigates with the wheel', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '420')

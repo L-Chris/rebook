@@ -74,6 +74,7 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     private readonly events = new RendererEventDispatcher<RendererEventMap>()
     private readonly beforeNavigate: RendererConfig['beforeNavigate']
     private readonly surfacePipeline: BrowserSurfacePipeline<BrowserFixedContentRenderContext>
+    private readonly contentRenderer: BrowserFixedContentRenderer
     private readonly scroller: HTMLElement
     private readonly pageHost: HTMLElement
     private sequence: FixedPageSequence | null = null
@@ -84,6 +85,8 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     private readonly devicePixelRatio?: number | (() => number)
     private wheelNavigationPending = false
     private visiblePageCount = 1
+    private prewarmToken = 0
+    private cancelPrewarmTask: (() => void) | null = null
 
     constructor(config: BrowserFixedRendererConfig) {
         this.styles = config.styles ?? {}
@@ -101,7 +104,7 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         })
         this.scroller = this.host.scroller
         this.pageHost = this.host.scrollExtent
-        const contentRenderer = config.fixedContentRenderer ?? new BrowserFixedContentRenderer({
+        this.contentRenderer = config.fixedContentRenderer ?? new BrowserFixedContentRenderer({
             fixedPageRenderer: config.fixedPageRenderer,
             fixedPainter: config.fixedPainter,
             fixedPainters: config.fixedPainters,
@@ -109,7 +112,7 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
             devicePixelRatio: config.devicePixelRatio,
         })
         this.surfacePipeline = new BrowserSurfacePipeline({
-            contentRenderer,
+            contentRenderer: this.contentRenderer,
             compositor: this.host.compositor,
             createDecorators: ({ getMarks }) => [
                 new BrowserFixedMarkLayerDecorator({
@@ -126,12 +129,12 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         }
 
         this.sequence = await FixedPageSequence.fromBook(book)
-        await this.renderCurrentPage('open')
+        await this.renderCurrentPage('open', 'next')
     }
 
     async goTo(target: number | string): Promise<void> {
         if (!this.sequence?.goTo(target)) return
-        await this.renderCurrentPage('goto')
+        await this.renderCurrentPage('goto', 'next')
     }
 
     async next(): Promise<void> {
@@ -139,7 +142,7 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         if (!this.sequence) return
         const target = getNextSpreadIndex(this.sequence.pageIndex, this.sequence.pageCount, this.visiblePageCount, 'item')
         if (target == null || !this.sequence.goTo(target)) return
-        await this.renderCurrentPage('page')
+        await this.renderCurrentPage('page', 'next')
     }
 
     async prev(): Promise<void> {
@@ -147,44 +150,44 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         if (!this.sequence) return
         const target = getPreviousSpreadIndex(this.sequence.pageIndex, this.sequence.pageCount, this.visiblePageCount, 'item')
         if (target == null || !this.sequence.goTo(target)) return
-        await this.renderCurrentPage('page')
+        await this.renderCurrentPage('page', 'prev')
     }
 
     async goToFraction(fraction: number): Promise<void> {
         if (!this.sequence?.goToFraction(fraction)) return
-        await this.renderCurrentPage('fraction')
+        await this.renderCurrentPage('fraction', 'next')
     }
 
     setStyles(styles: RendererStyles): void {
         this.styles = { ...this.styles, ...styles }
         this.host.applyStyles(this.styles)
-        void this.renderCurrentPage('styles')
+        void this.renderCurrentPage('styles', 'next')
     }
 
     setLayout(mode: LayoutMode): void {
         if (this.layoutMode === mode) return
         this.layoutMode = mode
-        void this.renderCurrentPage('layout')
+        void this.renderCurrentPage('layout', 'next')
     }
 
     setSpread(maxColumns: number): void {
         this.maxColumnCount = Math.max(1, maxColumns)
-        void this.renderCurrentPage('spread')
+        void this.renderCurrentPage('spread', 'next')
     }
 
     setMark(mark: ReaderMark): void {
         this.surfacePipeline.setMark(mark)
-        void this.renderCurrentPage('mark')
+        void this.renderCurrentPage('mark', 'next')
     }
 
     removeMark(id: string): void {
         this.surfacePipeline.removeMark(id)
-        void this.renderCurrentPage('mark')
+        void this.renderCurrentPage('mark', 'next')
     }
 
     clearMarks(kind?: string): void {
         this.surfacePipeline.clearMarks(kind)
-        void this.renderCurrentPage('mark')
+        void this.renderCurrentPage('mark', 'next')
     }
 
     getMarks(): ReaderMark[] {
@@ -204,7 +207,7 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     }
 
     async refresh(): Promise<void> {
-        await this.renderCurrentPage('refresh')
+        await this.renderCurrentPage('refresh', 'next')
     }
 
     on<K extends keyof RendererEventMap>(event: K, listener: Listener<RendererEventMap[K]>): void
@@ -221,17 +224,19 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
 
     destroy(): void {
         this.scroller.removeEventListener('wheel', this.handleWheel)
+        this.cancelScheduledPrewarm()
         this.surfacePipeline.destroy()
         this.host.destroy({ compositor: false })
         this.events.clear()
         this.sequence = null
     }
 
-    private async renderCurrentPage(reason: string): Promise<void> {
+    private async renderCurrentPage(reason: string, prewarmDirection: 'next' | 'prev'): Promise<void> {
         const sequence = this.sequence
         const page = sequence?.currentPage
         if (!sequence || !page) return
 
+        this.cancelScheduledPrewarm()
         const renderPlan = this.createRenderPlan(sequence, page)
         const { fit } = renderPlan
         this.pageHost.style.padding = `${fit.margin}px`
@@ -243,6 +248,7 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         this.scroller.scrollTop = 0
         this.emit('load', { doc: getLoadDocument(rendered.surface), index: page.index })
         this.emitRelocate(reason)
+        this.scheduleAdjacentPrewarm(sequence, page.index, prewarmDirection)
     }
 
     private applyPageAlignment(pageHeight: number, margin: number): void {
@@ -260,7 +266,7 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     }
 
     private createRenderPlan(sequence: FixedPageSequence, page: FixedPageInfo): FixedRenderPlan {
-        const pages = this.getVisiblePages(sequence)
+        const pages = this.getVisiblePages(sequence, page.index)
         if (pages.length <= 1) {
             const fit = resolveFixedPageFit(page, this.getViewportMetrics(), {
                 margin: this.styles.margin,
@@ -294,11 +300,11 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         }
     }
 
-    private getVisiblePages(sequence: FixedPageSequence): readonly FixedPageInfo[] {
-        const page = sequence.currentPage
+    private getVisiblePages(sequence: FixedPageSequence, pageIndex = sequence.pageIndex): readonly FixedPageInfo[] {
+        const page = sequence.pages[pageIndex]
         const requestedPageCount = this.getRequestedColumnCount()
         if (!page || requestedPageCount < 2) return page ? [page] : []
-        return getSpreadItems(sequence.pages, sequence.pageIndex, requestedPageCount)
+        return getSpreadItems(sequence.pages, pageIndex, requestedPageCount)
     }
 
     private getRequestedColumnCount(): number {
@@ -348,6 +354,37 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         const fallback = globalThis.devicePixelRatio
         const resolved = value ?? (typeof fallback === 'number' ? fallback : 1)
         return Number.isFinite(resolved) && resolved > 0 ? resolved : 1
+    }
+
+    private scheduleAdjacentPrewarm(
+        sequence: FixedPageSequence,
+        pageIndex: number,
+        direction: 'next' | 'prev',
+    ): void {
+        const token = ++this.prewarmToken
+        const pageCount = this.visiblePageCount
+        const target = direction === 'next'
+            ? getNextSpreadIndex(pageIndex, sequence.pageCount, pageCount, 'item')
+            : getPreviousSpreadIndex(pageIndex, sequence.pageCount, pageCount, 'item')
+        if (target == null) return
+
+        this.cancelPrewarmTask = scheduleFixedPrewarmTask(async () => {
+            this.cancelPrewarmTask = null
+            if (token !== this.prewarmToken || this.sequence !== sequence) return
+            const page = sequence.pages[target]
+            if (!page) return
+            try {
+                await this.contentRenderer.prewarmSurface(this.createRenderPlan(sequence, page).context)
+            } catch {
+                // Prewarming must never affect foreground navigation.
+            }
+        })
+    }
+
+    private cancelScheduledPrewarm(): void {
+        this.prewarmToken++
+        this.cancelPrewarmTask?.()
+        this.cancelPrewarmTask = null
     }
 
     private emitRelocate(reason: string): void {
@@ -400,6 +437,17 @@ function getLoadDocument(surface: BrowserPageSurface): unknown {
         return first?.surface?.metadata?.textLayer ?? surface
     }
     return surface
+}
+
+function scheduleFixedPrewarmTask(callback: () => void | Promise<void>): () => void {
+    const idleScheduler = globalThis.requestIdleCallback
+    const idleCanceller = globalThis.cancelIdleCallback
+    if (typeof idleScheduler === 'function' && typeof idleCanceller === 'function') {
+        const handle = idleScheduler(() => { void callback() }, { timeout: 250 })
+        return () => idleCanceller(handle)
+    }
+    const handle = setTimeout(() => { void callback() }, 80)
+    return () => clearTimeout(handle)
 }
 
 export const createBrowserFixedRenderer = (config: BrowserFixedRendererConfig): BrowserFixedRenderer =>

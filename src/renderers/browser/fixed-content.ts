@@ -73,6 +73,14 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
         return this.renderPageSurface(context)
     }
 
+    async prewarmSurface(context: BrowserFixedContentRenderContext): Promise<void> {
+        if (isSpreadContext(context)) {
+            await Promise.all(context.pages.map(item => this.prewarmPageSurface(item.context)))
+            return
+        }
+        await this.prewarmPageSurface(context)
+    }
+
     private async renderPageSurface(context: BrowserFixedVisualRenderContext): Promise<BrowserPageSurface> {
         const text = context.document.getPageText
             ? await context.document.getPageText(context.page.index)
@@ -146,6 +154,11 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
         const renderer = selectFixedVisualRenderer(context.document, this.visualRenderers)
         const layer = await renderer?.renderLayer(context) ?? null
         return layer ? { layer, paint: layer.paint } : null
+    }
+
+    private async prewarmPageSurface(context: BrowserFixedVisualRenderContext): Promise<void> {
+        const renderer = selectFixedVisualRenderer(context.document, this.visualRenderers)
+        await renderer?.prewarmLayer?.(context)
     }
 
     private createTextLayer(text: FixedPageTextLayer, styles: RendererStyles, visualRendered: boolean): BrowserPageSurfaceLayer {

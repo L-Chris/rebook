@@ -22,6 +22,7 @@ export interface BrowserFixedVisualRenderer {
     readonly id: string
     match(document: FixedDocument): BrowserFixedVisualRendererMatch
     renderLayer(context: BrowserFixedVisualRenderContext): Promise<BrowserFixedVisualLayer | null> | BrowserFixedVisualLayer | null
+    prewarmLayer?(context: BrowserFixedVisualRenderContext): Promise<void> | void
     destroy?(): Promise<void> | void
 }
 
@@ -64,6 +65,14 @@ export class BrowserFixedPainterVisualRenderer implements BrowserFixedVisualRend
             }
         }
         return null
+    }
+
+    async prewarmLayer(context: BrowserFixedVisualRenderContext): Promise<void> {
+        for (const { painter } of this.getMatchingPainters(context.document)) {
+            if (!painter.prewarm) continue
+            await painter.prewarm(context)
+            return
+        }
     }
 
     destroy(): void {
