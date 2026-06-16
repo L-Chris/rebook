@@ -95,8 +95,20 @@ export interface TTSVoice {
 }
 
 export interface TTSProviderCapabilities {
-    voiceDesign?: boolean
-    soundEffects?: boolean
+    tts?: boolean
+    tts_streaming?: boolean
+    asr?: boolean
+    asr_streaming?: boolean
+    voice_design?: boolean
+    voice_clone?: boolean
+    sound_effects?: boolean
+    isolation?: boolean
+}
+
+export type TTSJsonPrimitive = string | number | boolean | null
+export type TTSJsonValue = TTSJsonPrimitive | TTSJsonObject | TTSJsonValue[]
+export interface TTSJsonObject {
+    [key: string]: TTSJsonValue
 }
 
 export interface TTSProviderInfo {
@@ -115,7 +127,7 @@ export interface TTSSpeakerVoiceProfile {
     role?: TTSSpeakerRole
     gender?: TTSSpeakerGender
     speakerHint?: string
-    rate?: string
+    speed?: number
     pitch?: string
     volume?: string
     emotion?: string
@@ -164,7 +176,7 @@ export interface TTSSpeakerAnalysisSegment {
     gender?: TTSSpeakerGender
     confidence?: number
     voice?: string
-    rate?: string
+    speed?: number
     pitch?: string
     volume?: string
     emotion?: string
@@ -221,7 +233,7 @@ export interface TTSSegment {
     speakerConfidence?: number
     text: string
     voice?: string
-    rate?: string
+    speed?: number
     pitch?: string
     volume?: string
     emotion?: string
@@ -257,11 +269,11 @@ export interface TTSSynthesizeOptions {
     voice?: string
     lang?: string
     outputFormat?: string
-    rate?: string
+    speed?: number
     pitch?: string
     volume?: string
-    voicePrompt?: string
     stylePrompt?: string
+    extraParams?: TTSJsonObject
 }
 
 export interface TTSSynthesizeResult {
@@ -278,11 +290,11 @@ export interface TTSPrefetchOptions {
     pollIntervalMs?: number
 }
 
-export type TTSJobStatus = 'queued' | 'running' | 'done' | 'failed' | 'partial'
+export type TTSSynthesisStatus = 'queued' | 'running' | 'done' | 'failed' | 'partial'
 
-export interface TTSJob {
+export interface TTSSynthesisState {
     id: string
-    status: TTSJobStatus
+    status: TTSSynthesisStatus
     provider: string
     total: number
     completed: number
@@ -291,10 +303,10 @@ export interface TTSJob {
     updatedAt: string
     error?: string
     results: TTSSynthesizeResult[]
-    failures?: TTSJobFailure[]
+    failures?: TTSSynthesisFailure[]
 }
 
-export interface TTSJobFailure {
+export interface TTSSynthesisFailure {
     index: number
     segmentId: string
     speaker?: string
@@ -305,9 +317,9 @@ export interface TTSJobFailure {
 
 export interface TTSPrefetchedSection {
     readonly segments: TTSSegment[]
-    readonly jobId: string
+    readonly id: string
     readonly total: number
-    refresh(): Promise<TTSJob>
+    refresh(): Promise<TTSSynthesisState>
     getResult(segmentId: string): TTSSynthesizeResult | undefined
     waitForSegment(segmentId: string, options?: { pollIntervalMs?: number, signal?: AbortSignal }): Promise<TTSSynthesizeResult>
 }
@@ -350,13 +362,10 @@ export interface TTSController {
     listVoices(provider?: string): Promise<TTSVoice[]>
     prepareSection(sectionIndex: number, options?: TTSSectionOptions): Promise<TTSSegment[]>
     synthesizeSegment(segment: TTSSegment, options?: TTSSynthesizeOptions): Promise<TTSSynthesizeResult>
+    synthesizeSegments(segments: readonly TTSSegment[], options?: TTSSynthesizeOptions & TTSPrefetchOptions): Promise<TTSPrefetchedSection>
     prefetchSection(sectionIndex: number, options?: TTSSectionOptions & TTSSynthesizeOptions & TTSPrefetchOptions): Promise<TTSPrefetchedSection>
     playPrefetchedSection(prefetch: TTSPrefetchedSection, options?: TTSAudioPlaybackOptions): Promise<void>
     stopPlayback(): void
-    createSectionJob(sectionIndex: number, options?: TTSSectionOptions & TTSSynthesizeOptions & { concurrency?: number }): Promise<TTSJob>
-    createJob(segments: readonly TTSSegment[], options?: TTSSynthesizeOptions & { concurrency?: number }): Promise<TTSJob>
-    getJob(jobId: string): Promise<TTSJob>
-    getJobSegments(jobId: string): Promise<TTSSynthesizeResult[]>
     readonly player?: TTSAudioPlayer
 }
 
@@ -371,7 +380,7 @@ export interface TTSOptions {
     voice?: string
     lang?: string
     outputFormat?: string
-    rate?: string
+    speed?: number
     pitch?: string
     volume?: string
     speaker?: string
@@ -413,13 +422,14 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
         const sectionSegmentCache = new Map<string, Promise<TTSSegment[]>>()
         const speakerVoiceStates = new Map<string, TTSSpeakerVoiceState>()
         const voiceCatalogCache = new Map<string, Promise<TTSVoice[]>>()
+        const voiceDesignCache = new Map<string, Promise<string>>()
         let providerCatalogCache: Promise<TTSProviderInfo[]> | undefined
 
         const getProviderCatalog = (): Promise<TTSProviderInfo[]> => {
             if (providerCatalogCache) return providerCatalogCache
             providerCatalogCache = (async () => {
                 try {
-                    const response = await fetchImpl(`${endpoint}/v1/tts/providers`)
+                    const response = await fetchImpl(`${endpoint}/api/providers`)
                     const body = await readJson<{ providers: TTSProviderInfo[] }>(response)
                     return Array.isArray(body.providers) ? body.providers : []
                 } catch {
@@ -430,18 +440,25 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
         }
 
         const getVoiceCatalog = (provider = options.provider): Promise<TTSVoice[]> => {
-            const key = provider ?? ''
+            const resolvedProvider = normalizeVoxoutProvider(provider ?? options.provider ?? 'default')
+            const key = resolvedProvider
             const cached = voiceCatalogCache.get(key)
             if (cached) return cached
             const promise = (async () => {
-                const url = new URL(`${endpoint}/v1/tts/voices`)
-                if (provider) url.searchParams.set('provider', provider)
                 try {
-                    const response = await fetchImpl(url.toString())
+                    const response = await fetchImpl(`${endpoint}/api/providers/${encodeURIComponent(resolvedProvider)}/voices`)
                     const body = await readJson<{ voices: TTSVoice[] }>(response)
                     return Array.isArray(body.voices) ? body.voices : []
                 } catch {
-                    return []
+                    try {
+                        const url = new URL(`${endpoint}/api/voices`)
+                        url.searchParams.set('provider', resolvedProvider)
+                        const response = await fetchImpl(url.toString())
+                        const body = await readJson<{ voices: TTSVoice[] }>(response)
+                        return Array.isArray(body.voices) ? body.voices : []
+                    } catch {
+                        return []
+                    }
                 }
             })()
             voiceCatalogCache.set(key, promise)
@@ -492,6 +509,78 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
             return promise
         }
 
+        const designVoice = async (segment: TTSSegment, provider: string): Promise<string> => {
+            const prompt = normalizeVoicePrompt(segment.voicePrompt)
+            if (!prompt) {
+                return segment.voice ?? options.voice ?? ''
+            }
+            const key = JSON.stringify({
+                provider,
+                prompt,
+                speaker: segment.speaker,
+                sample: segment.text.slice(0, 120),
+            })
+            const cached = voiceDesignCache.get(key)
+            if (cached) return cached
+            const promise = (async () => {
+                const designResponse = await fetchImpl(`${endpoint}/v1/audio/voices/design`, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(compactObject({
+                        provider,
+                        instructions: prompt,
+                        input: segment.text.slice(0, 240),
+                        name: segment.speaker && segment.speaker !== NARRATOR_SPEAKER ? segment.speaker : undefined,
+                    })),
+                })
+                const design = await readJson<{ data?: Array<Record<string, unknown>> }>(designResponse)
+                const preview = Array.isArray(design.data) ? design.data[0] : undefined
+                if (!preview) throw new Error(`TTS voice design returned no previews for segment ${segment.id}`)
+                const createResponse = await fetchImpl(`${endpoint}/v1/audio/voices/create`, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(compactObject({
+                        provider,
+                        generated_voice_id: getJsonString(preview.generated_voice_id) ?? getJsonString(preview.id),
+                        name: getJsonString(preview.name) ?? segment.speaker,
+                        instructions: getJsonString(preview.instructions) ?? prompt,
+                        preview_audio: getJsonString(preview.preview_audio),
+                        preview_mime_type: getJsonString(preview.preview_mime_type),
+                        language: getJsonString(preview.language),
+                        labels: {
+                            source: 'rebook',
+                            speaker: segment.speaker,
+                        },
+                    })),
+                })
+                const voice = await readJson<{ id?: string }>(createResponse)
+                if (!voice.id) throw new Error(`TTS voice create returned no voice id for segment ${segment.id}`)
+                return voice.id
+            })()
+            voiceDesignCache.set(key, promise)
+            return promise
+        }
+
+        const synthesizeSegment = async (segment: TTSSegment, synthesizeOptions: TTSSynthesizeOptions = {}): Promise<TTSSynthesizeResult> => {
+            const effect = isSoundEffectSegment(segment)
+            const provider = normalizeVoxoutProvider(effect
+                ? segment.provider ?? synthesizeOptions.provider ?? options.soundEffectProvider ?? 'elevenlabs'
+                : synthesizeOptions.provider ?? segment.provider ?? options.provider ?? 'default')
+            const voice = effect
+                ? undefined
+                : segment.voicePrompt
+                    ? await designVoice(segment, provider)
+                    : synthesizeOptions.voice ?? segment.voice ?? options.voice
+            const response = await fetchImpl(`${endpoint}${effect ? '/v1/audio/effect' : '/v1/audio/speech'}`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify(effect
+                    ? buildVoxoutEffectRequest(segment, provider, synthesizeOptions, options)
+                    : buildVoxoutSpeechRequest(segment, provider, voice, synthesizeOptions, options)),
+            })
+            return createSynthesizeResultFromAudioResponse(segment, response)
+        }
+
         const controller: TTSController = {
             async listProviders() {
                 return getProviderCatalog()
@@ -500,30 +589,15 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
                 return getVoiceCatalog(provider)
             },
             prepareSection,
-            async synthesizeSegment(segment, synthesizeOptions = {}) {
-                const response = await fetchImpl(`${endpoint}/v1/tts/synthesize`, {
-                    method: 'POST',
-                    headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify({
-                        provider: synthesizeOptions.provider ?? options.provider,
-                        voice: synthesizeOptions.voice ?? segment.voice ?? options.voice,
-                        lang: synthesizeOptions.lang ?? options.lang,
-                        outputFormat: synthesizeOptions.outputFormat ?? options.outputFormat,
-                        rate: synthesizeOptions.rate ?? segment.rate ?? options.rate,
-                        pitch: synthesizeOptions.pitch ?? segment.pitch ?? options.pitch,
-                        volume: synthesizeOptions.volume ?? segment.volume ?? options.volume,
-                        voicePrompt: synthesizeOptions.voicePrompt,
-                        stylePrompt: synthesizeOptions.stylePrompt,
-                        segment,
-                    }),
-                })
-                const result = await readJson<TTSSynthesizeResult>(response)
-                return { ...result, audioUrl: resolveAudioUrl(endpoint, result.audioUrl) }
+            synthesizeSegment,
+            async synthesizeSegments(segments, synthesizeOptions = {}) {
+                const state = createSynthesisState(segments, synthesizeOptions.provider ?? options.provider ?? 'default')
+                runSynthesisTask(state, segments, synthesizeOptions, synthesizeSegment)
+                return createPrefetchedSection(segments.slice(), state, synthesizeOptions.pollIntervalMs)
             },
             async prefetchSection(sectionIndex, prefetchOptions = {}) {
                 const segments = await prepareSection(sectionIndex, prefetchOptions)
-                const job = await controller.createJob(segments, prefetchOptions)
-                return createPrefetchedSection(controller, segments, job, prefetchOptions.pollIntervalMs)
+                return controller.synthesizeSegments(segments, prefetchOptions)
             },
             async playPrefetchedSection(prefetch, playbackOptions = {}) {
                 if (!options.player) {
@@ -533,47 +607,6 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
             },
             stopPlayback() {
                 options.player?.stop()
-            },
-            async createSectionJob(sectionIndex, jobOptions = {}) {
-                const segments = await prepareSection(sectionIndex, jobOptions)
-                return controller.createJob(segments, jobOptions)
-            },
-            async createJob(segments, jobOptions = {}) {
-                const response = await fetchImpl(`${endpoint}/v1/tts/jobs`, {
-                    method: 'POST',
-                    headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify({
-                        provider: jobOptions.provider ?? options.provider,
-                        voice: jobOptions.voice ?? options.voice,
-                        lang: jobOptions.lang ?? options.lang,
-                        outputFormat: jobOptions.outputFormat ?? options.outputFormat,
-                        rate: jobOptions.rate ?? options.rate,
-                        pitch: jobOptions.pitch ?? options.pitch,
-                        volume: jobOptions.volume ?? options.volume,
-                        voicePrompt: jobOptions.voicePrompt,
-                        stylePrompt: jobOptions.stylePrompt,
-                        concurrency: jobOptions.concurrency,
-                        segments,
-                    }),
-                })
-                const job = await readJson<TTSJob>(response)
-                return {
-                    ...job,
-                    results: job.results.map(result => ({ ...result, audioUrl: resolveAudioUrl(endpoint, result.audioUrl) })),
-                }
-            },
-            async getJob(jobId) {
-                const response = await fetchImpl(`${endpoint}/v1/tts/jobs/${encodeURIComponent(jobId)}`)
-                const job = await readJson<TTSJob>(response)
-                return {
-                    ...job,
-                    results: job.results.map(result => ({ ...result, audioUrl: resolveAudioUrl(endpoint, result.audioUrl) })),
-                }
-            },
-            async getJobSegments(jobId) {
-                const response = await fetchImpl(`${endpoint}/v1/tts/jobs/${encodeURIComponent(jobId)}/segments`)
-                const body = await readJson<{ results: TTSSynthesizeResult[] }>(response)
-                return body.results.map(result => ({ ...result, audioUrl: resolveAudioUrl(endpoint, result.audioUrl) }))
             },
             player: options.player,
         }
@@ -586,35 +619,33 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
 }
 
 function createPrefetchedSection(
-    controller: Pick<TTSController, 'getJob'>,
     segments: TTSSegment[],
-    initialJob: TTSJob,
+    state: TTSSynthesisState,
     defaultPollIntervalMs = 300,
 ): TTSPrefetchedSection {
     const resultsBySegmentId = new Map<string, TTSSynthesizeResult>()
-    let latestJob = initialJob
-    let terminal = isTerminalJob(initialJob)
+    let latestState = cloneSynthesisState(state)
+    let terminal = isTerminalSynthesisState(latestState)
 
-    const mergeResults = (job: TTSJob) => {
-        latestJob = job
-        terminal = isTerminalJob(job)
-        for (const result of job.results) {
+    const mergeResults = (nextState: TTSSynthesisState) => {
+        latestState = cloneSynthesisState(nextState)
+        terminal = isTerminalSynthesisState(latestState)
+        for (const result of latestState.results) {
             resultsBySegmentId.set(result.segmentId, result)
         }
     }
 
-    mergeResults(initialJob)
-    const refreshJob = async () => {
-        const job = await controller.getJob(initialJob.id)
-        mergeResults(job)
-        return job
+    mergeResults(state)
+    const refreshState = async () => {
+        mergeResults(state)
+        return latestState
     }
 
     return {
         segments,
-        jobId: initialJob.id,
+        id: state.id,
         total: segments.length,
-        refresh: refreshJob,
+        refresh: refreshState,
         getResult(segmentId) {
             return resultsBySegmentId.get(segmentId)
         },
@@ -627,10 +658,10 @@ function createPrefetchedSection(
                     throw new Error('TTS prefetch was aborted.')
                 }
                 if (!terminal) {
-                    await refreshJob()
+                    await refreshState()
                 } else {
-                    const failure = latestJob.failures?.find(item => item.segmentId === segmentId)
-                    const detail = failure?.error ?? latestJob.error
+                    const failure = latestState.failures?.find(item => item.segmentId === segmentId)
+                    const detail = failure?.error ?? latestState.error
                     throw new Error(detail
                         ? `TTS segment was not generated: ${segmentId}: ${detail}`
                         : `TTS segment was not generated: ${segmentId}`)
@@ -641,6 +672,198 @@ function createPrefetchedSection(
             }
         },
     }
+}
+
+function buildVoxoutSpeechRequest(
+    segment: TTSSegment,
+    provider: string,
+    voice: string | undefined,
+    synthesizeOptions: TTSSynthesizeOptions,
+    options: TTSOptions,
+): Record<string, unknown> {
+    return compactObject({
+        provider,
+        input: segment.text,
+        voice,
+        response_format: synthesizeOptions.outputFormat ?? options.outputFormat,
+        speed: normalizeSpeechSpeed(synthesizeOptions.speed ?? segment.speed ?? options.speed),
+        instructions: synthesizeOptions.stylePrompt ?? segment.stylePrompt,
+        extra_params: synthesizeOptions.extraParams,
+    })
+}
+
+function buildVoxoutEffectRequest(
+    segment: TTSSegment,
+    provider: string,
+    synthesizeOptions: TTSSynthesizeOptions,
+    options: TTSOptions,
+): Record<string, unknown> {
+    return compactObject({
+        provider,
+        instructions: segment.soundEffectPrompt ?? segment.text,
+        duration_seconds: segment.soundEffectDurationSeconds,
+        response_format: synthesizeOptions.outputFormat ?? options.outputFormat,
+        extra_params: synthesizeOptions.extraParams,
+    })
+}
+
+async function createSynthesizeResultFromAudioResponse(
+    segment: TTSSegment,
+    response: Response,
+): Promise<TTSSynthesizeResult> {
+    if (!response.ok) {
+        const detail = await response.text().catch(() => '')
+        throw new Error(`TTS request failed (${response.status}): ${detail || response.statusText}`)
+    }
+    const mimeType = response.headers.get('content-type')?.split(';')[0]?.trim() || 'audio/mpeg'
+    const audio = await response.arrayBuffer()
+    if (audio.byteLength < 1) throw new Error(`TTS provider returned empty audio for segment ${segment.id}`)
+    const extension = getAudioExtension(mimeType)
+    return {
+        segmentId: segment.id,
+        audioUrl: arrayBufferToDataUrl(audio, mimeType),
+        fileName: `${sanitizeAudioFileSegment(segment.id)}.${extension}`,
+        mimeType,
+        durationMs: 0,
+        cacheHit: false,
+    }
+}
+
+function createSynthesisState(segments: readonly TTSSegment[], provider: string): TTSSynthesisState {
+    const now = new Date().toISOString()
+    return {
+        id: createSynthesisId(),
+        status: segments.length ? 'queued' : 'done',
+        provider: normalizeVoxoutProvider(provider),
+        total: segments.length,
+        completed: 0,
+        failed: 0,
+        createdAt: now,
+        updatedAt: now,
+        results: [],
+        failures: [],
+    }
+}
+
+function runSynthesisTask(
+    state: TTSSynthesisState,
+    segments: readonly TTSSegment[],
+    options: TTSSynthesizeOptions & { concurrency?: number },
+    synthesize: (segment: TTSSegment, options?: TTSSynthesizeOptions) => Promise<TTSSynthesizeResult>,
+): void {
+    const concurrency = Math.max(1, Math.min(Math.floor(options.concurrency ?? 2), Math.max(segments.length, 1)))
+    let nextIndex = 0
+    const run = async () => {
+        state.status = segments.length ? 'running' : 'done'
+        state.updatedAt = new Date().toISOString()
+        const workers = Array.from({ length: concurrency }, async () => {
+            while (nextIndex < segments.length) {
+                const index = nextIndex
+                nextIndex += 1
+                const segment = segments[index]
+                if (!segment) continue
+                try {
+                    const result = await synthesize(segment, options)
+                    state.results.push(result)
+                    state.completed += 1
+                } catch (error) {
+                    state.failed += 1
+                    state.failures = [
+                        ...(state.failures ?? []),
+                        {
+                            index,
+                            segmentId: segment.id,
+                            speaker: segment.speaker,
+                            voice: segment.voice,
+                            textPreview: segment.text.slice(0, 80),
+                            error: getErrorMessage(error),
+                        },
+                    ]
+                } finally {
+                    state.updatedAt = new Date().toISOString()
+                }
+            }
+        })
+        await Promise.all(workers)
+        state.status = state.failed > 0
+            ? (state.completed > 0 ? 'partial' : 'failed')
+            : 'done'
+        state.error = state.status === 'failed' ? state.failures?.[0]?.error : undefined
+        state.updatedAt = new Date().toISOString()
+    }
+    void run()
+}
+
+function cloneSynthesisState(state: TTSSynthesisState): TTSSynthesisState {
+    return {
+        ...state,
+        results: cloneTTSResults(state.results),
+        failures: state.failures?.map(failure => ({ ...failure })),
+    }
+}
+
+function cloneTTSResults(results: readonly TTSSynthesizeResult[]): TTSSynthesizeResult[] {
+    return results.map(result => ({ ...result }))
+}
+
+function isSoundEffectSegment(segment: TTSSegment): boolean {
+    return Boolean(segment.soundEffectPrompt)
+        || (segment.speaker === 'sound-effect' && segment.speakerRole === 'other')
+}
+
+function normalizeVoxoutProvider(provider: string | undefined): string {
+    const value = provider?.trim()
+    if (!value || value === 'edge') return 'default'
+    return value
+}
+
+function normalizeSpeechSpeed(speed: number | undefined): number | undefined {
+    if (speed === undefined || !Number.isFinite(speed) || speed <= 0) return undefined
+    return Math.max(0.25, Math.min(4, Math.round(speed * 100) / 100))
+}
+
+function parseSpeechSpeed(value: unknown): number | undefined {
+    const numeric = typeof value === 'number' ? value : Number(value)
+    return normalizeSpeechSpeed(numeric)
+}
+
+function compactObject<T extends Record<string, unknown>>(value: T): Partial<T> {
+    return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined && item !== null && item !== '')) as Partial<T>
+}
+
+function arrayBufferToDataUrl(buffer: ArrayBuffer, mimeType: string): string {
+    return `data:${mimeType};base64,${arrayBufferToBase64(buffer)}`
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+    const bytes = new Uint8Array(buffer)
+    let binary = ''
+    const chunkSize = 0x8000
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+        const chunk = bytes.subarray(index, index + chunkSize)
+        binary += String.fromCharCode(...chunk)
+    }
+    if (typeof btoa === 'function') return btoa(binary)
+    const BufferCtor = (globalThis as unknown as { Buffer?: { from(value: Uint8Array): { toString(encoding: 'base64'): string } } }).Buffer
+    if (BufferCtor) return BufferCtor.from(bytes).toString('base64')
+    throw new Error('Base64 encoding is not available in this environment.')
+}
+
+function getAudioExtension(mimeType: string): 'mp3' | 'wav' {
+    return mimeType.includes('wav') || mimeType.includes('wave') ? 'wav' : 'mp3'
+}
+
+function sanitizeAudioFileSegment(value: string): string {
+    return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'segment'
+}
+
+function createSynthesisId(): string {
+    const random = Math.random().toString(36).slice(2, 10)
+    return `synth-${Date.now().toString(36)}-${random}`
+}
+
+function getJsonString(value: unknown): string | undefined {
+    return typeof value === 'string' && value ? value : undefined
 }
 
 function hasSpeakerAnalysisModel(sectionOptions: TTSSectionOptions, options: TTSOptions): boolean {
@@ -706,7 +929,7 @@ interface TTSSpeechPart {
     confidence?: number
     speakerHint?: string
     voice?: string
-    rate?: string
+    speed?: number
     pitch?: string
     volume?: string
     emotion?: string
@@ -760,7 +983,7 @@ async function buildMultiSpeakerSegments(
                 speakerConfidence: part.confidence,
                 text: applyProviderAudioTags(splitPart.text, part.audioTag, part.suffixAudioTag, options.provider),
                 voice: profile.voice ?? options.voice,
-                rate: part.rate ?? profile.rate,
+                speed: part.speed ?? profile.speed,
                 pitch: part.pitch ?? profile.pitch,
                 volume: part.volume ?? profile.volume,
                 emotion: part.emotion ?? profile.emotion,
@@ -806,7 +1029,7 @@ function canMergeTTSSegments(previous: TTSSegment, next: TTSSegment, maxChars: n
     if (previous.speakerGender !== next.speakerGender) return false
     if (previous.provider !== next.provider) return false
     if (previous.voice !== next.voice) return false
-    if (previous.rate !== next.rate || previous.pitch !== next.pitch || previous.volume !== next.volume) return false
+    if (previous.speed !== next.speed || previous.pitch !== next.pitch || previous.volume !== next.volume) return false
     if (previous.emotion !== next.emotion) return false
     if (previous.voicePrompt !== next.voicePrompt) return false
     if (!canMergeStylePrompts(previous.stylePrompt, next.stylePrompt)) return false
@@ -1116,7 +1339,7 @@ function normalizeAnalysisSegments(
             gender,
             confidence: segment.confidence,
             voice: segment.voice,
-            rate: segment.rate,
+            speed: parseSpeechSpeed(segment.speed),
             pitch: segment.pitch,
             volume: segment.volume,
             emotion: segment.emotion,
@@ -2402,7 +2625,7 @@ function supportsVoiceDesign(
 ): boolean {
     if (provider) {
         const providerInfo = providers.find(item => item.id === provider)
-        if (providerInfo?.capabilities?.voiceDesign) return true
+        if (providerInfo?.capabilities?.voice_design) return true
     }
     return legacySupportsVoiceDesignProvider(provider)
 }
@@ -2678,7 +2901,7 @@ function hasConcreteVoiceProfile(profile: TTSSpeakerVoiceProfile): boolean {
         profile.voice
         || profile.voicePrompt
         || profile.stylePrompt
-        || profile.rate
+        || profile.speed
         || profile.pitch
         || profile.volume
         || profile.emotion,
@@ -2859,8 +3082,8 @@ function normalizeVoiceProfileForCache(profile: TTSVoiceProfile | undefined): un
     }
 }
 
-function isTerminalJob(job: TTSJob): boolean {
-    return job.status === 'done' || job.status === 'failed' || job.status === 'partial'
+function isTerminalSynthesisState(state: TTSSynthesisState): boolean {
+    return state.status === 'done' || state.status === 'failed' || state.status === 'partial'
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -2887,9 +3110,4 @@ async function readJson<T>(response: Response): Promise<T> {
 
 function trimTrailingSlash(value: string): string {
     return value.replace(/\/+$/, '')
-}
-
-function resolveAudioUrl(endpoint: string, audioUrl: string): string {
-    if (/^https?:\/\//i.test(audioUrl)) return audioUrl
-    return `${endpoint}${audioUrl.startsWith('/') ? '' : '/'}${audioUrl}`
 }

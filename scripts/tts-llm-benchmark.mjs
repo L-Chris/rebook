@@ -408,7 +408,7 @@ function createBenchmarkFetch(fetchImpl, logs, provider) {
                 providers: [{
                     id: 'mimo',
                     name: 'Xiaomi MiMo TTS',
-                    capabilities: { voiceDesign: true },
+                    capabilities: { voice_design: true },
                 }],
             }), {
                 status: 200,
@@ -441,7 +441,7 @@ function createBenchmarkFetch(fetchImpl, logs, provider) {
 
 function isProviderCatalogUrl(value) {
     try {
-        return new URL(String(value)).pathname.endsWith('/v1/tts/providers')
+        return new URL(String(value)).pathname.endsWith('/api/providers')
     } catch {
         return false
     }

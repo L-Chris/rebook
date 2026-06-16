@@ -17995,7 +17995,9 @@ class ResourceLoader {
           }
         }
       };
-      for (const el of doc.querySelectorAll("link[href]")) await replace(el, "href");
+      for (const el of doc.querySelectorAll("link[href]")) {
+        if (isResourceLinkHrefElement(el)) await replace(el, "href");
+      }
       for (const el of doc.querySelectorAll("[href]")) {
         if (!isNavigationHrefElement(el)) await replace(el, "href");
       }
@@ -18189,6 +18191,21 @@ class ResourceLoader {
 function isNavigationHrefElement(el) {
   const name2 = el.localName.toLowerCase();
   return name2 === "a" || name2 === "area" || name2 === "link";
+}
+function isResourceLinkHrefElement(el) {
+  var _a2, _b2;
+  const name2 = el.localName.toLowerCase();
+  if (name2 !== "link") return false;
+  const relTokens = new Set(((_a2 = el.getAttribute("rel")) != null ? _a2 : "").split(/\s+/).map((token) => token.toLowerCase()).filter(Boolean));
+  if (!relTokens.size) return false;
+  if (relTokens.has("stylesheet") || relTokens.has("icon") || relTokens.has("apple-touch-icon")) {
+    return true;
+  }
+  const as = (_b2 = el.getAttribute("as")) == null ? void 0 : _b2.toLowerCase();
+  if (relTokens.has("preload") || relTokens.has("prefetch")) {
+    return !!as && as !== "document" && as !== "html";
+  }
+  return false;
 }
 class EPUBParser {
   constructor() {

@@ -103,7 +103,7 @@ async function main() {
     let audioReport = null
     if (!options.skipAudio) {
         try {
-            audioReport = await runAudioJob({
+            audioReport = await runAudioSynthesis({
                 wrapped,
                 segments,
                 options,
@@ -151,7 +151,7 @@ async function main() {
     console.log(`LLM calls: ${llmEvents.length}`)
     console.log(`Segments: ${segments.length}`)
     if (audioReport) {
-        console.log(`Audio job: ${audioReport.jobId} ${audioReport.finalStatus}`)
+        console.log(`Audio synthesis: ${audioReport.id} ${audioReport.finalStatus}`)
         console.log(`Audio missing: ${audioReport.missingSegmentIds.length}, wait risks: ${audioReport.waitRisks.length}`)
     }
     console.log(`Report: ${join(runDir, 'report.md')}`)
@@ -230,9 +230,9 @@ Options:
   --api-mode MODE             chat or responses. Default: ${DEFAULT_API_MODE}
   --out DIR                   Output run directory.
   --max-segment-chars N       Max chars per TTS segment. Default: 500.
-  --concurrency N             TTS job concurrency. Default: 1 for mimo, otherwise 2.
-  --poll-ms N                 Audio job poll interval. Default: 1000.
-  --wait-seconds N            Audio job timeout. Default: 240.
+  --concurrency N             Audio synthesis concurrency. Default: 1 for mimo, otherwise 2.
+  --poll-ms N                 Audio synthesis poll interval. Default: 1000.
+  --wait-seconds N            Audio synthesis timeout. Default: 240.
   --llm-timeout-seconds N     Per LLM phase timeout. Use 0 to disable.
   --skip-audio                Only run EPUB parsing, LLM analysis, and segment diagnostics.
 
@@ -242,7 +242,7 @@ Environment:
   OPENAI_MODEL                Optional fallback model name.
   OPENAI_API_MODE             chat or responses. Default: chat.
   REBOOK_TTS_MODEL            Optional model used for all TTS LLM phases.
-  REBOOK_TTS_CONCURRENCY      Optional TTS job concurrency.
+  REBOOK_TTS_CONCURRENCY      Optional audio synthesis concurrency.
   REBOOK_TTS_LLM_TIMEOUT_MS   Optional per LLM phase timeout.
   REBOOK_TTS_ENDPOINT         Optional TTS endpoint.
   .env and .env.local         Loaded automatically without overriding existing env vars.
@@ -552,48 +552,48 @@ function hasVoiceDesignSpeakerInfo(speaker) {
     return ['d', 'a', 'o', 'p', 'q'].some(key => typeof speaker?.[key] === 'string' && speaker[key].trim())
 }
 
-async function runAudioJob({ wrapped, segments, options, audioDir, fetchLog }) {
+async function runAudioSynthesis({ wrapped, segments, options, audioDir, fetchLog }) {
     const startedAt = Date.now()
-    const initialJob = await wrapped.tts.createJob(segments, {
+    const prefetch = await wrapped.tts.synthesizeSegments(segments, {
         provider: options.provider,
         concurrency: options.concurrency,
     })
-    const createJobMs = Date.now() - startedAt
-    const polls = [{ elapsedMs: createJobMs, job: compactJob(initialJob) }]
-    let latestJob = initialJob
+    const createTaskMs = Date.now() - startedAt
+    let latestState = await prefetch.refresh()
+    const polls = [{ elapsedMs: createTaskMs, state: compactSynthesisState(latestState) }]
     const deadline = startedAt + options.waitSeconds * 1000
 
-    while (!isTerminalJob(latestJob) && Date.now() < deadline) {
+    while (!isTerminalSynthesisState(latestState) && Date.now() < deadline) {
         await delay(options.pollIntervalMs)
-        latestJob = await wrapped.tts.getJob(initialJob.id)
-        polls.push({ elapsedMs: Date.now() - startedAt, job: compactJob(latestJob) })
+        latestState = await prefetch.refresh()
+        polls.push({ elapsedMs: Date.now() - startedAt, state: compactSynthesisState(latestState) })
     }
 
-    await writeJson(join(audioDir, 'job-initial.json'), initialJob)
-    await writeJson(join(audioDir, 'job-final.json'), latestJob)
+    await writeJson(join(audioDir, 'synthesis-initial.json'), polls[0]?.state ?? null)
+    await writeJson(join(audioDir, 'synthesis-final.json'), latestState)
     await writeJson(join(audioDir, 'polls.json'), polls)
-    await writeJson(join(audioDir, 'results.json'), latestJob.results)
+    await writeJson(join(audioDir, 'results.json'), latestState.results)
 
-    return analyzeAudioJob({
-        jobId: initialJob.id,
+    return analyzeAudioSynthesis({
+        id: prefetch.id,
         startedAt,
-        createJobMs,
-        finalJob: latestJob,
+        createTaskMs,
+        finalState: latestState,
         polls,
         segments,
         fetchLog,
     })
 }
 
-function compactJob(job) {
+function compactSynthesisState(state) {
     return {
-        id: job.id,
-        status: job.status,
-        total: job.total,
-        completed: job.completed,
-        failed: job.failed,
-        error: job.error,
-        resultSegmentIds: Array.isArray(job.results) ? job.results.map(result => result.segmentId) : [],
+        id: state.id,
+        status: state.status,
+        total: state.total,
+        completed: state.completed,
+        failed: state.failed,
+        error: state.error,
+        resultSegmentIds: Array.isArray(state.results) ? state.results.map(result => result.segmentId) : [],
     }
 }
 
@@ -647,14 +647,14 @@ function analyzePreparedSegments(blocks, segments) {
     }
 }
 
-function analyzeAudioJob({ jobId, startedAt, createJobMs, finalJob, polls, segments }) {
+function analyzeAudioSynthesis({ id, startedAt, createTaskMs, finalState, polls, segments }) {
     const resultBySegmentId = new Map()
-    for (const result of finalJob.results ?? []) {
+    for (const result of finalState.results ?? []) {
         resultBySegmentId.set(result.segmentId, result)
     }
     const firstSeenBySegmentId = new Map()
     for (const poll of polls) {
-        for (const segmentId of poll.job.resultSegmentIds) {
+        for (const segmentId of poll.state.resultSegmentIds) {
             if (!firstSeenBySegmentId.has(segmentId)) firstSeenBySegmentId.set(segmentId, poll.elapsedMs)
         }
     }
@@ -686,20 +686,20 @@ function analyzeAudioJob({ jobId, startedAt, createJobMs, finalJob, polls, segme
     }
 
     return {
-        jobId,
+        id,
         startedAt: new Date(startedAt).toISOString(),
         timings: {
-            createJobMs,
+            createTaskMs,
             totalWaitMs: polls.at(-1)?.elapsedMs ?? 0,
             firstResultMs: firstSeenValues.length ? Math.min(...firstSeenValues) : null,
             lastResultMs: firstSeenValues.length ? Math.max(...firstSeenValues) : null,
             pollCount: polls.length,
         },
-        finalStatus: finalJob.status,
-        total: finalJob.total,
-        completed: finalJob.completed,
-        failed: finalJob.failed,
-        resultCount: finalJob.results?.length ?? 0,
+        finalStatus: finalState.status,
+        total: finalState.total,
+        completed: finalState.completed,
+        failed: finalState.failed,
+        resultCount: finalState.results?.length ?? 0,
         missingSegmentIds,
         waitRisks: waitRisks.slice(0, 50),
     }
@@ -772,11 +772,12 @@ function summarizeFetchLog(logs) {
 function classifyFetchUrl(url) {
     try {
         const parsed = new URL(String(url))
-        if (/\/v1\/tts\/voices/.test(parsed.pathname)) return 'tts-voices'
-        if (/\/v1\/tts\/providers/.test(parsed.pathname)) return 'tts-providers'
-        if (/\/v1\/tts\/jobs\/[^/]+$/.test(parsed.pathname)) return 'tts-job-poll'
-        if (/\/v1\/tts\/jobs$/.test(parsed.pathname)) return 'tts-job-create'
-        if (/\/v1\/tts\/synthesize/.test(parsed.pathname)) return 'tts-synthesize'
+        if (/\/api\/providers\/[^/]+\/voices/.test(parsed.pathname) || /\/api\/voices/.test(parsed.pathname)) return 'tts-voices'
+        if (/\/api\/providers$/.test(parsed.pathname)) return 'tts-providers'
+        if (/\/v1\/audio\/speech/.test(parsed.pathname)) return 'tts-synthesize'
+        if (/\/v1\/audio\/effect/.test(parsed.pathname)) return 'tts-effect'
+        if (/\/v1\/audio\/voices\/design/.test(parsed.pathname)) return 'tts-voice-design'
+        if (/\/v1\/audio\/voices\/create/.test(parsed.pathname)) return 'tts-voice-create'
         return parsed.pathname || 'other'
     } catch {
         return 'other'
@@ -832,9 +833,9 @@ function formatAutoReport(report) {
             lines.push(`- Error: ${report.audio.error}`)
         } else {
             lines.push(
-                `- Job: ${report.audio.jobId}`,
+                `- Synthesis: ${report.audio.id}`,
                 `- Final status: ${report.audio.finalStatus}`,
-                `- Create job time: ${report.audio.timings?.createJobMs ?? 0}ms`,
+                `- Create synthesis time: ${report.audio.timings?.createTaskMs ?? 0}ms`,
                 `- Total wait time: ${report.audio.timings?.totalWaitMs ?? 0}ms`,
                 `- First result: ${formatNullableMs(report.audio.timings?.firstResultMs)}`,
                 `- Last result: ${formatNullableMs(report.audio.timings?.lastResultMs)}`,
@@ -852,7 +853,7 @@ function formatAutoReport(report) {
             }
         }
     } else {
-        lines.push('- Audio job skipped.')
+        lines.push('- Audio synthesis skipped.')
     }
 
     lines.push('', '## Fetch', '')
@@ -944,8 +945,8 @@ function pickSegment(segment) {
     }
 }
 
-function isTerminalJob(job) {
-    return job.status === 'done' || job.status === 'failed' || job.status === 'partial'
+function isTerminalSynthesisState(state) {
+    return state.status === 'done' || state.status === 'failed' || state.status === 'partial'
 }
 
 function delay(ms) {

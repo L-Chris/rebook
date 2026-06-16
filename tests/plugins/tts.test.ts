@@ -197,14 +197,9 @@ describe('TTS Plugin', () => {
     })
 
     it('sends synthesize requests to the configured backend', async () => {
-        const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-            segmentId: '0:p1:0',
-            audioUrl: '/v1/tts/audio/demo.wav',
-            fileName: 'demo.wav',
-            mimeType: 'audio/wav',
-            durationMs: 1000,
-            cacheHit: false,
-        })))
+        const fetchMock = vi.fn(async () => new Response(new Uint8Array([1, 2, 3, 4]), {
+            headers: { 'content-type': 'audio/wav' },
+        }))
         const wrapped = withTTS({
             endpoint: 'http://tts.test/',
             provider: 'mock',
@@ -212,46 +207,112 @@ describe('TTS Plugin', () => {
             fetch: fetchMock as any,
         })(book) as TTSBook
         const segment = (await wrapped.tts.prepareSection(0))[1]
-        const result = await wrapped.tts.synthesizeSegment(segment, { rate: '10%' })
+        const result = await wrapped.tts.synthesizeSegment(segment, { speed: 1.1 })
 
-        expect(fetchMock).toHaveBeenCalledWith('http://tts.test/v1/tts/synthesize', expect.objectContaining({
+        expect(fetchMock).toHaveBeenCalledWith('http://tts.test/v1/audio/speech', expect.objectContaining({
             method: 'POST',
         }))
         const body = JSON.parse(fetchMock.mock.calls[0][1].body)
         expect(body).toMatchObject({
             provider: 'mock',
             voice: 'voice-a',
-            rate: '10%',
-            segment: { id: '0:p1:0', text: 'Hello world. This is a section for speech synthesis.' },
+            input: 'Hello world. This is a section for speech synthesis.',
+            speed: 1.1,
         })
-        expect(result.audioUrl).toBe('http://tts.test/v1/tts/audio/demo.wav')
+        expect(result).toMatchObject({
+            segmentId: '0:p1:0',
+            fileName: '0-p1-0.wav',
+            mimeType: 'audio/wav',
+            cacheHit: false,
+        })
+        expect(result.audioUrl).toMatch(/^data:audio\/wav;base64,/)
     })
 
-    it('creates section jobs from prepared segments', async () => {
-        const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-            id: 'job-1',
-            status: 'queued',
-            provider: 'mock',
-            total: 4,
-            completed: 0,
-            failed: 0,
-            createdAt: '2026-01-01T00:00:00.000Z',
-            updatedAt: '2026-01-01T00:00:00.000Z',
-            results: [],
-        })))
+    it('designs a voice before speech when a segment has a voice prompt', async () => {
+        const fetchMock = vi.fn(async (url: string) => {
+            if (url.endsWith('/v1/audio/voices/design')) {
+                return new Response(JSON.stringify({
+                    object: 'list',
+                    data: [{
+                        id: 'preview-1',
+                        generated_voice_id: 'preview-1',
+                        name: 'Role voice',
+                        instructions: 'young male voice',
+                        preview_audio: 'data:audio/wav;base64,AQIDBA==',
+                        preview_mime_type: 'audio/wav',
+                        language: 'zh-CN',
+                    }],
+                }))
+            }
+            if (url.endsWith('/v1/audio/voices/create')) {
+                return new Response(JSON.stringify({
+                    id: 'voice-designed',
+                    object: 'audio.voice',
+                    name: 'Role voice',
+                }))
+            }
+            return new Response(new Uint8Array([1, 2, 3, 4]), {
+                headers: { 'content-type': 'audio/wav' },
+            })
+        })
         const wrapped = withTTS({
             endpoint: 'http://tts.test',
+            provider: 'mimo',
             fetch: fetchMock as any,
         })(book) as TTSBook
-        const job = await wrapped.tts.createSectionJob(0, { concurrency: 2 })
+        const baseSegment = (await wrapped.tts.prepareSection(0))[1]
+        const segment = {
+            ...baseSegment,
+            speaker: '林七夜',
+            voicePrompt: 'young male voice',
+            stylePrompt: 'calm and restrained',
+        }
 
-        expect(job.id).toBe('job-1')
-        expect(fetchMock).toHaveBeenCalledWith('http://tts.test/v1/tts/jobs', expect.objectContaining({
-            method: 'POST',
+        await wrapped.tts.synthesizeSegment(segment)
+
+        expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+            'http://tts.test/v1/audio/voices/design',
+            'http://tts.test/v1/audio/voices/create',
+            'http://tts.test/v1/audio/speech',
+        ])
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+            provider: 'mimo',
+            instructions: 'young male voice',
+            name: '林七夜',
+        })
+        expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toMatchObject({
+            provider: 'mimo',
+            input: 'Hello world. This is a section for speech synthesis.',
+            voice: 'voice-designed',
+            instructions: 'calm and restrained',
+        })
+        expect(JSON.parse(fetchMock.mock.calls[2][1].body)).not.toHaveProperty('voicePrompt')
+    })
+
+    it('synthesizes prepared segments with local task state', async () => {
+        const fetchMock = vi.fn(async () => new Response(new Uint8Array([1, 2, 3, 4]), {
+            headers: { 'content-type': 'audio/wav' },
         }))
-        const body = JSON.parse(fetchMock.mock.calls[0][1].body)
-        expect(body.concurrency).toBe(2)
-        expect(body.segments).toHaveLength(3)
+        const wrapped = withTTS({
+            endpoint: 'http://tts.test',
+            provider: 'mock',
+            fetch: fetchMock as any,
+        })(book) as TTSBook
+        const segments = await wrapped.tts.prepareSection(0)
+        const prefetch = await wrapped.tts.synthesizeSegments(segments, { concurrency: 2 })
+
+        expect(prefetch.id).toMatch(/^synth-/)
+        expect(prefetch.total).toBe(3)
+        await vi.waitFor(async () => {
+            expect((await prefetch.refresh()).status).toBe('done')
+        })
+        const finalState = await prefetch.refresh()
+        expect(finalState.completed).toBe(3)
+        expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+            'http://tts.test/v1/audio/speech',
+            'http://tts.test/v1/audio/speech',
+            'http://tts.test/v1/audio/speech',
+        ])
     })
 
     it('skips annotation references and footnote blocks by default', async () => {
@@ -354,7 +415,7 @@ describe('TTS Plugin', () => {
             }
         })
         const fetchMock = vi.fn(async (url: string) => {
-            if (url.includes('/v1/tts/voices')) {
+            if (url.includes('/voices')) {
                 return new Response(JSON.stringify({
                     voices: [
                         { id: 'voice-lin', name: 'Lin voice', locale: 'zh-CN', gender: 'Male', provider: 'edge' },
@@ -424,7 +485,7 @@ describe('TTS Plugin', () => {
         expect(outputObjectMock.mock.calls[0][0].schema.required).toEqual(['speakers', 'assignments'])
         expect(outputObjectMock.mock.calls[0][0].schema.properties.assignments.items.required).toEqual(['b', 'a', 'i'])
         expect(outputObjectMock.mock.calls[0][0].schema.properties.speakers.items.properties.g.enum).toEqual([0, 1, 2])
-        expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/v1/tts/voices'))).toHaveLength(1)
+        expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/voices'))).toHaveLength(1)
 
         expect(first.map(segment => ({
             text: segment.text,
@@ -620,9 +681,9 @@ describe('TTS Plugin', () => {
             endpoint: 'http://tts.test',
             provider: 'mimo',
             fetch: vi.fn(async (url: string) => {
-                if (url.includes('/v1/tts/providers')) {
+                if (url.includes('/api/providers')) {
                     return new Response(JSON.stringify({
-                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voiceDesign: true } }],
+                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voice_design: true } }],
                     }))
                 }
                 return new Response(JSON.stringify({ voices: [] }))
@@ -802,9 +863,9 @@ describe('TTS Plugin', () => {
             endpoint: 'http://tts.test',
             provider: 'mimo',
             fetch: vi.fn(async (url: string) => {
-                if (url.includes('/v1/tts/providers')) {
+                if (url.includes('/api/providers')) {
                     return new Response(JSON.stringify({
-                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voiceDesign: true } }],
+                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voice_design: true } }],
                     }))
                 }
                 return new Response(JSON.stringify({ voices: [] }))
@@ -909,9 +970,9 @@ describe('TTS Plugin', () => {
             endpoint: 'http://tts.test',
             provider: 'mimo',
             fetch: vi.fn(async (url: string) => {
-                if (url.includes('/v1/tts/providers')) {
+                if (url.includes('/api/providers')) {
                     return new Response(JSON.stringify({
-                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voiceDesign: true } }],
+                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voice_design: true } }],
                     }))
                 }
                 return new Response(JSON.stringify({ voices: [] }))
@@ -1001,7 +1062,7 @@ describe('TTS Plugin', () => {
                 },
             })
         const fetchMock = vi.fn(async (url: string) => {
-            if (url.includes('/v1/tts/voices')) {
+            if (url.includes('/voices')) {
                 return new Response(JSON.stringify({
                     voices: [
                         { id: '冰糖', name: '冰糖', locale: 'zh-CN', gender: 'Female', provider: 'mimo' },
@@ -1031,7 +1092,7 @@ describe('TTS Plugin', () => {
         const secondSegmentPrompt = JSON.parse(generateTextMock.mock.calls[5][0].prompt)
         expect(generateTextMock.mock.calls[0][0].system).toContain('场景规划阶段')
         expect(firstScenePrompt.blocks[0].u).toBeUndefined()
-        expect(firstPlanPrompt.voiceDesign).toBeUndefined()
+        expect(firstPlanPrompt.voice_design).toBeUndefined()
         expect(firstPlanPrompt.voices).toBeUndefined()
         expect(firstPlanPrompt.nextSpeakerId).toBe(1)
         expect(generateTextMock.mock.calls[1][0].system).toContain('角色规划和语音规划引擎')
@@ -1061,7 +1122,7 @@ describe('TTS Plugin', () => {
         expect(firstSegmentPrompt.knownSpeakers.some((speaker: any) => speaker.d || speaker.v)).toBe(false)
         expect(secondPlanPrompt.knownSpeakers.some((speaker: any) => speaker.d || speaker.v)).toBe(false)
         expect(secondSegmentPrompt.knownSpeakers.some((speaker: any) => speaker.d || speaker.v)).toBe(false)
-        expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/v1/tts/voices'))).toBe(false)
+        expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/voices'))).toBe(false)
         expect(first.find(segment => segment.speakerId === 1)).toMatchObject({
             speaker: '林七夜',
             speakerRole: 'character',
@@ -1114,16 +1175,16 @@ describe('TTS Plugin', () => {
                 },
             })
         const fetchMock = vi.fn(async (url: string) => {
-            if (url.includes('/v1/tts/providers')) {
+            if (url.includes('/api/providers')) {
                 return new Response(JSON.stringify({
                     providers: [{
                         id: 'design-lab',
                         name: 'Design Lab',
-                        capabilities: { voiceDesign: true },
+                        capabilities: { voice_design: true },
                     }],
                 }))
             }
-            if (url.includes('/v1/tts/voices')) {
+            if (url.includes('/voices')) {
                 return new Response(JSON.stringify({
                     voices: [
                         { id: 'voice-a', name: 'Voice A', locale: 'zh-CN', gender: 'Male', provider: 'design-lab' },
@@ -1146,7 +1207,7 @@ describe('TTS Plugin', () => {
         const planPrompt = JSON.parse(generateTextMock.mock.calls[1][0].prompt)
         const segmentPrompt = JSON.parse(generateTextMock.mock.calls[2][0].prompt)
         expect(scenePrompt.blocks[0].u).toBeUndefined()
-        expect(planPrompt.voiceDesign).toBeUndefined()
+        expect(planPrompt.voice_design).toBeUndefined()
         expect(planPrompt.voices).toBeUndefined()
         expect(planPrompt.blocks[0].u).toBeUndefined()
         expect(generateTextMock.mock.calls[0][0].system).toContain('场景规划阶段')
@@ -1170,7 +1231,7 @@ describe('TTS Plugin', () => {
             speaker: '林七夜',
             voicePrompt: expectedRoleCard,
         })
-        expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/v1/tts/voices'))).toBe(false)
+        expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/voices'))).toBe(false)
     })
 
     it('uses scene planning to guide speaker planning and voice design cards', async () => {
@@ -1230,9 +1291,9 @@ describe('TTS Plugin', () => {
             endpoint: 'http://tts.test',
             provider: 'mimo',
             fetch: vi.fn(async (url: string) => {
-                if (url.includes('/v1/tts/providers')) {
+                if (url.includes('/api/providers')) {
                     return new Response(JSON.stringify({
-                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voiceDesign: true } }],
+                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voice_design: true } }],
                     }))
                 }
                 return new Response(JSON.stringify({}))
@@ -1296,12 +1357,12 @@ describe('TTS Plugin', () => {
                 },
             })
         const fetchMock = vi.fn(async (url: string) => {
-            if (url.includes('/v1/tts/providers')) {
+            if (url.includes('/api/providers')) {
                 return new Response(JSON.stringify({
                     providers: [{
                         id: 'design-lab',
                         name: 'Design Lab',
-                        capabilities: { voiceDesign: true },
+                        capabilities: { voice_design: true },
                     }],
                 }))
             }
@@ -1359,9 +1420,9 @@ describe('TTS Plugin', () => {
             endpoint: 'http://tts.test',
             provider: 'mimo',
             fetch: vi.fn(async (url: string) => {
-                if (url.includes('/v1/tts/providers')) {
+                if (url.includes('/api/providers')) {
                     return new Response(JSON.stringify({
-                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voiceDesign: true } }],
+                        providers: [{ id: 'mimo', name: 'MiMo', capabilities: { voice_design: true } }],
                     }))
                 }
                 return new Response(JSON.stringify({ voices: [] }))
@@ -1894,7 +1955,7 @@ describe('TTS Plugin', () => {
         const wrapped = withTTS({
             endpoint: 'http://tts.test',
             fetch: vi.fn(async (url: string) => {
-                if (url.includes('/v1/tts/voices')) return new Response(JSON.stringify({ voices }))
+                if (url.includes('/voices')) return new Response(JSON.stringify({ voices }))
                 return new Response(JSON.stringify({}))
             }) as any,
             model: mockModel as any,
@@ -2002,39 +2063,9 @@ describe('TTS Plugin', () => {
     })
 
     it('prefetches section audio and waits for a generated segment', async () => {
-        const fetchMock = vi.fn(async (url: string) => {
-            if (url.endsWith('/v1/tts/jobs')) {
-                return new Response(JSON.stringify({
-                    id: 'job-1',
-                    status: 'running',
-                    provider: 'mock',
-                    total: 3,
-                    completed: 0,
-                    failed: 0,
-                    createdAt: '2026-01-01T00:00:00.000Z',
-                    updatedAt: '2026-01-01T00:00:00.000Z',
-                    results: [],
-                }))
-            }
-            return new Response(JSON.stringify({
-                id: 'job-1',
-                status: 'done',
-                provider: 'mock',
-                total: 3,
-                completed: 3,
-                failed: 0,
-                createdAt: '2026-01-01T00:00:00.000Z',
-                updatedAt: '2026-01-01T00:00:01.000Z',
-                results: [{
-                    segmentId: '0:p1:0',
-                    audioUrl: '/v1/tts/audio/p1.wav',
-                    fileName: 'p1.wav',
-                    mimeType: 'audio/wav',
-                    durationMs: 1000,
-                    cacheHit: false,
-                }],
-            }))
-        })
+        const fetchMock = vi.fn(async () => new Response(new Uint8Array([1, 2, 3, 4]), {
+            headers: { 'content-type': 'audio/wav' },
+        }))
         const wrapped = withTTS({
             endpoint: 'http://tts.test',
             provider: 'mock',
@@ -2045,23 +2076,15 @@ describe('TTS Plugin', () => {
         const result = await prefetch.waitForSegment('0:p1:0', { pollIntervalMs: 1 })
 
         expect(prefetch.segments).toHaveLength(3)
-        expect(prefetch.jobId).toBe('job-1')
-        expect(result.audioUrl).toBe('http://tts.test/v1/tts/audio/p1.wav')
-        expect(fetchMock).toHaveBeenCalledTimes(2)
+        expect(prefetch.id).toMatch(/^synth-/)
+        expect(result.audioUrl).toMatch(/^data:audio\/wav;base64,/)
+        expect(fetchMock.mock.calls.some(([url]) => String(url) === 'http://tts.test/v1/audio/speech')).toBe(true)
     })
 
     it('delegates playback to the configured audio player', async () => {
-        const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-            id: 'job-1',
-            status: 'queued',
-            provider: 'mock',
-            total: 3,
-            completed: 0,
-            failed: 0,
-            createdAt: '2026-01-01T00:00:00.000Z',
-            updatedAt: '2026-01-01T00:00:00.000Z',
-            results: [],
-        })))
+        const fetchMock = vi.fn(async () => new Response(new Uint8Array([1, 2, 3, 4]), {
+            headers: { 'content-type': 'audio/wav' },
+        }))
         const player = {
             playPrefetchedSection: vi.fn(async () => {}),
             stop: vi.fn(),

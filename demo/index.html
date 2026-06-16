@@ -604,7 +604,7 @@
         <div id="tts-fields">
             <div class="setting-stack">
                 <input type="text" id="tts-endpoint-input" placeholder="TTS Endpoint">
-                <input type="text" id="tts-provider-input" placeholder="Provider (Default: edge)">
+                <input type="text" id="tts-provider-input" placeholder="Provider (Default: default)">
                 <input type="text" id="tts-sound-effect-provider-input" placeholder="Sound effect provider (Default: elevenlabs)">
                 <input type="text" id="tts-voice-input" placeholder="Voice (Default: zh-CN-XiaoyiNeural)">
             </div>
@@ -613,8 +613,8 @@
                 <input type="number" id="tts-segment-chars-input" min="80" max="2000" value="500" title="Max chars per TTS segment">
             </div>
             <div class="setting-row">
-                <label>Rate</label>
-                <input type="text" id="tts-rate-input" value="+0%" placeholder="+0%" title="Speech rate, for example -10%, +20%">
+                <label>Speed</label>
+                <input type="number" id="tts-speed-input" min="0.25" max="4" step="0.05" value="1" placeholder="1" title="Speech speed, for example 0.9 or 1.1">
             </div>
             <div class="setting-row">
                 <label>Multi voice</label>
@@ -761,7 +761,7 @@
         const ttsSoundEffectProviderInput = document.getElementById('tts-sound-effect-provider-input')
         const ttsVoiceInput = document.getElementById('tts-voice-input')
         const ttsSegmentCharsInput = document.getElementById('tts-segment-chars-input')
-        const ttsRateInput = document.getElementById('tts-rate-input')
+        const ttsSpeedInput = document.getElementById('tts-speed-input')
         const ttsMultiSpeakerCheck = document.getElementById('tts-multi-speaker-check')
         const ttsMultiSpeakerFields = document.getElementById('tts-multi-speaker-fields')
         const ttsAIBaseUrlInput = document.getElementById('tts-ai-baseurl-input')
@@ -810,11 +810,11 @@
             prefetchPages: '2',
             tts: false,
             ttsEndpoint: 'http://127.0.0.1:4177',
-            ttsProvider: 'edge',
+            ttsProvider: 'default',
             ttsSoundEffectProvider: 'elevenlabs',
             ttsVoice: 'zh-CN-XiaoyiNeural',
             ttsSegmentChars: '500',
-            ttsRate: '+0%',
+            ttsSpeed: '1',
             ttsMultiSpeaker: false,
             ttsAIBaseURL: '',
             ttsAIAPIKey: '',
@@ -877,7 +877,7 @@
                 ttsSoundEffectProvider: ttsSoundEffectProviderInput.value,
                 ttsVoice: ttsVoiceInput.value,
                 ttsSegmentChars: ttsSegmentCharsInput.value,
-                ttsRate: ttsRateInput.value,
+                ttsSpeed: ttsSpeedInput.value,
                 ttsMultiSpeaker: ttsMultiSpeakerCheck.checked,
                 ttsAIBaseURL: ttsAIBaseUrlInput.value,
                 ttsAIAPIKey: ttsAIAPIKeyInput.value,
@@ -917,7 +917,7 @@
             ttsSoundEffectProviderInput.value = config.ttsSoundEffectProvider ?? defaultConfig.ttsSoundEffectProvider
             ttsVoiceInput.value = config.ttsVoice ?? defaultConfig.ttsVoice
             ttsSegmentCharsInput.value = config.ttsSegmentChars ?? defaultConfig.ttsSegmentChars
-            ttsRateInput.value = config.ttsRate ?? defaultConfig.ttsRate
+            ttsSpeedInput.value = config.ttsSpeed ?? defaultConfig.ttsSpeed
             ttsMultiSpeakerCheck.checked = !!config.ttsMultiSpeaker
             ttsAIBaseUrlInput.value = config.ttsAIBaseURL ?? defaultConfig.ttsAIBaseURL
             ttsAIAPIKeyInput.value = config.ttsAIAPIKey ?? defaultConfig.ttsAIAPIKey
@@ -1202,7 +1202,7 @@
                     provider: ttsProviderInput.value.trim() || undefined,
                     soundEffectProvider: ttsSoundEffectProviderInput.value.trim() || defaultConfig.ttsSoundEffectProvider,
                     voice: getTTSVoiceValue(),
-                    rate: ttsRateInput.value.trim() || undefined,
+                    speed: Number(ttsSpeedInput.value) || undefined,
                     maxSegmentChars: Number(ttsSegmentCharsInput.value) || Number(defaultConfig.ttsSegmentChars),
                     player: ttsPlayer,
                 }
@@ -2036,7 +2036,7 @@
             ttsSoundEffectProviderInput,
             ttsVoiceInput,
             ttsSegmentCharsInput,
-            ttsRateInput,
+            ttsSpeedInput,
             ttsMultiSpeakerCheck,
             ttsAIBaseUrlInput,
             ttsAIAPIKeyInput,
@@ -2104,7 +2104,7 @@
                 maxSegmentChars: Number(ttsSegmentCharsInput.value) || Number(defaultConfig.ttsSegmentChars),
                 provider: ttsProviderInput.value.trim() || undefined,
                 soundEffectProvider: ttsSoundEffectProviderInput.value.trim() || defaultConfig.ttsSoundEffectProvider,
-                rate: ttsRateInput.value.trim() || undefined,
+                speed: Number(ttsSpeedInput.value) || undefined,
                 concurrency: isMimoTTSProvider() ? 1 : 2,
             }
             if (ttsMultiSpeakerCheck.checked) {
