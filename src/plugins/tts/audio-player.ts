@@ -176,7 +176,7 @@ async function playWithAudioContext(options: PlayWithAudioContextOptions): Promi
             const event = { segment, index, total: segments.length, result: loaded.result }
             schedulePlaybackCallback(options.state, context, startAt, () => options.playbackOptions.onSegmentStart?.(event))
             options.playbackOptions.onSegmentQueued?.(event)
-            lastEnded = scheduleAudioBuffer(options.state, context, loaded.buffer, startAt)
+            lastEnded = scheduleAudioBuffer(options.state, context, loaded.buffer, startAt, segment)
                 .then(() => options.playbackOptions.onSegmentEnd?.(event))
             scheduledCount += 1
             nextStartTime = startAt + loaded.buffer.duration
@@ -213,7 +213,7 @@ async function playWithAudioElement(options: {
             const event = { segment, index, total: options.prefetch.segments.length, result }
             options.playbackOptions.onSegmentQueued?.(event)
             options.playbackOptions.onSegmentStart?.(event)
-            await playAudioElement(options.state, AudioCtor, result.audioUrl)
+            await playAudioElement(options.state, AudioCtor, result.audioUrl, segment)
             options.playbackOptions.onSegmentEnd?.(event)
         } catch (error) {
             if (options.signal.aborted || options.state.stopped) throw error
@@ -282,11 +282,23 @@ function scheduleAudioBuffer(
     context: AudioContext,
     buffer: AudioBuffer,
     startAt: number,
+    segment: TTSSegment,
 ): Promise<void> {
     return new Promise((resolve, reject) => {
         const source = context.createBufferSource()
         source.buffer = buffer
-        source.connect(context.destination)
+        const gain = context.createGain()
+        gain.gain.value = getSegmentGain(segment)
+        const pan = normalizeSegmentPan(segment.pan)
+        source.connect(gain)
+        if (pan !== 0 && typeof context.createStereoPanner === 'function') {
+            const panner = context.createStereoPanner()
+            panner.pan.value = pan
+            gain.connect(panner)
+            panner.connect(context.destination)
+        } else {
+            gain.connect(context.destination)
+        }
         state.sources.add(source)
         source.addEventListener('ended', () => {
             state.sources.delete(source)
@@ -305,9 +317,11 @@ function playAudioElement(
     state: BrowserPlaybackState,
     AudioCtor: new (url?: string) => HTMLAudioElement,
     url: string,
+    segment: TTSSegment,
 ): Promise<void> {
     return new Promise((resolve, reject) => {
         const audio = new AudioCtor(url)
+        audio.volume = Math.min(1, getSegmentGain(segment))
         state.audio = audio
         audio.addEventListener('ended', () => {
             if (state.audio === audio) state.audio = undefined
@@ -319,6 +333,19 @@ function playAudioElement(
         }, { once: true })
         audio.play().catch(reject)
     })
+}
+
+function getSegmentGain(segment: TTSSegment): number {
+    const volumeDb = typeof segment.volumeDb === 'number' && Number.isFinite(segment.volumeDb)
+        ? Math.max(-60, Math.min(12, segment.volumeDb))
+        : 0
+    return Math.max(0, Math.min(4, 10 ** (volumeDb / 20)))
+}
+
+function normalizeSegmentPan(value: number | undefined): number {
+    return typeof value === 'number' && Number.isFinite(value)
+        ? Math.max(-1, Math.min(1, value))
+        : 0
 }
 
 type AudioContextConstructor = new () => AudioContext

@@ -37,6 +37,7 @@ import {
     type TTSCompactSpeakerModelRequest,
     type TTSCompactSpeakerModelRequestKind,
     type TTSCompactSpeakerPlan,
+    type TTSCompactSpeakerTier,
     type TTSCompactVoice,
 } from './tts/speaker-schemas'
 export { createBrowserTTSAudioPlayer } from './tts/audio-player'
@@ -119,6 +120,8 @@ export interface TTSProviderInfo {
 
 export type TTSSpeakerRole = 'narrator' | 'character' | 'other'
 export type TTSSpeakerGender = 'male' | 'female' | 'unknown'
+export type TTSSpeakerTier = TTSCompactSpeakerTier
+export type TTSMixLayer = 'foreground' | 'midground' | 'background'
 
 export interface TTSSpeakerVoiceProfile {
     speakerId?: number
@@ -126,6 +129,7 @@ export interface TTSSpeakerVoiceProfile {
     speaker?: string
     role?: TTSSpeakerRole
     gender?: TTSSpeakerGender
+    tier?: TTSSpeakerTier
     speakerHint?: string
     speed?: number
     pitch?: string
@@ -133,6 +137,9 @@ export interface TTSSpeakerVoiceProfile {
     emotion?: string
     voicePrompt?: string
     stylePrompt?: string
+    mixLayer?: TTSMixLayer
+    volumeDb?: number
+    pan?: number
 }
 
 export type TTSVoiceProfileEntry = string | TTSSpeakerVoiceProfile
@@ -152,6 +159,7 @@ export interface TTSSpeakerVoiceAssignment {
     speaker: string
     role?: TTSSpeakerRole
     gender?: TTSSpeakerGender
+    tier?: TTSSpeakerTier
     voice?: string
     speakerHint?: string
     voicePrompt?: string
@@ -174,6 +182,7 @@ export interface TTSSpeakerAnalysisSegment {
     speaker?: string
     role?: TTSSpeakerRole
     gender?: TTSSpeakerGender
+    tier?: TTSSpeakerTier
     confidence?: number
     voice?: string
     speed?: number
@@ -182,6 +191,9 @@ export interface TTSSpeakerAnalysisSegment {
     emotion?: string
     voicePrompt?: string
     stylePrompt?: string
+    mixLayer?: TTSMixLayer
+    volumeDb?: number
+    pan?: number
 }
 
 export interface TTSSpeakerAnalysisRequest {
@@ -230,9 +242,13 @@ export interface TTSSegment {
     speaker: string
     speakerRole?: TTSSpeakerRole
     speakerGender?: TTSSpeakerGender
+    speakerTier?: TTSSpeakerTier
     speakerConfidence?: number
     text: string
     voice?: string
+    mixLayer?: TTSMixLayer
+    volumeDb?: number
+    pan?: number
     speed?: number
     pitch?: string
     volume?: string
@@ -401,10 +417,12 @@ interface ResolvedTTSSectionOptions extends TTSSectionOptions {
     speakerVoiceState: TTSSpeakerVoiceState
     providerCatalog?: () => Promise<TTSProviderInfo[]>
     voiceCatalog?: () => Promise<TTSVoice[]>
+    voiceDesigner?: (profile: TTSSpeakerVoiceProfile) => Promise<string>
 }
 
 interface TTSSpeakerVoiceState {
     assignments: Map<string, TTSSpeakerVoiceProfile>
+    voiceDesigns: Map<string, Promise<string>>
     nextByBucket: Map<string, number>
     speakerIdsByKey: Map<string, number>
     speakerNamesById: Map<number, string>
@@ -423,6 +441,7 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
         const speakerVoiceStates = new Map<string, TTSSpeakerVoiceState>()
         const voiceCatalogCache = new Map<string, Promise<TTSVoice[]>>()
         const voiceDesignCache = new Map<string, Promise<string>>()
+        const voiceDesignLimiter = createAsyncLimiter(3)
         let providerCatalogCache: Promise<TTSProviderInfo[]> | undefined
 
         const getProviderCatalog = (): Promise<TTSProviderInfo[]> => {
@@ -501,6 +520,11 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
                 speakerVoiceState,
                 providerCatalog: getProviderCatalog,
                 voiceCatalog: () => getVoiceCatalog(provider),
+                voiceDesigner: profile => designVoicePrompt({
+                    speaker: profile.speaker,
+                    voicePrompt: profile.voicePrompt,
+                    sampleText: profile.speakerHint,
+                }, normalizeVoxoutProvider(provider ?? options.provider ?? 'default')),
                 maxSegmentChars: sectionOptions.maxSegmentChars ?? options.maxSegmentChars,
                 includeFootnotes: sectionOptions.includeFootnotes ?? options.includeFootnotes,
                 includeAnnotationRefs: sectionOptions.includeAnnotationRefs ?? options.includeAnnotationRefs,
@@ -509,56 +533,69 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
             return promise
         }
 
-        const designVoice = async (segment: TTSSegment, provider: string): Promise<string> => {
-            const prompt = normalizeVoicePrompt(segment.voicePrompt)
+        const designVoicePrompt = async (
+            input: { speaker?: string, voicePrompt?: string, sampleText?: string },
+            provider: string,
+        ): Promise<string> => {
+            const prompt = normalizeVoicePrompt(input.voicePrompt)
             if (!prompt) {
-                return segment.voice ?? options.voice ?? ''
+                return ''
             }
             const key = JSON.stringify({
                 provider,
                 prompt,
-                speaker: segment.speaker,
-                sample: segment.text.slice(0, 120),
+                speaker: input.speaker,
             })
             const cached = voiceDesignCache.get(key)
             if (cached) return cached
-            const promise = (async () => {
+            const promise = voiceDesignLimiter(async () => {
                 const designResponse = await fetchImpl(`${endpoint}/v1/audio/voices/design`, {
                     method: 'POST',
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify(compactObject({
                         provider,
                         instructions: prompt,
-                        input: segment.text.slice(0, 240),
-                        name: segment.speaker && segment.speaker !== NARRATOR_SPEAKER ? segment.speaker : undefined,
+                        input: input.sampleText?.slice(0, 240),
+                        name: input.speaker && input.speaker !== NARRATOR_SPEAKER ? input.speaker : undefined,
                     })),
                 })
                 const design = await readJson<{ data?: Array<Record<string, unknown>> }>(designResponse)
                 const preview = Array.isArray(design.data) ? design.data[0] : undefined
-                if (!preview) throw new Error(`TTS voice design returned no previews for segment ${segment.id}`)
+                if (!preview) throw new Error(`TTS voice design returned no previews for ${input.speaker ?? 'speaker'}`)
                 const createResponse = await fetchImpl(`${endpoint}/v1/audio/voices/create`, {
                     method: 'POST',
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify(compactObject({
                         provider,
                         generated_voice_id: getJsonString(preview.generated_voice_id) ?? getJsonString(preview.id),
-                        name: getJsonString(preview.name) ?? segment.speaker,
+                        name: getJsonString(preview.name) ?? input.speaker,
                         instructions: getJsonString(preview.instructions) ?? prompt,
-                        preview_audio: getJsonString(preview.preview_audio),
-                        preview_mime_type: getJsonString(preview.preview_mime_type),
                         language: getJsonString(preview.language),
                         labels: {
                             source: 'rebook',
-                            speaker: segment.speaker,
+                            speaker: input.speaker,
                         },
                     })),
                 })
                 const voice = await readJson<{ id?: string }>(createResponse)
-                if (!voice.id) throw new Error(`TTS voice create returned no voice id for segment ${segment.id}`)
+                if (!voice.id) throw new Error(`TTS voice create returned no voice id for ${input.speaker ?? 'speaker'}`)
                 return voice.id
-            })()
+            }).catch(error => {
+                if (voiceDesignCache.get(key) === promise) {
+                    voiceDesignCache.delete(key)
+                }
+                throw error
+            })
             voiceDesignCache.set(key, promise)
             return promise
+        }
+
+        const designVoice = async (segment: TTSSegment, provider: string): Promise<string> => {
+            return designVoicePrompt({
+                speaker: segment.speaker,
+                voicePrompt: segment.voicePrompt,
+                sampleText: segment.text,
+            }, provider)
         }
 
         const synthesizeSegment = async (segment: TTSSegment, synthesizeOptions: TTSSynthesizeOptions = {}): Promise<TTSSynthesizeResult> => {
@@ -568,9 +605,9 @@ export function withTTS(options: TTSOptions = {}): RebookPlugin {
                 : synthesizeOptions.provider ?? segment.provider ?? options.provider ?? 'default')
             const voice = effect
                 ? undefined
-                : segment.voicePrompt
-                    ? await designVoice(segment, provider)
-                    : synthesizeOptions.voice ?? segment.voice ?? options.voice
+                : segment.voice ?? synthesizeOptions.voice ?? (
+                    segment.voicePrompt ? await designVoice(segment, provider) : options.voice
+                )
             const response = await fetchImpl(`${endpoint}${effect ? '/v1/audio/effect' : '/v1/audio/speech'}`, {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
@@ -831,6 +868,35 @@ function compactObject<T extends Record<string, unknown>>(value: T): Partial<T> 
     return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined && item !== null && item !== '')) as Partial<T>
 }
 
+function createAsyncLimiter(maxConcurrent: number) {
+    const limit = Math.max(1, Math.floor(maxConcurrent))
+    const queue: Array<() => void> = []
+    let active = 0
+
+    const drain = () => {
+        if (active >= limit) return
+        const next = queue.shift()
+        if (!next) return
+        active += 1
+        next()
+    }
+
+    return function runLimited<T>(task: () => Promise<T> | T): Promise<T> {
+        return new Promise<T>((resolve, reject) => {
+            queue.push(() => {
+                Promise.resolve()
+                    .then(task)
+                    .then(resolve, reject)
+                    .finally(() => {
+                        active -= 1
+                        drain()
+                    })
+            })
+            drain()
+        })
+    }
+}
+
 function arrayBufferToDataUrl(buffer: ArrayBuffer, mimeType: string): string {
     return `data:${mimeType};base64,${arrayBufferToBase64(buffer)}`
 }
@@ -904,6 +970,9 @@ async function buildSectionSegments(book: Book, sectionIndex: number, options: R
                 speaker,
                 text: part.text,
                 voice: options.voice,
+                mixLayer: 'foreground',
+                volumeDb: 0,
+                pan: 0,
                 batchable: isBatchableNarratorBlock(block),
             })
         }
@@ -926,6 +995,7 @@ interface TTSSpeechPart {
     speaker: string
     role: TTSSpeakerRole
     gender: TTSSpeakerGender
+    tier?: TTSSpeakerTier
     confidence?: number
     speakerHint?: string
     voice?: string
@@ -939,6 +1009,9 @@ interface TTSSpeechPart {
     suffixAudioTag?: string
     muted?: boolean
     soundEffect?: boolean
+    mixLayer?: TTSMixLayer
+    volumeDb?: number
+    pan?: number
 }
 
 async function buildMultiSpeakerSegments(
@@ -964,6 +1037,8 @@ async function buildMultiSpeakerSegments(
             const partIndex = partCounters.get(counterKey) ?? 0
             partCounters.set(counterKey, partIndex + 1)
             const profile: TTSSpeakerVoiceProfile = part.soundEffect ? {} : resolveSpeakerVoiceProfile(part, options)
+            const speakerTier = resolveSpeakerTier(part, profile)
+            const mix = resolveSpeechPartMix(part, profile, speakerTier)
             const stylePrompt = combineStylePrompts(part.stylePrompt, profile.stylePrompt, part.audioTag, part.suffixAudioTag)
             segments.push({
                 id: `${sectionIndex}:${part.block.id}:${part.start}:${partIndex}`,
@@ -980,6 +1055,7 @@ async function buildMultiSpeakerSegments(
                 speaker: part.speaker,
                 speakerRole: profile.role ?? part.role,
                 speakerGender: profile.gender ?? part.gender,
+                speakerTier,
                 speakerConfidence: part.confidence,
                 text: applyProviderAudioTags(splitPart.text, part.audioTag, part.suffixAudioTag, options.provider),
                 voice: profile.voice ?? options.voice,
@@ -989,6 +1065,9 @@ async function buildMultiSpeakerSegments(
                 emotion: part.emotion ?? profile.emotion,
                 voicePrompt: profile.voicePrompt ?? part.voicePrompt,
                 stylePrompt,
+                mixLayer: mix.mixLayer,
+                volumeDb: mix.volumeDb,
+                pan: mix.pan,
                 batchable: part.role === 'narrator' && isBatchableNarratorBlock(part.block),
             })
         }
@@ -1029,6 +1108,8 @@ function canMergeTTSSegments(previous: TTSSegment, next: TTSSegment, maxChars: n
     if (previous.speakerGender !== next.speakerGender) return false
     if (previous.provider !== next.provider) return false
     if (previous.voice !== next.voice) return false
+    if (previous.speakerTier !== next.speakerTier) return false
+    if (previous.mixLayer !== next.mixLayer || previous.volumeDb !== next.volumeDb || previous.pan !== next.pan) return false
     if (previous.speed !== next.speed || previous.pitch !== next.pitch || previous.volume !== next.volume) return false
     if (previous.emotion !== next.emotion) return false
     if (previous.voicePrompt !== next.voicePrompt) return false
@@ -1043,6 +1124,122 @@ function canMergeAcrossBlocks(previous: TTSSegment, next: TTSSegment): boolean {
         && next.batchable === true
         && previous.blockType === 'paragraph'
         && next.blockType === 'paragraph'
+}
+
+function resolveSpeakerTier(part: TTSSpeechPart, profile: TTSSpeakerVoiceProfile): TTSSpeakerTier | undefined {
+    const explicit = normalizeSpeakerTier(profile.tier ?? part.tier)
+    if (explicit) return explicit
+    if (part.role === 'narrator') return 'S'
+    if (part.soundEffect) return undefined
+    if (part.role === 'other') return 'C'
+    if (part.speakerIds?.length) return 'B'
+    if (isLikelyBackgroundSpeakerName(part.speaker)) return 'C'
+    return 'B'
+}
+
+function resolveSpeechPartMix(
+    part: TTSSpeechPart,
+    profile: TTSSpeakerVoiceProfile,
+    tier: TTSSpeakerTier | undefined,
+): Pick<TTSSegment, 'mixLayer' | 'volumeDb' | 'pan'> {
+    if (part.soundEffect) return resolveSoundEffectMix(part)
+    const explicitLayer = normalizeMixLayer(part.mixLayer ?? profile.mixLayer)
+    const mixLayer = explicitLayer ?? getDefaultMixLayer(part, tier)
+    const explicitVolumeDb = typeof part.volumeDb === 'number' && Number.isFinite(part.volumeDb)
+        ? part.volumeDb
+        : typeof profile.volumeDb === 'number' && Number.isFinite(profile.volumeDb)
+            ? profile.volumeDb
+            : undefined
+    const volumeDb = explicitVolumeDb != null
+        ? clampVolumeDb(explicitVolumeDb)
+        : getDefaultVolumeDb(mixLayer)
+    const explicitPan = typeof part.pan === 'number' && Number.isFinite(part.pan)
+        ? part.pan
+        : typeof profile.pan === 'number' && Number.isFinite(profile.pan)
+            ? profile.pan
+            : undefined
+    const pan = explicitPan != null
+        ? clampPan(explicitPan)
+        : getDefaultPan(part, profile, mixLayer)
+    return { mixLayer, volumeDb, pan }
+}
+
+function resolveSoundEffectMix(part: TTSSpeechPart): Pick<TTSSegment, 'mixLayer' | 'volumeDb' | 'pan'> {
+    const explicitLayer = normalizeMixLayer(part.mixLayer)
+    const mixLayer = explicitLayer ?? 'midground'
+    const volumeDb = typeof part.volumeDb === 'number' && Number.isFinite(part.volumeDb)
+        ? clampVolumeDb(part.volumeDb)
+        : getDefaultSoundEffectVolumeDb(mixLayer)
+    const pan = typeof part.pan === 'number' && Number.isFinite(part.pan)
+        ? clampPan(part.pan)
+        : getDefaultSoundEffectPan(part, mixLayer)
+    return { mixLayer, volumeDb, pan }
+}
+
+function getDefaultSoundEffectVolumeDb(layer: TTSMixLayer): number {
+    if (layer === 'foreground') return -2
+    if (layer === 'midground') return -6
+    return -12
+}
+
+function getDefaultSoundEffectPan(part: TTSSpeechPart, layer: TTSMixLayer): number {
+    if (layer === 'foreground') return 0
+    const spread = layer === 'midground' ? 0.28 : 0.55
+    const key = `${part.block.id}:${part.start}:${part.soundEffectPrompt ?? part.text}`
+    return stablePan(key, spread)
+}
+
+function getDefaultMixLayer(part: TTSSpeechPart, tier: TTSSpeakerTier | undefined): TTSMixLayer {
+    if (part.role === 'narrator' || tier === 'S' || tier === 'A') return 'foreground'
+    if (tier === 'B') return 'midground'
+    if (tier === 'C' || part.role === 'other') return 'background'
+    return isLikelyBackgroundSpeakerName(part.speaker) ? 'background' : 'midground'
+}
+
+function getDefaultVolumeDb(layer: TTSMixLayer): number {
+    if (layer === 'foreground') return 0
+    if (layer === 'midground') return -4
+    return -8
+}
+
+function getDefaultPan(part: TTSSpeechPart, profile: TTSSpeakerVoiceProfile, layer: TTSMixLayer): number {
+    if (layer === 'foreground') return 0
+    const spread = layer === 'midground' ? 0.18 : 0.42
+    const key = `${profile.speakerId ?? part.speakerId ?? part.speaker}:${part.role}`
+    return stablePan(key, spread)
+}
+
+function stablePan(key: string, spread: number): number {
+    let hash = 2166136261
+    for (let index = 0; index < key.length; index += 1) {
+        hash ^= key.charCodeAt(index)
+        hash = Math.imul(hash, 16777619)
+    }
+    const normalized = ((hash >>> 0) % 2001) / 1000 - 1
+    return roundMixValue(clampPan(normalized * spread))
+}
+
+function isLikelyBackgroundSpeakerName(speaker: string | undefined): boolean {
+    if (!speaker) return false
+    return /路人|群众|围观|同学|学生|乘客|店员|街坊|邻居|人群|众人|有人|男声|女声|广播|系统|警察|士兵|职员/.test(speaker)
+}
+
+function normalizeMixLayer(layer: unknown): TTSMixLayer | undefined {
+    return layer === 'foreground' || layer === 'midground' || layer === 'background'
+        ? layer
+        : undefined
+}
+
+function clampVolumeDb(value: number): number {
+    return roundMixValue(Math.max(-60, Math.min(12, value)))
+}
+
+function clampPan(value: number): number {
+    return Math.max(-1, Math.min(1, value))
+}
+
+function roundMixValue(value: number): number {
+    return Math.round(value * 1000) / 1000
 }
 
 function isNarratorBatchSegment(segment: TTSSegment): boolean {
@@ -1248,6 +1445,7 @@ async function analyzeWithModelSpeakerAnalyzer(
             options.speakerAnalysis,
         )
         applyCompactSpeakerInfos(plan.speakers, options.speakerVoiceState, request.knownScenes)
+        startSpeakerVoiceDesigns(options.speakerVoiceState, options.voiceDesigner)
         request = {
             ...request,
             nextSpeakerId: options.speakerVoiceState.nextSpeakerId,
@@ -1298,6 +1496,11 @@ async function analyzeWithModelSpeakerAnalyzer(
         repairSystem,
         options.speakerAnalysis,
     )
+    if (voiceDesign && analysis.speakers?.length) {
+        applyCompactSpeakerInfos(analysis.speakers, options.speakerVoiceState, request.knownScenes)
+        startSpeakerVoiceDesigns(options.speakerVoiceState, options.voiceDesigner)
+    }
+    await settleSpeakerVoiceDesigns(options.speakerVoiceState)
     return normalizeCompactAnalysisSegments(
         readableByCompactBlockId,
         splitCompactQuoteNarrationSegments(request, analysis),
@@ -1337,6 +1540,7 @@ function normalizeAnalysisSegments(
             speaker: normalizeSpeakerName(segment.speaker, role, gender),
             role,
             gender,
+            tier: normalizeSpeakerTier(segment.tier),
             confidence: segment.confidence,
             voice: segment.voice,
             speed: parseSpeechSpeed(segment.speed),
@@ -1345,6 +1549,13 @@ function normalizeAnalysisSegments(
             emotion: segment.emotion,
             voicePrompt: normalizeVoicePrompt(segment.voicePrompt),
             stylePrompt: normalizeVoicePrompt(segment.stylePrompt),
+            mixLayer: normalizeMixLayer(segment.mixLayer),
+            volumeDb: typeof segment.volumeDb === 'number' && Number.isFinite(segment.volumeDb)
+                ? clampVolumeDb(segment.volumeDb)
+                : undefined,
+            pan: typeof segment.pan === 'number' && Number.isFinite(segment.pan)
+                ? clampPan(segment.pan)
+                : undefined,
         })
     }
     return parts
@@ -1559,6 +1770,7 @@ function normalizeCompactSpeakerAnalysisOutput(
                 n: item.n,
                 r: item.r,
                 g: item.g,
+                t: normalizeSpeakerTier(item.t),
                 v: typeof item.v === 'string' ? item.v : undefined,
                 d: typeof item.d === 'string' ? normalizeVoicePrompt(item.d) : undefined,
                 a: typeof item.a === 'string' ? normalizeVoicePrompt(item.a) : undefined,
@@ -1581,17 +1793,24 @@ function normalizeCompactSpeakerAnalysisOutput(
         if (
             typeof item.b !== 'number'
             || typeof item.a !== 'number'
-            || typeof item.i !== 'number'
             || !Number.isFinite(item.b)
             || !Number.isFinite(item.a)
-            || !Number.isFinite(item.i)
-        ) throw new Error(`TTS speaker analysis assignment ${index} must include numeric b, a, and i.`)
+        ) throw new Error(`TTS speaker analysis assignment ${index} must include numeric b and a.`)
+        const itemKind = item.k === 's' || item.k === 'm' ? item.k : undefined
+        const itemSpeakerId = typeof item.i === 'number' && Number.isFinite(item.i)
+            ? item.i
+            : itemKind === 's'
+                ? NARRATOR_SPEAKER_ID
+                : undefined
+        if (itemSpeakerId == null) {
+            throw new Error(`TTS speaker analysis assignment ${index} must include numeric i.`)
+        }
         const block = blockById.get(item.b)
         const atom = block?.u?.find(value => value.a === item.a)
         if (!atom) throw new Error(`TTS speaker analysis assignment ${index} references unknown atom ${item.b}:${item.a}.`)
         const speakerId = atom && block?.m === 1 && atom.q !== 1
             ? NARRATOR_SPEAKER_ID
-            : Number(item.i)
+            : itemSpeakerId
         const speakerIds = speakerId === NARRATOR_SPEAKER_ID
             ? undefined
             : normalizeSimultaneousSpeakerIds(item.is, speakerId)
@@ -1602,10 +1821,14 @@ function normalizeCompactSpeakerAnalysisOutput(
             i: speakerId,
             is: speakerIds,
             c: typeof item.c === 'number' ? item.c : undefined,
-            k: item.k === 's' || item.k === 'm' ? item.k : undefined,
+            k: itemKind,
             p: typeof item.p === 'string' ? normalizeAudioTag(item.p) : undefined,
             fx: item.k === 's' && typeof item.fx === 'string' ? normalizeSoundEffectPrompt(item.fx) : undefined,
             dur: item.k === 's' ? normalizeSoundEffectDurationSeconds(item.dur) : undefined,
+            l: item.k === 's' ? normalizeCompactMixLayerCode(item.l) : undefined,
+            pan: typeof item.pan === 'number' && Number.isFinite(item.pan)
+                ? clampPan(item.pan)
+                : undefined,
         })
     }
     if (expectedAtoms > 0 && !(output as { assignments: unknown[] }).assignments.length) {
@@ -1637,6 +1860,7 @@ function normalizeCompactSpeakerInfos(values: readonly unknown[]): TTSCompactSpe
             n: item.n,
             r: item.r,
             g: item.g,
+            t: normalizeSpeakerTier(item.t),
             v: typeof item.v === 'string' ? item.v : undefined,
             d: typeof item.d === 'string' ? normalizeVoicePrompt(item.d) : undefined,
             a: typeof item.a === 'string' ? normalizeVoicePrompt(item.a) : undefined,
@@ -1841,6 +2065,7 @@ function compactSpeakerForModel(speaker: TTSCompactKnownSpeaker): TTSCompactKnow
         n: speaker.n,
         r: speaker.r,
         g: speaker.g,
+        t: speaker.t,
         h: speaker.h,
         s: speaker.s,
     }
@@ -2178,6 +2403,7 @@ function mergeCompactSpeakerInfo(
         ...existing,
         ...next,
         v: next.v ?? existing?.v,
+        t: next.t ?? existing?.t,
         d: next.d ?? existing?.d,
         a: next.a ?? existing?.a,
         o: next.o ?? existing?.o,
@@ -2216,6 +2442,8 @@ function normalizeCompactAnalysisSegments(
                 options.soundEffectProvider ?? 'elevenlabs',
                 segment.fx,
                 segment.dur,
+                expandCompactMixLayer(segment.l),
+                segment.pan,
             ))
             continue
         }
@@ -2239,11 +2467,13 @@ function normalizeCompactAnalysisSegments(
                 speaker: group.speaker,
                 role: 'character',
                 gender: group.gender,
+                tier: group.tier,
                 confidence: segment.c,
                 speakerHint: group.speakerHint,
                 voicePrompt: group.voicePrompt,
                 stylePrompt: segment.p,
                 audioTag: segment.p,
+                pan: segment.pan,
             })
             continue
         }
@@ -2255,6 +2485,9 @@ function normalizeCompactAnalysisSegments(
         const gender = speakerId === NARRATOR_SPEAKER_ID
             ? 'unknown'
             : normalizeSpeakerGender(expandCompactSpeakerGender(speakerInfo?.g) ?? knownProfile?.gender)
+        const tier = speakerId === NARRATOR_SPEAKER_ID
+            ? 'S'
+            : normalizeSpeakerTier(speakerInfo?.t ?? knownProfile?.tier)
         const speaker = normalizeSpeakerName(
             speakerInfo?.n ?? (speakerId == null ? undefined : speakerVoiceState.speakerNamesById.get(speakerId)),
             role,
@@ -2270,12 +2503,14 @@ function normalizeCompactAnalysisSegments(
             speaker,
             role,
             gender,
-            voice: speakerInfo?.v,
+            tier,
+            voice: speakerInfo?.v ?? knownProfile?.voice,
             confidence: segment.c,
             speakerHint: speakerInfo?.h ?? knownProfile?.speakerHint,
             voicePrompt: normalizeVoicePrompt((speakerInfo && buildCompactSpeakerRoleCard(speakerInfo)) ?? knownProfile?.voicePrompt),
             stylePrompt: combineStylePrompts(knownProfile?.stylePrompt, segment.p),
             audioTag: segment.p,
+            pan: segment.pan,
         })
     }
     return absorbSpeechCueParts(repairSpeechPartCoverage(Array.from(readableByCompactBlockId.values()), parts))
@@ -2384,6 +2619,8 @@ function createSoundEffectPart(
     provider: string,
     prompt?: string,
     durationSeconds?: number,
+    mixLayer?: TTSMixLayer,
+    pan?: number,
 ): TTSSpeechPart {
     return {
         block,
@@ -2400,6 +2637,8 @@ function createSoundEffectPart(
         gender: 'unknown',
         confidence: 1,
         soundEffect: true,
+        mixLayer,
+        pan,
     }
 }
 
@@ -2407,10 +2646,16 @@ function buildSimultaneousSpeakerGroup(
     speakerIds: readonly number[],
     speakersById: ReadonlyMap<number, TTSCompactSpeakerInfo>,
     speakerVoiceState: TTSSpeakerVoiceState,
-): Pick<TTSSpeechPart, 'speaker' | 'gender' | 'speakerHint' | 'voicePrompt'> {
+): Pick<TTSSpeechPart, 'speaker' | 'gender' | 'tier' | 'speakerHint' | 'voicePrompt'> {
     const names = speakerIds.map(id => getSpeakerNameForGroup(id, speakersById, speakerVoiceState))
     const genders = speakerIds.map(id => getSpeakerGenderForGroup(id, speakersById, speakerVoiceState))
     const gender = genders.length && genders.every(item => item === genders[0]) ? genders[0]! : 'unknown'
+    const tiers = speakerIds.map(id => getSpeakerTierForGroup(id, speakersById, speakerVoiceState))
+    const tier = tiers.some(item => item === 'S') ? 'S'
+        : tiers.some(item => item === 'A') ? 'A'
+            : tiers.some(item => item === 'B') ? 'B'
+                : tiers.some(item => item === 'C') ? 'C'
+                    : undefined
     const cards = speakerIds
         .map(id => getSpeakerVoicePromptForGroup(id, speakersById, speakerVoiceState))
         .filter((value): value is string => Boolean(value))
@@ -2423,6 +2668,7 @@ function buildSimultaneousSpeakerGroup(
     return {
         speaker: groupName,
         gender,
+        tier,
         speakerHint: `多人同声：${groupName}`,
         voicePrompt,
     }
@@ -2446,6 +2692,15 @@ function getSpeakerGenderForGroup(
     return expandCompactSpeakerGender(speakersById.get(id)?.g)
         ?? speakerVoiceState.assignments.get(`speaker:${id}`)?.gender
         ?? 'unknown'
+}
+
+function getSpeakerTierForGroup(
+    id: number,
+    speakersById: ReadonlyMap<number, TTSCompactSpeakerInfo>,
+    speakerVoiceState: TTSSpeakerVoiceState,
+): TTSSpeakerTier | undefined {
+    return normalizeSpeakerTier(speakersById.get(id)?.t)
+        ?? speakerVoiceState.assignments.get(`speaker:${id}`)?.tier
 }
 
 function getSpeakerVoicePromptForGroup(
@@ -2485,6 +2740,7 @@ function createMutedSpeechCuePart(
         speaker: NARRATOR_SPEAKER,
         role: 'narrator',
         gender: 'unknown',
+        tier: 'S',
         confidence: 1,
         audioTag: normalizeAudioTag(audioTag),
         muted: true,
@@ -2592,6 +2848,25 @@ function expandCompactSpeakerGender(gender: TTSCompactSpeakerInfo['g']): TTSSpea
     if (gender === 1) return 'male'
     if (gender === 2) return 'female'
     if (gender === 0) return 'unknown'
+    return undefined
+}
+
+function normalizeSpeakerTier(tier: unknown): TTSSpeakerTier | undefined {
+    return tier === 'S' || tier === 'A' || tier === 'B' || tier === 'C'
+        ? tier
+        : undefined
+}
+
+function normalizeCompactMixLayerCode(layer: unknown): TTSCompactSpeakerAnalysisSegment['l'] {
+    return layer === 'f' || layer === 'm' || layer === 'b'
+        ? layer
+        : undefined
+}
+
+function expandCompactMixLayer(layer: TTSCompactSpeakerAnalysisSegment['l']): TTSMixLayer | undefined {
+    if (layer === 'f') return 'foreground'
+    if (layer === 'm') return 'midground'
+    if (layer === 'b') return 'background'
     return undefined
 }
 
@@ -2747,6 +3022,7 @@ function createNarratorPart(block: TextBlock, readable: ReadableBlockText, start
         speaker: NARRATOR_SPEAKER,
         role: 'narrator',
         gender: 'unknown',
+        tier: 'S',
         confidence: 1,
     }
 }
@@ -2800,6 +3076,7 @@ function buildCompactSpeakerRoleCard(
     const speakerScenes = getCompactScenesForSpeaker(speaker, knownScenes)
     const identity = [
         `${speaker.n}，${formatCompactGender(speaker.g)}性`,
+        speaker.t && `声音层级：${formatSpeakerTier(speaker.t)}`,
         speaker.a && `年龄感：${speaker.a}`,
         speaker.o && `身份：${speaker.o}`,
         speaker.p && `性格底色：${speaker.p}`,
@@ -2810,7 +3087,9 @@ function buildCompactSpeakerRoleCard(
     const voiceDesign = [
         speaker.q && `音色设计：${speaker.q}`,
         ...speakerScenes.map(scene => scene.q && `场景声音约束(${scene.n})：${scene.q}`).filter(Boolean),
-        '如果原文声音信息不足，可基于角色年龄、身份和性格合理补足音色质感',
+        speaker.t && getSpeakerTierVoiceGuidance(speaker.t),
+        '如果原文声音信息不足，可基于角色年龄、身份、性格、对白措辞和场景人群画像合理补足音色质感',
+        '匿名/路人角色也要保留从对白推断出的年龄感、身份和口吻；同一场景的路人不要设计成彼此近似的通用声音',
         '必须和同篇章其他核心角色保持可听辨差异',
     ].filter(Boolean).join('；')
     const guidance = [
@@ -2855,6 +3134,20 @@ function formatCompactGender(gender: TTSCompactSpeakerInfo['g']): string {
     return '未知'
 }
 
+function formatSpeakerTier(tier: TTSSpeakerTier): string {
+    if (tier === 'S') return 'S级主角/视角人物'
+    if (tier === 'A') return 'A级重要配角'
+    if (tier === 'B') return 'B级临时关键角色'
+    return 'C级路人/短暂角色'
+}
+
+function getSpeakerTierVoiceGuidance(tier: TTSSpeakerTier): string {
+    if (tier === 'S') return 'S级角色需要稳定、清晰、有可记忆的身份特征，允许更强辨识度'
+    if (tier === 'A') return 'A级角色需要独立可辨，但不要压过主角'
+    if (tier === 'B') return 'B级角色以剧情信息清晰为先，使用中等辨识度'
+    return 'C级路人是功能性声音，保持自然常规、情绪幅度小，不抢主角注意力'
+}
+
 function resolveSpeakerVoiceProfile(part: TTSSpeechPart, options: ResolvedTTSSectionOptions): TTSSpeakerVoiceProfile {
     const profile = mergeVoiceProfiles(getDefaultMultiSpeakerVoiceProfile(options.provider), options.voiceProfile)
     const identity = resolveSpeakerIdentity(part, options.speakerVoiceState)
@@ -2873,6 +3166,7 @@ function resolveSpeakerVoiceProfile(part: TTSSpeechPart, options: ResolvedTTSSec
             voice: part.voice,
             role: profilePart.role,
             gender: profilePart.gender,
+            tier: existing?.tier ?? part.tier,
             speakerHint: part.speakerHint,
             voicePrompt: part.voicePrompt,
             stylePrompt: part.stylePrompt,
@@ -2891,6 +3185,7 @@ function resolveSpeakerVoiceProfile(part: TTSSpeechPart, options: ResolvedTTSSec
         ...existing,
         speakerId: identity.id,
         speaker: identity.speaker,
+        tier: existing?.tier ?? part.tier,
     }
     options.speakerVoiceState.assignments.set(stateKey, resolved)
     return resolved
@@ -2998,6 +3293,7 @@ function getSpeakerVoiceState(states: Map<string, TTSSpeakerVoiceState>, key: st
     if (existing) return existing
     const state: TTSSpeakerVoiceState = {
         assignments: new Map(),
+        voiceDesigns: new Map(),
         nextByBucket: new Map(),
         speakerIdsByKey: new Map([[getSpeakerIdentityKey('narrator', NARRATOR_SPEAKER_LABEL), NARRATOR_SPEAKER_ID]]),
         speakerNamesById: new Map([[NARRATOR_SPEAKER_ID, NARRATOR_SPEAKER_LABEL]]),
@@ -3018,6 +3314,7 @@ function applyCompactSpeakerInfos(
         if (id == null || id <= NARRATOR_SPEAKER_ID || !name) continue
         const role = expandCompactSpeakerRole(speaker.r) ?? 'character'
         const gender = expandCompactSpeakerGender(speaker.g) ?? 'unknown'
+        const tier = normalizeSpeakerTier(speaker.t)
         state.speakerNamesById.set(id, name)
         state.speakerIdsByKey.set(getSpeakerIdentityKey(role, name), id)
         state.nextSpeakerId = Math.max(state.nextSpeakerId, id + 1)
@@ -3031,12 +3328,44 @@ function applyCompactSpeakerInfos(
                 speaker: name,
                 role,
                 gender,
+                tier: tier ?? existing?.tier,
                 speakerHint: speaker.h ?? existing?.speakerHint,
                 voice: speaker.v ?? existing?.voice,
                 voicePrompt: voicePrompt ?? existing?.voicePrompt,
             })
         }
     }
+}
+
+function startSpeakerVoiceDesigns(
+    state: TTSSpeakerVoiceState,
+    designer: ResolvedTTSSectionOptions['voiceDesigner'],
+): void {
+    if (!designer) return
+    for (const [key, profile] of state.assignments) {
+        if (profile.voice || !profile.voicePrompt || state.voiceDesigns.has(key)) continue
+        const promise = designer(profile).then(voice => {
+            if (voice) {
+                const current = state.assignments.get(key)
+                if (current && !current.voice) {
+                    state.assignments.set(key, { ...current, voice })
+                }
+            }
+            return voice
+        }).catch(error => {
+            if (state.voiceDesigns.get(key) === promise) {
+                state.voiceDesigns.delete(key)
+            }
+            throw error
+        })
+        state.voiceDesigns.set(key, promise)
+        void promise.catch(() => {})
+    }
+}
+
+async function settleSpeakerVoiceDesigns(state: TTSSpeakerVoiceState): Promise<void> {
+    if (!state.voiceDesigns.size) return
+    await Promise.allSettled([...state.voiceDesigns.values()])
 }
 
 function getKnownSpeakerAssignments(state: TTSSpeakerVoiceState): TTSSpeakerVoiceAssignment[] {
@@ -3049,6 +3378,7 @@ function getKnownSpeakerAssignments(state: TTSSpeakerVoiceState): TTSSpeakerVoic
                 speaker,
                 role: profile?.role,
                 gender: profile?.gender,
+                tier: profile?.tier,
                 voice: profile?.voice,
                 speakerHint: profile?.speakerHint,
                 voicePrompt: profile?.voicePrompt,
@@ -3065,6 +3395,7 @@ function getCompactKnownSpeakerAssignments(state: TTSSpeakerVoiceState): TTSComp
             n: assignment.speaker,
             r: compactSpeakerRole(assignment.role),
             g: compactSpeakerGender(assignment.gender),
+            t: assignment.tier,
             h: assignment.speakerHint,
         })),
     ]

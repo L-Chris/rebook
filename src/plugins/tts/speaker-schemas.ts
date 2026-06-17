@@ -1,6 +1,8 @@
 import type { TextBlock } from '../../core/types'
 import type { TTSCompactSpeakerAnalysisMode } from './speaker-prompts'
 
+export type TTSCompactSpeakerTier = 'S' | 'A' | 'B' | 'C'
+
 export interface TTSCompactSpeakerAttribution {
     b: number
     a: number
@@ -11,6 +13,8 @@ export interface TTSCompactSpeakerAttribution {
     p?: string
     fx?: string
     dur?: number
+    l?: 'f' | 'm' | 'b'
+    pan?: number
 }
 
 export interface TTSCompactSpeakerAnalysisSegment {
@@ -24,6 +28,8 @@ export interface TTSCompactSpeakerAnalysisSegment {
     p?: string
     fx?: string
     dur?: number
+    l?: 'f' | 'm' | 'b'
+    pan?: number
 }
 
 export interface TTSCompactSpeakerAnalysisOutput {
@@ -79,6 +85,7 @@ export interface TTSCompactSpeakerInfo {
     n: string
     r?: 'n' | 'c' | 'o'
     g?: 0 | 1 | 2
+    t?: TTSCompactSpeakerTier
     v?: string
     d?: string
     a?: string
@@ -180,6 +187,8 @@ export const speakerAnalysisSchema = {
                     p: { type: 'string', maxLength: 24, description: '可选短表演标签，如 轻笑、低声、叹气；仅在文本有明确证据时输出。' },
                     fx: { type: 'string', maxLength: 220, description: 'ElevenLabs sound effect prompt；仅 k=s 时输出。用简洁英文描述声音来源、强度、环境和质感，不写对白或旁白。' },
                     dur: { type: 'number', description: 'sound effect duration seconds；仅 k=s 时输出。根据声音持续时间给 0.5-30 秒，拿不准可省略。' },
+                    l: { type: 'string', enum: ['f', 'm', 'b'], description: 'sound effect mix layer；仅 k=s 时输出。f=foreground 近处关键音效，m=midground 中景事件音，b=background 远处/环境音。' },
+                    pan: { type: 'number', description: 'optional stereo pan；-1=left，0=center，1=right。仅当原文明确声源在左/右/身后偏侧/远处偏侧等方位时输出；不确定则省略，由代码自动分配。' },
                 },
                 required: ['b', 'a', 'i'],
                 additionalProperties: false,
@@ -230,6 +239,8 @@ export const voiceDesignSpeakerAnalysisSchema = {
                     p: { type: 'string', maxLength: 24, description: '可选短表演标签，如 轻笑、低声、叹气；仅在文本有明确证据时输出。' },
                     fx: { type: 'string', maxLength: 220, description: 'ElevenLabs sound effect prompt；仅 k=s 时输出。用简洁英文描述声音来源、强度、环境和质感，不写对白或旁白。' },
                     dur: { type: 'number', description: 'sound effect duration seconds；仅 k=s 时输出。根据声音持续时间给 0.5-30 秒，拿不准可省略。' },
+                    l: { type: 'string', enum: ['f', 'm', 'b'], description: 'sound effect mix layer；仅 k=s 时输出。f=foreground 近处关键音效，m=midground 中景事件音，b=background 远处/环境音。' },
+                    pan: { type: 'number', description: 'optional stereo pan；-1=left，0=center，1=right。仅当原文明确声源在左/右/身后偏侧/远处偏侧等方位时输出；不确定则省略，由代码自动分配。' },
                 },
                 required: ['b', 'a', 'i'],
                 additionalProperties: false,
@@ -248,11 +259,12 @@ export const speakerPlanItemSchema = {
         n: { type: 'string', description: '稳定角色名。' },
         r: { type: 'string', enum: ['c', 'o'], description: 'role code：c=角色对白，o=其他/无法归属声音。' },
         g: { type: 'number', enum: [0, 1, 2], description: 'gender code：0=未知，1=男，2=女。' },
-        a: { type: 'string', maxLength: 80, description: '年龄或年龄感。' },
-        o: { type: 'string', maxLength: 120, description: '职业、身份或社会角色。' },
-        p: { type: 'string', maxLength: 160, description: '性格、气质和行为特征。' },
-        q: { type: 'string', maxLength: 220, description: '声音设计短语；覆盖音色/质感、语速/节奏、音高/能量、口吻/表演，核心角色要有清晰辨识度。' },
-        h: { type: 'string', maxLength: 260, description: '说话人识别线索/上下文，不是声音风格。' },
+        t: { type: 'string', enum: ['S', 'A', 'B', 'C'], description: '声音/叙事层级：S=主角/视角人物，A=重要配角，B=临时关键角色，C=路人/短暂角色；当前 TTS 只支持单人音色，最低层级为 C，所有层级仍保留 voice design。' },
+        a: { type: 'string', maxLength: 80, description: '年龄或年龄感；可从对白措辞、称呼、价值判断和场景人群画像保守推断。' },
+        o: { type: 'string', maxLength: 120, description: '职业、身份或社会角色；匿名/路人也尽量写可复用身份，如 年长路人、围观学生、年轻护士。' },
+        p: { type: 'string', maxLength: 160, description: '性格、气质和行为特征；可从对白语气和轮次功能推断。' },
+        q: { type: 'string', maxLength: 220, description: '声音设计短语；覆盖音色/质感、语速/节奏、音高/能量、口吻/表演；匿名/路人也要和同场景其他人可听辨地区分。' },
+        h: { type: 'string', maxLength: 260, description: '说话人识别线索/上下文，不是声音风格；匿名/路人要写对白线索和轮次线索。' },
         s: {
             type: 'array',
             description: '角色主要出现或用于推断身份的 scene id；来自 knownScenes。',
