@@ -372,6 +372,28 @@ export {
     createBrowserTTSAudioPlayer,
     withTTS,
 } from './plugins/tts'
+export {
+    createAIChatController,
+    createAIChatTools,
+    withAIChat,
+} from './plugins/ai-chat'
+export type {
+    AIChatAskOptions,
+    AIChatBook,
+    AIChatContextOptions,
+    AIChatContextResult,
+    AIChatController,
+    AIChatMessage,
+    AIChatOptions,
+    AIChatReadingContext,
+    AIChatResponse,
+    AIChatRole,
+    AIChatSearchOptions,
+    AIChatSectionContent,
+    AIChatSectionContentOptions,
+    AIChatTOCItem,
+    AIChatToolContext,
+} from './plugins/ai-chat'
 export type {
     BrowserTTSAudioPlayerOptions,
     TTSAudioPlaybackErrorEvent,
