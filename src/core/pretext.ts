@@ -249,6 +249,7 @@ export function extractDocumentBlocks(
         const normalized = type === 'pre' ? normalizePreSegments(segments) : normalizeSegments(segments)
         if (!normalized.some(segment => segment.text.trim())) return
         const preset = getBlockPreset(type, baseStyle, depth)
+        const blockStyle = { ...preset.style, ...parseInlineStyle(node.attrs?.style) }
         const attrs = getBlockAttrs(node)
         const id = attrs?.id ?? `${type}-${nextId++}`
         blocks.push({
@@ -256,12 +257,12 @@ export function extractDocumentBlocks(
             type,
             depth,
             attrs,
-            style: preset.style,
+            style: blockStyle,
             blockGapBefore: preset.blockGapBefore,
             blockGapAfter: preset.blockGapAfter,
             segments: normalized.map(segment => ({
                 ...segment,
-                style: { ...preset.style, ...segment.style },
+                style: { ...blockStyle, ...segment.style },
                 source: {
                     ...segment.source,
                     nodeType: segment.source?.nodeType ?? type,
@@ -672,6 +673,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
         }
         const richInline = block.prepared
         if (!richInline) continue
+        const textLineHeight = getBlockLineHeight(block.block, prepared.baseStyle.fontSize, lineHeight)
         walkRichInlineLineRanges(richInline, blockInlineSize, (range) => {
             const materialized = materializeRichInlineLineRange(richInline, range)
             const fragments = materialized.fragments.map((fragment, index): LineSegmentRange => {
@@ -699,11 +701,11 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
                 text: joinFragments(fragments),
                 width: materialized.width,
                 top,
-                height: lineHeight,
+                height: textLineHeight,
                 inlineOffset,
                 segments: fragments,
             })
-            top += lineHeight
+            top += textLineHeight
         })
 
         if (lines.length > blockStartCount) top += block.block.blockGapAfter ?? blockGap
@@ -1226,7 +1228,7 @@ function getTableCellAlign(node: DocumentNode): TextTableCell['align'] | undefin
     const styleAlign = parseTextAlignFromStyle(node.attrs?.style)
     if (styleAlign) return styleAlign
     const align = node.attrs?.align?.toLowerCase()
-    if (align) return parseTextAlign(align)
+    if (align) return parseBoxAlign(align)
     const className = node.attrs?.class?.toLowerCase()
     if (className?.split(/\s+/).includes('center')) return 'center'
     if (className?.split(/\s+/).includes('right')) return 'end'
@@ -1596,7 +1598,7 @@ function getBlockLineHeight(block: TextBlock, fallbackFontSize: number, fallback
     const lineHeight = block.style?.lineHeight
     return typeof lineHeight === 'number' && Number.isFinite(lineHeight) && lineHeight > 0
         ? fontSize * lineHeight
-        : fallbackLineHeight
+        : fontSize * (fallbackLineHeight / fallbackFontSize)
 }
 
 function getBlockAnchorAttrs(node: DocumentNode): Readonly<Record<string, string>> | undefined {
@@ -1893,6 +1895,7 @@ function parseInlineStyle(style?: string): TextStyle {
         else if (name === 'font-style') result.fontStyle = value
         else if (name === 'font-variant') result.fontVariant = value
         else if (name === 'line-height') result.lineHeight = parseLineHeight(value)
+        else if (name === 'text-align') result.textAlign = parseTextAlign(value)
         else if (name === 'letter-spacing') result.letterSpacing = parseCSSPixels(value)
         else if (name === 'color') result.color = value
         else if (name === 'text-decoration') result.textDecoration = value
@@ -1909,7 +1912,7 @@ function parseImageStyle(style: string | undefined): ImageStyle {
         else if (name === 'max-width') result.maxWidth = parseCSSDimension(value)
         else if (name === 'max-height') result.maxHeight = parseCSSDimension(value)
         else if (name === 'object-fit' && isObjectFit(value)) result.objectFit = value
-        else if (name === 'text-align') result.align = parseTextAlign(value)
+        else if (name === 'text-align') result.align = parseBoxAlign(value)
         else if (name === 'margin-left' && value === 'auto') result.align = 'center'
         else if (name === 'margin-right' && value === 'auto' && result.align === 'center') result.align = 'center'
     }
@@ -1928,7 +1931,7 @@ function parsePercentWidth(value?: string): number | undefined {
 
 function parseTextAlignFromStyle(style?: string): ImageStyle['align'] | undefined {
     const textAlign = parseStyleDeclarations(style).find(([name]) => name === 'text-align')?.[1]
-    return textAlign ? parseTextAlign(textAlign) : undefined
+    return textAlign ? parseBoxAlign(textAlign) : undefined
 }
 
 
@@ -1955,11 +1958,17 @@ function isObjectFit(value: string): value is NonNullable<ImageStyle['objectFit'
         || value === 'scale-down'
 }
 
-function parseTextAlign(value: string): ImageStyle['align'] | undefined {
+function parseTextAlign(value: string): TextStyle['textAlign'] | undefined {
     if (value === 'center') return 'center'
     if (value === 'right' || value === 'end') return 'end'
     if (value === 'left' || value === 'start') return 'start'
+    if (value === 'justify') return 'justify'
     return undefined
+}
+
+function parseBoxAlign(value: string): ImageStyle['align'] | undefined {
+    const align = parseTextAlign(value)
+    return align === 'justify' ? undefined : align
 }
 
 function parseLineHeight(value: string): number | undefined {

@@ -613,10 +613,18 @@ export class BrowserRenderer implements BrowserContentEngine {
     }
 
     private resolveHrefFallback(href: string): ResolvedNavigation | null {
-        const [path] = href.split('#')
+        const [path, fragment] = href.split('#')
         const index = this.sections.findIndex(section =>
-            typeof section.id === 'string' && (section.id === path || section.id.endsWith(path)))
-        return index < 0 ? null : { index }
+            String(section.id) === path
+            || (typeof section.id === 'string' && section.id.endsWith(path)))
+        if (index >= 0) return { index, anchor: fragment }
+
+        const sectionIndex = Number(path)
+        if (Number.isInteger(sectionIndex) && sectionIndex >= 0 && sectionIndex < this.sections.length) {
+            return { index: sectionIndex, anchor: fragment }
+        }
+
+        return null
     }
 
     private rebuildTOCPositions(): void {

@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+
+set -u
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+if ! command -v codegraph >/dev/null 2>&1; then
+    printf '%s\n' '[codegraph] codegraph command not found; skipped index sync.' >&2
+    exit 0
+fi
+
+if [ ! -d "$repo_root/.codegraph" ]; then
+    printf '%s\n' '[codegraph] .codegraph not found; skipped index sync.' >&2
+    exit 0
+fi
+
+printf '%s\n' '[codegraph] syncing index...' >&2
+if codegraph sync -q "$repo_root"; then
+    printf '%s\n' '[codegraph] index synced.' >&2
+else
+    printf '[codegraph] sync failed; run `%s` manually.\n' "codegraph sync \"$repo_root\"" >&2
+fi
+
+exit 0

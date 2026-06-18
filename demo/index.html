@@ -91,6 +91,12 @@
             transition: background 0.18s ease;
         }
 
+        #viewer .rebook-search-current {
+            background: rgba(112, 181, 255, 0.22);
+            box-shadow: -6px 0 0 rgba(0, 123, 255, 0.55);
+            transition: background 0.18s ease;
+        }
+
         /* Main content */
         main {
             flex: 1;
@@ -460,6 +466,156 @@
         .debug-entry:last-child {
             border-bottom: 0;
         }
+
+        .search-panel {
+            flex: 0 0 380px;
+            width: 380px;
+            min-width: 0;
+            background: #fff;
+            border-left: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transition: flex-basis 0.3s ease, width 0.3s ease, border-color 0.3s ease;
+        }
+
+        .search-panel.hidden {
+            flex-basis: 0;
+            width: 0;
+            border-left-color: transparent;
+        }
+
+        .search-panel-inner {
+            width: 380px;
+            min-width: 380px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .search-panel-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            border-bottom: 1px solid #e5e5e5;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .search-panel-header button {
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+
+        .search-panel-title {
+            margin-right: auto;
+        }
+
+        .search-controls {
+            display: grid;
+            gap: 8px;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .search-input-row,
+        .search-options {
+            display: flex;
+            gap: 8px;
+        }
+
+        .search-input-row input {
+            flex: 1;
+            min-width: 0;
+            padding: 8px 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        .search-input-row button {
+            flex: 0 0 auto;
+        }
+
+        .search-options select {
+            flex: 1;
+            min-width: 0;
+            font-size: 13px;
+        }
+
+        .search-status {
+            min-height: 18px;
+            font-size: 12px;
+            line-height: 1.5;
+            color: #666;
+        }
+
+        .search-results {
+            flex: 1;
+            overflow: auto;
+            display: grid;
+            align-content: start;
+            gap: 8px;
+            padding: 8px 10px 12px;
+        }
+
+        .search-result {
+            width: 100%;
+            text-align: left;
+            border: 1px solid #e5e5e5;
+            border-radius: 6px;
+            background: #fff;
+            padding: 8px 10px;
+            color: #333;
+            cursor: pointer;
+        }
+
+        .search-result:hover,
+        .search-result.active {
+            border-color: #9ec8ff;
+            background: #f3f8ff;
+        }
+
+        .search-result-title {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #666;
+            line-height: 1.35;
+        }
+
+        .search-result-index {
+            flex: 0 0 auto;
+            color: #999;
+        }
+
+        .search-result-section {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .search-result-type {
+            flex: 0 0 auto;
+            color: #999;
+        }
+
+        .search-result-excerpt {
+            margin-top: 5px;
+            font-size: 13px;
+            line-height: 1.45;
+            white-space: normal;
+        }
+
+        .search-hit {
+            background: #ffe58f;
+            border-radius: 2px;
+            color: #3b2b00;
+            padding: 0 1px;
+        }
     </style>
 </head>
 <body>
@@ -472,6 +628,7 @@
             <input type="file" id="file-input" accept=".epub,.mobi,.azw,.azw3,.fb2,.cbz,.pdf" hidden>
             <button id="btn-translate" title="Translation">Translate</button>
             <button id="btn-tts" title="Text to speech">TTS</button>
+            <button id="btn-search-sidebar" title="Search">Search</button>
             <button id="btn-settings" title="Settings">⚙</button>
             <button id="btn-debug-sidebar" title="Debug">Debug</button>
         </div>
@@ -666,6 +823,30 @@
             </div>
         </div>
 
+        <aside class="search-panel hidden" id="search-panel">
+            <div class="search-panel-inner">
+                <div class="search-panel-header">
+                    <span class="search-panel-title">Search</span>
+                    <button id="btn-search-clear" type="button">Clear</button>
+                    <button id="btn-search-close" type="button">Close</button>
+                </div>
+                <div class="search-controls">
+                    <div class="search-input-row">
+                        <input type="search" id="search-input" placeholder="Search text">
+                        <button id="btn-search-run" type="button">Search</button>
+                    </div>
+                    <div class="search-options">
+                        <select id="search-scope-select">
+                            <option value="chapter" selected>This chapter</option>
+                            <option value="book">Whole book</option>
+                        </select>
+                    </div>
+                    <div class="search-status" id="search-status">Open a book to search.</div>
+                </div>
+                <div class="search-results" id="search-results"></div>
+            </div>
+        </aside>
+
         <aside class="debug-panel hidden" id="debug-panel">
             <div class="debug-panel-inner">
                 <div class="debug-panel-header">
@@ -723,6 +904,7 @@
         const exportSectionCount = document.getElementById('export-section-count')
         const btnSidebar = document.getElementById('btn-sidebar')
         const btnSettings = document.getElementById('btn-settings')
+        const btnSearchSidebar = document.getElementById('btn-search-sidebar')
         const btnDebugSidebar = document.getElementById('btn-debug-sidebar')
         const btnTranslate = document.getElementById('btn-translate')
         const btnTTS = document.getElementById('btn-tts')
@@ -788,6 +970,14 @@
         const progressBar = document.getElementById('progress-bar')
         const progressFill = document.getElementById('progress-fill')
         const progressText = document.getElementById('progress-text')
+        const searchPanel = document.getElementById('search-panel')
+        const searchInput = document.getElementById('search-input')
+        const searchScopeSelect = document.getElementById('search-scope-select')
+        const btnSearchRun = document.getElementById('btn-search-run')
+        const btnSearchClear = document.getElementById('btn-search-clear')
+        const btnSearchClose = document.getElementById('btn-search-close')
+        const searchStatus = document.getElementById('search-status')
+        const searchResults = document.getElementById('search-results')
         const debugPanel = document.getElementById('debug-panel')
         const btnDebugCopy = document.getElementById('btn-debug-copy')
         const btnDebugClear = document.getElementById('btn-debug-clear')
@@ -855,6 +1045,9 @@
         let currentProfessionalStatus = null
         let currentProfessionalJobId = ''
         let professionalCancelPromise = null
+        let searchToken = 0
+        let searchResultItems = []
+        const MAX_SEARCH_RESULTS = 80
 
         const loadConfig = () => {
             try {
@@ -1858,6 +2051,299 @@
             await reader.goTo(target)
         }
 
+        const normalizeSearchText = (value) =>
+            String(value ?? '').replace(/\s+/g, ' ').trim()
+
+        const segmentsToSearchText = (segments = []) =>
+            normalizeSearchText(segments
+                .filter(segment => segment?.source?.nodeType !== 'img')
+                .map(segment => segment.text ?? '')
+                .join(''))
+
+        const tableToSearchText = (table) => normalizeSearchText(table?.rows
+            ?.flatMap(row => row.cells.map(cell =>
+                cell.text ?? segmentsToSearchText(cell.segments ?? [])))
+            .join(' ') ?? '')
+
+        const htmlToSearchText = (html) => normalizeSearchText(String(html ?? '')
+            .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'"))
+
+        const getBlockSearchText = (block) => {
+            if (!block) return ''
+            if (block.type === 'image') return normalizeSearchText(block.image?.alt ?? block.image?.title ?? '')
+            if (block.type === 'table') return tableToSearchText(block.table)
+            return segmentsToSearchText(block.segments ?? [])
+        }
+
+        const getSectionFallbackSearchText = async (section) => {
+            if (section.getSegments) return segmentsToSearchText(await section.getSegments())
+            if (section.getDocument) {
+                const documentModel = await section.getDocument()
+                if (documentModel) return normalizeSearchText(documentModel.getText())
+            }
+            if (section.loadText) return normalizeSearchText(await section.loadText())
+            if (section.format === 'image') return ''
+            return htmlToSearchText(await section.load())
+        }
+
+        const getSectionSearchBlocks = async (section) => {
+            if (section.getBlocks) {
+                return (await section.getBlocks()).map((block, blockIndex) => ({
+                    block,
+                    blockIndex,
+                    text: getBlockSearchText(block),
+                    synthetic: false,
+                }))
+            }
+            const text = await getSectionFallbackSearchText(section)
+            return text ? [{
+                block: { id: '', type: 'section', segments: [] },
+                blockIndex: 0,
+                text,
+                synthetic: true,
+            }] : []
+        }
+
+        const findSearchMatches = (text, query, maxMatches = 20) => {
+            const matches = []
+            const haystack = text.toLowerCase()
+            const needle = query.toLowerCase()
+            if (!needle) return matches
+            let offset = 0
+            while (matches.length < maxMatches) {
+                const index = haystack.indexOf(needle, offset)
+                if (index < 0) break
+                matches.push({ start: index, end: index + needle.length })
+                offset = index + Math.max(needle.length, 1)
+            }
+            return matches
+        }
+
+        const getSearchSectionIndexes = (scope) => {
+            if (!currentBook) return []
+            if (scope === 'chapter') {
+                const location = reader.getLocation?.()
+                const index = Number.isInteger(location?.index) ? location.index : 0
+                return index >= 0 && index < currentBook.sections.length ? [index] : []
+            }
+            return currentBook.sections.map((_, index) => index)
+        }
+
+        const getSearchSectionLabel = (sectionIndex) => {
+            if (!currentBook) return `Section ${sectionIndex + 1}`
+            const section = currentBook.sections[sectionIndex]
+            const items = flattenDemoTOC(currentBook.toc ?? [])
+            const item = items.find(tocItem => {
+                try {
+                    const resolved = currentBook.resolveHref?.(tocItem.href)
+                    if (resolved?.index === sectionIndex) return true
+                    const split = currentBook.splitTOCHref?.(tocItem.href)
+                    return split?.[0] === section?.id
+                } catch {
+                    return false
+                }
+            })
+            return item?.label ?? (section?.id != null
+                ? `Section ${sectionIndex + 1}: ${section.id}`
+                : `Section ${sectionIndex + 1}`)
+        }
+
+        const searchReadableBlocks = async (query, scope) => {
+            const indexes = getSearchSectionIndexes(scope)
+            const results = []
+            for (const sectionIndex of indexes) {
+                const section = currentBook.sections[sectionIndex]
+                if (!section) continue
+                const sectionLabel = getSearchSectionLabel(sectionIndex)
+                const blocks = await getSectionSearchBlocks(section)
+                for (const item of blocks) {
+                    const text = item.text
+                    if (!text) continue
+                    const matches = findSearchMatches(text, query)
+                    if (!matches.length) continue
+                    results.push({
+                        id: `${sectionIndex}:${item.block?.id ?? item.blockIndex}`,
+                        sectionIndex,
+                        sectionId: section.id,
+                        sectionLabel,
+                        blockId: item.synthetic ? '' : item.block?.id ?? '',
+                        blockType: item.block?.type ?? 'section',
+                        blockIndex: item.blockIndex,
+                        text,
+                        matches,
+                    })
+                    if (results.length >= MAX_SEARCH_RESULTS) return results
+                }
+            }
+            return results
+        }
+
+        const getSearchResultTarget = (result) => {
+            if (!result.blockId) return result.sectionIndex
+            return `${result.sectionId}#${result.blockId}`
+        }
+
+        const createSearchExcerpt = (text, match, contextChars = 72) => {
+            const start = Math.max(0, match.start - contextChars)
+            const end = Math.min(text.length, match.end + contextChars)
+            return `${start > 0 ? '...' : ''}${text.slice(start, end)}${end < text.length ? '...' : ''}`
+        }
+
+        const appendHighlightedSearchText = (parent, text, query) => {
+            const matches = findSearchMatches(text, query, 50)
+            let offset = 0
+            for (const match of matches) {
+                if (match.start > offset) {
+                    parent.appendChild(document.createTextNode(text.slice(offset, match.start)))
+                }
+                const mark = document.createElement('span')
+                mark.className = 'search-hit'
+                mark.textContent = text.slice(match.start, match.end)
+                parent.appendChild(mark)
+                offset = match.end
+            }
+            if (offset < text.length) {
+                parent.appendChild(document.createTextNode(text.slice(offset)))
+            }
+        }
+
+        const renderSearchResults = (results, query) => {
+            searchResults.innerHTML = ''
+            if (!results.length) {
+                searchStatus.textContent = 'No matching blocks.'
+                return
+            }
+
+            searchStatus.textContent = `${results.length}${results.length >= MAX_SEARCH_RESULTS ? '+' : ''} matching block${results.length === 1 ? '' : 's'}.`
+            for (const [index, result] of results.entries()) {
+                const button = document.createElement('button')
+                button.type = 'button'
+                button.className = 'search-result'
+                button.dataset.searchResultIndex = String(index)
+
+                const title = document.createElement('div')
+                title.className = 'search-result-title'
+                const order = document.createElement('span')
+                order.className = 'search-result-index'
+                order.textContent = `#${index + 1}`
+                const section = document.createElement('span')
+                section.className = 'search-result-section'
+                section.textContent = result.sectionLabel
+                const type = document.createElement('span')
+                type.className = 'search-result-type'
+                type.textContent = result.blockType
+                title.append(order, section, type)
+
+                const excerpt = document.createElement('div')
+                excerpt.className = 'search-result-excerpt'
+                appendHighlightedSearchText(excerpt, createSearchExcerpt(result.text, result.matches[0]), query)
+                button.append(title, excerpt)
+                searchResults.appendChild(button)
+            }
+        }
+
+        const setSearchPanelVisible = (visible) => {
+            searchPanel.classList.toggle('hidden', !visible)
+            btnSearchSidebar.classList.toggle('primary', visible)
+            if (visible) {
+                closePanels()
+                searchInput.focus()
+            }
+        }
+
+        const resetSearchState = (status = 'Enter a search term.') => {
+            searchToken += 1
+            searchResultItems = []
+            searchResults.innerHTML = ''
+            searchStatus.textContent = status
+            btnSearchRun.disabled = false
+            reader?.clearMarks?.('search')
+        }
+
+        const clearSearch = () => {
+            searchInput.value = ''
+            resetSearchState(currentBook ? 'Enter a search term.' : 'Open a book to search.')
+        }
+
+        const runSearch = async () => {
+            const query = searchInput.value.trim()
+            if (!currentBook) {
+                resetSearchState('Open a book to search.')
+                return
+            }
+            if (!query) {
+                resetSearchState('Enter a search term.')
+                return
+            }
+
+            const token = ++searchToken
+            btnSearchRun.disabled = true
+            searchStatus.textContent = 'Searching...'
+            searchResults.innerHTML = ''
+            reader?.clearMarks?.('search')
+
+            try {
+                const results = await searchReadableBlocks(query, searchScopeSelect.value)
+                if (token !== searchToken) return
+                searchResultItems = results
+                renderSearchResults(results, query)
+            } catch (error) {
+                if (token !== searchToken) return
+                console.error('Search failed:', error)
+                searchResultItems = []
+                searchStatus.textContent = `Search failed: ${error.message ?? error}`
+            } finally {
+                if (token === searchToken) btnSearchRun.disabled = false
+            }
+        }
+
+        const setActiveSearchResult = (button) => {
+            searchResults.querySelectorAll('.search-result.active').forEach(item => {
+                item.classList.remove('active')
+            })
+            button?.classList.add('active')
+        }
+
+        const goToSearchResult = async (result, button) => {
+            if (!hasOpenBook()) return
+            if (!reader.canGoTo(result.sectionIndex)) {
+                showTrialBlocked()
+                return
+            }
+            await reader.goTo(getSearchResultTarget(result))
+            reader?.clearMarks?.('search')
+            if (result.blockId) {
+                reader.setMark({
+                    id: 'search-current',
+                    kind: 'search',
+                    location: {
+                        start: {
+                            type: 'reflowable',
+                            sectionIndex: result.sectionIndex,
+                            blockId: result.blockId,
+                            offset: 0,
+                        },
+                        end: {
+                            type: 'reflowable',
+                            sectionIndex: result.sectionIndex,
+                            blockId: result.blockId,
+                            offset: Math.max(1, result.text.length),
+                        },
+                    },
+                    className: 'rebook-search-current',
+                })
+            }
+            setActiveSearchResult(button)
+        }
+
         const guardedGoRight = async () => {
             if (!hasOpenBook()) return
             const movesNext = reader.getBook()?.dir === 'rtl' ? false : true
@@ -2041,6 +2527,7 @@
                 const openMs = Math.round((performance.now() - openStarted) * 10) / 10
                 currentBook = book
                 activeTOCHref = null
+                resetSearchState('Enter a search term.')
                 updateTranslationStatus()
                 updateTTSStatus()
                 debugDemo('book opened', {
@@ -2086,6 +2573,7 @@
                 }
                 alert(`Failed to open file: ${message}`)
                 currentBook = null
+                resetSearchState('Open a book to search.')
                 updateFixedPerformanceFields()
                 dropTarget.classList.remove('hidden')
             }
@@ -2135,6 +2623,42 @@
             translationPanel.classList.remove('show')
             ttsPanel.classList.remove('show')
         }
+
+        btnSearchSidebar.addEventListener('click', () => {
+            setSearchPanelVisible(searchPanel.classList.contains('hidden'))
+        })
+
+        btnSearchClose.addEventListener('click', () => {
+            setSearchPanelVisible(false)
+        })
+
+        btnSearchClear.addEventListener('click', () => {
+            clearSearch()
+        })
+
+        btnSearchRun.addEventListener('click', () => {
+            void runSearch()
+        })
+
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault()
+                void runSearch()
+            }
+        })
+
+        searchScopeSelect.addEventListener('change', () => {
+            if (searchInput.value.trim()) void runSearch()
+        })
+
+        searchResults.addEventListener('click', (e) => {
+            const button = e.target.closest('.search-result')
+            if (!button) return
+            const index = Number(button.dataset.searchResultIndex)
+            const result = searchResultItems[index]
+            if (!result) return
+            void goToSearchResult(result, button).catch(error => handleReaderActionError('search navigation failed', error))
+        })
 
         btnSettings.addEventListener('click', (e) => {
             e.stopPropagation()
@@ -2668,11 +3192,11 @@
 
         // Also allow drop on the whole page when book is open
         document.body.addEventListener('dragover', (e) => {
-            if (viewer.contains(e.target) || sidebar.contains(e.target)) return
+            if (viewer.contains(e.target) || sidebar.contains(e.target) || searchPanel.contains(e.target) || debugPanel.contains(e.target)) return
             e.preventDefault()
         })
         document.body.addEventListener('drop', (e) => {
-            if (viewer.contains(e.target) || sidebar.contains(e.target)) return
+            if (viewer.contains(e.target) || sidebar.contains(e.target) || searchPanel.contains(e.target) || debugPanel.contains(e.target)) return
             e.preventDefault()
             const file = Array.from(e.dataTransfer.files).find(f => f)
             if (file) openFile(file)

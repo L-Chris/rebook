@@ -15867,28 +15867,29 @@ function extractDocumentBlocks(nodes, baseStyle = {}, options = {}) {
   let nextId = 0;
   const coverImageSrcs = new Set(((_a2 = options.coverImageSrcs) != null ? _a2 : []).map(normalizeResourceRef));
   const pushBlock = (type, node2, segments, depth) => {
-    var _a3;
+    var _a3, _b2;
     const normalized = type === "pre" ? normalizePreSegments(segments) : normalizeSegments(segments);
     if (!normalized.some((segment) => segment.text.trim())) return;
     const preset = getBlockPreset(type, baseStyle, depth);
+    const blockStyle = { ...preset.style, ...parseInlineStyle((_a3 = node2.attrs) == null ? void 0 : _a3.style) };
     const attrs = getBlockAttrs(node2);
-    const id = (_a3 = attrs == null ? void 0 : attrs.id) != null ? _a3 : `${type}-${nextId++}`;
+    const id = (_b2 = attrs == null ? void 0 : attrs.id) != null ? _b2 : `${type}-${nextId++}`;
     blocks.push({
       id,
       type,
       depth,
       attrs,
-      style: preset.style,
+      style: blockStyle,
       blockGapBefore: preset.blockGapBefore,
       blockGapAfter: preset.blockGapAfter,
       segments: normalized.map((segment) => {
-        var _a4, _b2, _c, _d;
+        var _a4, _b3, _c, _d;
         return {
           ...segment,
-          style: { ...preset.style, ...segment.style },
+          style: { ...blockStyle, ...segment.style },
           source: {
             ...segment.source,
-            nodeType: (_b2 = (_a4 = segment.source) == null ? void 0 : _a4.nodeType) != null ? _b2 : type,
+            nodeType: (_b3 = (_a4 = segment.source) == null ? void 0 : _a4.nodeType) != null ? _b3 : type,
             attrs: (_d = (_c = segment.source) == null ? void 0 : _c.attrs) != null ? _d : attrs
           }
         };
@@ -16260,6 +16261,7 @@ function layout(prepared, options) {
     }
     const richInline = block.prepared;
     if (!richInline) continue;
+    const textLineHeight = getBlockLineHeight(block.block, prepared.baseStyle.fontSize, lineHeight);
     walkRichInlineLineRanges(richInline, blockInlineSize, (range) => {
       const materialized = materializeRichInlineLineRange(richInline, range);
       const fragments = materialized.fragments.map((fragment, index) => {
@@ -16288,11 +16290,11 @@ function layout(prepared, options) {
         text: joinFragments(fragments),
         width: materialized.width,
         top,
-        height: lineHeight,
+        height: textLineHeight,
         inlineOffset,
         segments: fragments
       });
-      top += lineHeight;
+      top += textLineHeight;
     });
     if (lines.length > blockStartCount) top += (_p = block.block.blockGapAfter) != null ? _p : blockGap;
   }
@@ -16739,7 +16741,7 @@ function getTableCellAlign(node2) {
   const styleAlign = parseTextAlignFromStyle((_a2 = node2.attrs) == null ? void 0 : _a2.style);
   if (styleAlign) return styleAlign;
   const align = (_c = (_b2 = node2.attrs) == null ? void 0 : _b2.align) == null ? void 0 : _c.toLowerCase();
-  if (align) return parseTextAlign(align);
+  if (align) return parseBoxAlign(align);
   const className = (_e = (_d = node2.attrs) == null ? void 0 : _d.class) == null ? void 0 : _e.toLowerCase();
   if (className == null ? void 0 : className.split(/\s+/).includes("center")) return "center";
   if (className == null ? void 0 : className.split(/\s+/).includes("right")) return "end";
@@ -17018,7 +17020,7 @@ function getBlockLineHeight(block, fallbackFontSize, fallbackLineHeight) {
   var _a2, _b2, _c;
   const fontSize = (_b2 = (_a2 = block.style) == null ? void 0 : _a2.fontSize) != null ? _b2 : fallbackFontSize;
   const lineHeight = (_c = block.style) == null ? void 0 : _c.lineHeight;
-  return typeof lineHeight === "number" && Number.isFinite(lineHeight) && lineHeight > 0 ? fontSize * lineHeight : fallbackLineHeight;
+  return typeof lineHeight === "number" && Number.isFinite(lineHeight) && lineHeight > 0 ? fontSize * lineHeight : fontSize * (fallbackLineHeight / fallbackFontSize);
 }
 function getBlockAnchorAttrs(node2) {
   var _a2, _b2, _c;
@@ -17286,6 +17288,7 @@ function parseInlineStyle(style) {
     else if (name2 === "font-style") result.fontStyle = value2;
     else if (name2 === "font-variant") result.fontVariant = value2;
     else if (name2 === "line-height") result.lineHeight = parseLineHeight(value2);
+    else if (name2 === "text-align") result.textAlign = parseTextAlign(value2);
     else if (name2 === "letter-spacing") result.letterSpacing = parseCSSPixels$1(value2);
     else if (name2 === "color") result.color = value2;
     else if (name2 === "text-decoration") result.textDecoration = value2;
@@ -17301,7 +17304,7 @@ function parseImageStyle(style) {
     else if (name2 === "max-width") result.maxWidth = parseCSSDimension(value2);
     else if (name2 === "max-height") result.maxHeight = parseCSSDimension(value2);
     else if (name2 === "object-fit" && isObjectFit(value2)) result.objectFit = value2;
-    else if (name2 === "text-align") result.align = parseTextAlign(value2);
+    else if (name2 === "text-align") result.align = parseBoxAlign(value2);
     else if (name2 === "margin-left" && value2 === "auto") result.align = "center";
     else if (name2 === "margin-right" && value2 === "auto" && result.align === "center") result.align = "center";
   }
@@ -17320,7 +17323,7 @@ function parsePercentWidth(value2) {
 function parseTextAlignFromStyle(style) {
   var _a2;
   const textAlign = (_a2 = parseStyleDeclarations(style).find(([name2]) => name2 === "text-align")) == null ? void 0 : _a2[1];
-  return textAlign ? parseTextAlign(textAlign) : void 0;
+  return textAlign ? parseBoxAlign(textAlign) : void 0;
 }
 function parseCSSPixels$1(value2) {
   const match = value2.match(/^([\d.]+)(px|em|rem)?$/);
@@ -17342,7 +17345,12 @@ function parseTextAlign(value2) {
   if (value2 === "center") return "center";
   if (value2 === "right" || value2 === "end") return "end";
   if (value2 === "left" || value2 === "start") return "start";
+  if (value2 === "justify") return "justify";
   return void 0;
+}
+function parseBoxAlign(value2) {
+  const align = parseTextAlign(value2);
+  return align === "justify" ? void 0 : align;
 }
 function parseLineHeight(value2) {
   if (value2 === "normal") return void 0;
@@ -17524,6 +17532,32 @@ const normalizeArchivePath = (path) => {
   }
   return parts.join("/");
 };
+function applyResolvedImageDimensions(element, natural) {
+  var _a2, _b2;
+  const widthAttr = (_a2 = element.getAttribute("width")) == null ? void 0 : _a2.trim();
+  const heightAttr = (_b2 = element.getAttribute("height")) == null ? void 0 : _b2.trim();
+  const width = parseImageDimensionAttribute(widthAttr);
+  const height = parseImageDimensionAttribute(heightAttr);
+  if (!widthAttr && !heightAttr) {
+    element.setAttribute("width", String(natural.width));
+    element.setAttribute("height", String(natural.height));
+    return;
+  }
+  if (width && !heightAttr) {
+    element.setAttribute("height", String(Math.max(1, Math.round(width * natural.height / natural.width))));
+    return;
+  }
+  if (height && !widthAttr) {
+    element.setAttribute("width", String(Math.max(1, Math.round(height * natural.width / natural.height))));
+  }
+}
+function parseImageDimensionAttribute(value2) {
+  if (!value2 || value2.endsWith("%")) return void 0;
+  const match = value2.match(/^([\d.]+)(?:px)?$/);
+  if (!match) return void 0;
+  const dimension2 = Number(match[1]);
+  return Number.isFinite(dimension2) && dimension2 > 0 ? dimension2 : void 0;
+}
 function findSectionIndexByNormalizedSuffix(sections, normalizedPath) {
   if (!normalizedPath) return -1;
   const suffix = `/${normalizedPath}`;
@@ -18004,7 +18038,7 @@ class ResourceLoader {
       for (const el of doc.querySelectorAll("[src]")) {
         const srcBefore = el.getAttribute("src");
         await replace(el, "src");
-        if (el.localName.toLowerCase() === "img" && !el.getAttribute("width") && !el.getAttribute("height") && srcBefore) {
+        if (el.localName.toLowerCase() === "img" && (!el.getAttribute("width") || !el.getAttribute("height")) && srcBefore) {
           const imgHref = resolveURL(srcBefore, href);
           const imgItem = this.findResourceItem(imgHref);
           if ((imgItem == null ? void 0 : imgItem.mediaType.startsWith("image/")) && imgItem.mediaType !== MIME.SVG) {
@@ -18014,8 +18048,7 @@ class ResourceLoader {
                 const buf = await blob2.arrayBuffer();
                 const size = readRasterImageDimensions(buf);
                 if ((size == null ? void 0 : size.width) && (size == null ? void 0 : size.height)) {
-                  el.setAttribute("width", String(size.width));
-                  el.setAttribute("height", String(size.height));
+                  applyResolvedImageDimensions(el, size);
                 }
               }
             } catch (e) {
@@ -21492,7 +21525,7 @@ class WechatMiniProgramRenderer {
     };
   }
   getLineStyle(line, position) {
-    var _a2, _b2;
+    var _a2, _b2, _c, _d;
     const inlineOffset = (_a2 = line.inlineOffset) != null ? _a2 : 0;
     const left = position.left + inlineOffset;
     const width = Math.max(1, line.kind === "image" ? line.width : this.columnLayout.columnWidth - inlineOffset);
@@ -21503,7 +21536,8 @@ class WechatMiniProgramRenderer {
       width: `${width}px`,
       height: `${line.height}px`,
       lineHeight: `${line.height}px`,
-      color: (_b2 = this.styles.color) != null ? _b2 : "inherit"
+      textAlign: getTextAlign((_c = (_b2 = line.block) == null ? void 0 : _b2.style) == null ? void 0 : _c.textAlign),
+      color: (_d = this.styles.color) != null ? _d : "inherit"
     };
   }
   createTextFragment(fragment, index) {
@@ -21843,6 +21877,12 @@ function getTextFragmentStyle(style, gapBefore) {
     ...style.verticalAlign ? { verticalAlign: style.verticalAlign } : {},
     ...style.letterSpacing ? { letterSpacing: `${style.letterSpacing}px` } : {}
   };
+}
+function getTextAlign(align) {
+  if (align === "center") return "center";
+  if (align === "end") return "right";
+  if (align === "justify") return "justify";
+  return "left";
 }
 function getTableColumns(table) {
   var _a2;

@@ -589,6 +589,7 @@ export class WechatMiniProgramRenderer implements Renderer {
             width: `${width}px`,
             height: `${line.height}px`,
             lineHeight: `${line.height}px`,
+            textAlign: getTextAlign(line.block?.style?.textAlign),
             color: this.styles.color ?? 'inherit',
         }
     }
@@ -965,6 +966,13 @@ function getTextFragmentStyle(style: TextStyle, gapBefore: number): Record<strin
         ...(style.verticalAlign ? { verticalAlign: style.verticalAlign } : {}),
         ...(style.letterSpacing ? { letterSpacing: `${style.letterSpacing}px` } : {}),
     }
+}
+
+function getTextAlign(align: TextStyle['textAlign']): string {
+    if (align === 'center') return 'center'
+    if (align === 'end') return 'right'
+    if (align === 'justify') return 'justify'
+    return 'left'
 }
 
 function getTableColumns(table: TextTable): string {

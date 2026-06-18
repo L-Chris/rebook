@@ -122,6 +122,36 @@ const normalizeArchivePath = (path: string): string => {
     return parts.join('/')
 }
 
+function applyResolvedImageDimensions(element: XMLElement, natural: { width: number; height: number }): void {
+    const widthAttr = element.getAttribute('width')?.trim()
+    const heightAttr = element.getAttribute('height')?.trim()
+    const width = parseImageDimensionAttribute(widthAttr)
+    const height = parseImageDimensionAttribute(heightAttr)
+
+    if (!widthAttr && !heightAttr) {
+        element.setAttribute('width', String(natural.width))
+        element.setAttribute('height', String(natural.height))
+        return
+    }
+
+    if (width && !heightAttr) {
+        element.setAttribute('height', String(Math.max(1, Math.round(width * natural.height / natural.width))))
+        return
+    }
+
+    if (height && !widthAttr) {
+        element.setAttribute('width', String(Math.max(1, Math.round(height * natural.width / natural.height))))
+    }
+}
+
+function parseImageDimensionAttribute(value: string | undefined): number | undefined {
+    if (!value || value.endsWith('%')) return undefined
+    const match = value.match(/^([\d.]+)(?:px)?$/)
+    if (!match) return undefined
+    const dimension = Number(match[1])
+    return Number.isFinite(dimension) && dimension > 0 ? dimension : undefined
+}
+
 function findSectionIndexByNormalizedSuffix(sections: readonly Section[], normalizedPath: string): number {
     if (!normalizedPath) return -1
     const suffix = `/${normalizedPath}`
@@ -754,10 +784,11 @@ class ResourceLoader {
             for (const el of doc.querySelectorAll('[src]')) {
                 const srcBefore = el.getAttribute('src')
                 await replace(el, 'src')
-                // Inject real pixel dimensions into <img> elements that lack them,
-                // so layout can compute aspect ratio without fallback guesses.
+                // Inject usable image dimensions when the source only declares one
+                // axis, so layout can keep the real aspect ratio instead of using
+                // fallback block heights.
                 if (el.localName.toLowerCase() === 'img'
-                    && !el.getAttribute('width') && !el.getAttribute('height')
+                    && (!el.getAttribute('width') || !el.getAttribute('height'))
                     && srcBefore) {
                     const imgHref = resolveURL(srcBefore, href)
                     const imgItem = this.findResourceItem(imgHref)
@@ -768,8 +799,7 @@ class ResourceLoader {
                                 const buf = await blob.arrayBuffer()
                                 const size = readRasterImageDimensions(buf)
                                 if (size?.width && size?.height) {
-                                    el.setAttribute('width', String(size.width))
-                                    el.setAttribute('height', String(size.height))
+                                    applyResolvedImageDimensions(el, size)
                                 }
                             }
                         } catch { /* ignore, non-fatal */ }

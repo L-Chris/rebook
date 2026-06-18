@@ -64,6 +64,28 @@ describe('Pretext pipeline', () => {
         expect(prepared.blocks[0].block.type).toBe('chapter')
     })
 
+    it('preserves block text alignment from inline styles', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('p', { style: 'text-align: center; font-size: 20px' }, [
+                textNode('Centered title'),
+            ]),
+            elementNode('p', { style: 'text-align: right' }, [
+                textNode('Right signature'),
+            ]),
+        ])
+
+        expect(blocks.map(block => block.style?.textAlign)).toEqual(['center', 'end'])
+        expect(blocks[0].style?.fontSize).toBe(20)
+        expect(blocks[0].segments[0].style?.textAlign).toBe('center')
+        expect(blocks[0].segments[0].style?.fontSize).toBe(20)
+
+        const lines = layout(prepareBlocks(blocks, { baseStyle: { fontSize: 16, lineHeight: 1.5 } }), {
+            inlineSize: 320,
+        })
+        expect(lines[0].block?.style?.textAlign).toBe('center')
+        expect(lines.find(line => line.text.includes('Right signature'))?.block?.style?.textAlign).toBe('end')
+    })
+
     it('keeps anchors inside inline-only containers as link segments', () => {
         const blocks = extractDocumentBlocks([
             elementNode('div', { class: 'calibre3' }, [

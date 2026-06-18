@@ -90,6 +90,7 @@ export interface TextStyle {
     fontStyle?: string
     fontVariant?: string
     lineHeight?: number
+    textAlign?: 'start' | 'center' | 'end' | 'justify'
     color?: string
     textDecoration?: string
     verticalAlign?: string

@@ -122,6 +122,7 @@ export class BrowserReflowableContentRenderer implements ContentRenderer<Browser
             height: ${line.height}px;
             line-height: ${line.height}px;
             white-space: pre;
+            text-align: ${getTextAlign(line.block?.style?.textAlign)};
         `
         const block = line.block ?? context.prepared?.blocks.find(item =>
             item.itemSegmentIndexes.includes(line.start?.segmentIndex ?? -1),
@@ -366,6 +367,13 @@ function getTableGridTemplate(table: TextTable): string {
 function getTableTextAlign(align: 'start' | 'center' | 'end' | undefined): string {
     if (align === 'center') return 'center'
     if (align === 'end') return 'right'
+    return 'left'
+}
+
+function getTextAlign(align: TextStyle['textAlign']): string {
+    if (align === 'center') return 'center'
+    if (align === 'end') return 'right'
+    if (align === 'justify') return 'justify'
     return 'left'
 }
 

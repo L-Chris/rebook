@@ -11,6 +11,21 @@ const itWithStructuredWriting = existsSync(structuredWritingFixture) ? it : it.s
 const lolitaFixture = 'data/洛丽塔.epub'
 const itWithLolita = existsSync(lolitaFixture) ? it : it.skip
 
+function pngWithDimensions(width: number, height: number): Uint8Array {
+    const bytes = new Uint8Array(24)
+    bytes.set([0x89, 0x50, 0x4e, 0x47])
+    writeUint32BE(bytes, 16, width)
+    writeUint32BE(bytes, 20, height)
+    return bytes
+}
+
+function writeUint32BE(bytes: Uint8Array, offset: number, value: number): void {
+    bytes[offset] = (value >>> 24) & 0xff
+    bytes[offset + 1] = (value >>> 16) & 0xff
+    bytes[offset + 2] = (value >>> 8) & 0xff
+    bytes[offset + 3] = value & 0xff
+}
+
 beforeAll(() => {
     vi.stubGlobal('OffscreenCanvas', class {
         getContext() {
@@ -91,6 +106,36 @@ describe('EPUB Pretext segments', () => {
         const blocks = await book.sections[0].getBlocks?.()
         expect(blocks?.map(block => block.type)).toEqual(['paragraph'])
         expect(blocks?.[0].segments.some(segment => segment.style?.fontWeight === '700')).toBe(true)
+    })
+
+    it('preserves text alignment from linked EPUB stylesheets', async () => {
+        const parser = new EPUBParser()
+        const book = await parser.parse(await createTestEPUB({
+            chapters: [{
+                id: 'centered',
+                title: 'Centered',
+                content: '<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="style.css"/></head><body><p class="centered">Centered heading</p><p class="signature">Right signature</p></body></html>',
+            }],
+            resources: [{
+                id: 'style',
+                href: 'style.css',
+                mediaType: 'text/css',
+                data: 'p.centered { text-align: center; font-size: 20px; } p.signature { text-align: right; }',
+            }],
+        }), {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+
+        const blocks = await book.sections[0].getBlocks?.()
+        expect(blocks?.map(block => block.segments.map(segment => segment.text).join(''))).toEqual([
+            'Centered heading',
+            'Right signature',
+        ])
+        expect(blocks?.[0].style?.textAlign).toBe('center')
+        expect(blocks?.[0].style?.fontSize).toBe(20)
+        expect(blocks?.[0].segments[0].style?.textAlign).toBe('center')
+        expect(blocks?.[1].style?.textAlign).toBe('end')
     })
 
     it('rewrites inline style elements without adapter textContent errors', async () => {
@@ -476,6 +521,52 @@ describe('EPUB Pretext segments', () => {
         expect(image?.image?.height).toBe(900)
         expect(image?.image?.style?.maxWidth).toBe(320)
         expect(urlFactory.hasURL(image!.image!.src)).toBe(true)
+    })
+
+    it('preserves raster aspect ratio for EPUB images with only one declared dimension', async () => {
+        const parser = new EPUBParser()
+        const book = await parser.parse(await createTestEPUB({
+            chapters: [{
+                id: 'wide-image',
+                title: 'Wide Image',
+                content: '<html xmlns="http://www.w3.org/1999/xhtml"><body><p><img src="images/wide.png" alt="wide" width="400"/></p><p><img src="images/tall.png" alt="tall" height="160"/></p></body></html>',
+            }],
+            resources: [
+                {
+                    id: 'wide',
+                    href: 'images/wide.png',
+                    mediaType: 'image/png',
+                    data: pngWithDimensions(800, 200),
+                },
+                {
+                    id: 'tall',
+                    href: 'images/tall.png',
+                    mediaType: 'image/png',
+                    data: pngWithDimensions(300, 600),
+                },
+            ],
+        }), {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+
+        const blocks = await book.sections[0].getBlocks?.()
+        const images = blocks?.filter(block => block.type === 'image') ?? []
+        const prepared = prepareBlocks(images, { baseStyle: { fontSize: 16, lineHeight: 1.5 } })
+        const lines = layout(prepared, { inlineSize: 500, maxBlockHeight: 700 })
+
+        expect(images[0]?.image).toMatchObject({
+            width: 400,
+            height: 100,
+            aspectRatio: 4,
+        })
+        expect(images[1]?.image).toMatchObject({
+            width: 80,
+            height: 160,
+            aspectRatio: 0.5,
+        })
+        expect(lines.find(line => line.block?.id === images[0]?.id)?.height).toBe(100)
+        expect(lines.find(line => line.block?.id === images[1]?.id)?.height).toBe(160)
     })
 
     it('applies linked CSS class dimensions before extracting image blocks', async () => {

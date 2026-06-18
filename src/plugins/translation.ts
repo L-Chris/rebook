@@ -16,7 +16,10 @@ type BackendChunk = {
     chunkIndex: number
     title?: string | null
     content: string
+    contentJson?: string | null
+    blockIdsJson?: string | null
     translation?: string | null
+    translationJson?: string | null
     status: string
 }
 type BackendJob = {
@@ -761,7 +764,7 @@ function updateSectionTranslations(target: Map<number, BackendSectionTranslation
 }
 
 function getBackendChunksSignature(chunks: readonly BackendChunk[]): string {
-    return chunks.map(chunk => `${chunk.id}:${chunk.status}:${chunk.translation || ''}`).join('\n\n')
+    return chunks.map(chunk => `${chunk.id}:${chunk.status}:${chunk.translationJson || chunk.translation || ''}`).join('\n\n')
 }
 
 function renderBackendTranslatedBlocks(
@@ -779,6 +782,9 @@ function mapBackendChunksToBlockTranslations(
     blocks: readonly TextBlock[],
     translatedChunks: readonly BackendChunk[],
 ): Map<number, BlockTranslation> {
+    const blockJsonTranslations = mapBackendJsonTranslations(blocks, translatedChunks)
+    if (blockJsonTranslations.size > 0) return blockJsonTranslations
+
     const translatedParts = translatedChunks.flatMap(chunk => splitBackendTranslation(chunk.translation || ''))
     const translations = new Map<number, BlockTranslation>()
     let partIndex = 0
@@ -799,6 +805,73 @@ function mapBackendChunksToBlockTranslations(
     }
 
     return translations
+}
+
+function mapBackendJsonTranslations(
+    blocks: readonly TextBlock[],
+    translatedChunks: readonly BackendChunk[],
+): Map<number, BlockTranslation> {
+    const translations = new Map<number, BlockTranslation>()
+    const blockIndexById = new Map(blocks.map((block, index) => [block.id, index]))
+
+    for (const chunk of translatedChunks) {
+        const translatedById = parseBackendTranslationJson(chunk.translationJson)
+        if (!translatedById) continue
+        const ids = parseBackendBlockIds(chunk.blockIdsJson, translatedById)
+        for (const id of ids) {
+            const translatedText = translatedById[id]?.trim()
+            if (!translatedText) continue
+            const parsed = parseBackendTranslationItemId(id)
+            const blockIndex = blockIndexById.get(parsed.blockId)
+            if (blockIndex == null) continue
+            setBlockTranslation(translations, blockIndex, translatedText, parsed.tableCell)
+        }
+    }
+
+    return translations
+}
+
+function parseBackendTranslationJson(value: string | null | undefined): Record<string, string> | null {
+    if (!value) return null
+    try {
+        const parsed = JSON.parse(value) as unknown
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+        const entries = Object.entries(parsed as Record<string, unknown>)
+            .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+        return entries.length ? Object.fromEntries(entries) : null
+    } catch {
+        return null
+    }
+}
+
+function parseBackendBlockIds(value: string | null | undefined, translatedById: Record<string, string>): string[] {
+    if (value) {
+        try {
+            const parsed = JSON.parse(value) as unknown
+            if (Array.isArray(parsed)) {
+                const ids = parsed.filter((item): item is string => typeof item === 'string' && item in translatedById)
+                if (ids.length) return ids
+            }
+        } catch {
+            // Fall through to object key order.
+        }
+    }
+    return Object.keys(translatedById)
+}
+
+function parseBackendTranslationItemId(id: string): {
+    blockId: string
+    tableCell?: { rowIndex: number, cellIndex: number }
+} {
+    const separatorIndex = id.lastIndexOf('::')
+    if (separatorIndex < 0) return { blockId: id }
+    const cellKey = id.slice(separatorIndex + 2)
+    const [row, cell] = cellKey.split(':').map(value => Number.parseInt(value, 10))
+    if (!Number.isInteger(row) || !Number.isInteger(cell)) return { blockId: id }
+    return {
+        blockId: id.slice(0, separatorIndex),
+        tableCell: { rowIndex: row, cellIndex: cell },
+    }
 }
 
 function splitBackendTranslation(text: string): string[] {
