@@ -1,16 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
+import { useCallback, useEffect, useMemo, useRef, useState, type AnchorHTMLAttributes } from 'react'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  BookOpen,
   Bug,
-  ChevronLeft,
-  ChevronRight,
+  ArrowUp,
+  ExternalLink,
   Loader2,
   MessageSquareText,
   PanelLeft,
+  Plus,
   Search,
   Settings,
+  Trash2,
   Upload,
   Volume2,
   X,
@@ -80,7 +81,17 @@ interface DemoConfig {
 interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  displayContent?: string
+  attachments?: ChatAttachment[]
   pending?: boolean
+}
+
+interface ChatAttachment {
+  id: string
+  name: string
+  mediaType: string
+  data: string
+  previewUrl: string
 }
 
 interface SearchItem {
@@ -94,6 +105,32 @@ interface SearchItem {
 const CONFIG_KEY = 'rebook-demo-config'
 const MAX_DEBUG_ENTRIES = 160
 const MAX_SEARCH_RESULTS = 80
+
+interface ChatCommand {
+  name: '/summary' | '/search'
+  description: string
+  insertText: string
+  requiresArgs?: boolean
+  missingArgsMessage?: string
+  buildPrompt(args: string): string
+}
+
+const CHAT_COMMANDS: ChatCommand[] = [
+  {
+    name: '/summary',
+    description: '总结当前章节内容',
+    insertText: '/summary',
+    buildPrompt: () => '请总结当前章节内容。要求：用中文回答；先给出一句话概括，再列出关键要点；如果章节中有重要术语，请单独解释。',
+  },
+  {
+    name: '/search',
+    description: '搜索书籍内容并整理答案',
+    insertText: '/search ',
+    requiresArgs: true,
+    missingArgsMessage: '请输入搜索关键词，例如 `/search feedback loops`。',
+    buildPrompt: args => `请在本书中搜索与“${args}”相关的信息，优先使用搜索工具。请用中文回答，列出最相关的章节或段落，并简要解释上下文。`,
+  },
+]
 
 const defaultConfig: DemoConfig = {
   layout: 'paginated',
@@ -174,6 +211,7 @@ function App() {
   const [searchStatus, setSearchStatus] = useState('Open a book to search.')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatInput, setChatInput] = useState('')
+  const [chatAttachments, setChatAttachments] = useState<ChatAttachment[]>([])
   const [chatBusy, setChatBusy] = useState(false)
   const [chatPanelWidth, setChatPanelWidth] = useState(() => clampPanelWidth(config.chatPanelWidth))
   const [ttsStatus, setTTSStatus] = useState('TTS plugin disabled.')
@@ -425,9 +463,22 @@ function App() {
   }
 
   const sendChatMessage = async () => {
-    const content = chatInput.trim()
+    const rawContent = chatInput.trim()
+    const commandResult = resolveChatCommand(rawContent)
+    const content = commandResult?.prompt ?? rawContent
+    const attachments = chatAttachments
     const aiChat = bookRef.current?.aiChat
-    if (!content || chatBusy) return
+    if ((!rawContent && !attachments.length) || chatBusy) return
+    if (commandResult?.error && !attachments.length) {
+      const nextMessages: ChatMessage[] = [
+        ...chatMessages.filter(message => !message.pending),
+        { role: 'user', content: rawContent, displayContent: rawContent },
+        { role: 'assistant', content: commandResult.error },
+      ]
+      setChatMessages(nextMessages)
+      setChatInput(commandResult.insertText ?? rawContent)
+      return
+    }
     if (!aiChat) {
       setChatMessages(messages => [...messages, {
         role: 'assistant',
@@ -438,20 +489,46 @@ function App() {
 
     const nextMessages: ChatMessage[] = [
       ...chatMessages.filter(message => !message.pending),
-      { role: 'user', content },
+      {
+        role: 'user',
+        content: content || '请分析这些图片。',
+        displayContent: commandResult ? rawContent : undefined,
+        attachments,
+      },
     ]
-    setChatMessages([...nextMessages, { role: 'assistant', content: 'Thinking...', pending: true }])
+    setChatMessages([...nextMessages, { role: 'assistant', content: '', pending: true }])
     setChatInput('')
+    setChatAttachments([])
     setChatBusy(true)
     try {
       const current = getCurrentChatContext(readerRef.current, bookRef.current)
-      const response = await aiChat.ask({
-        messages: nextMessages.map(({ role, content }) => ({ role, content })),
+      const askOptions = {
+        messages: nextMessages.map(toAIChatMessage),
         currentSectionIndex: current.sectionIndex,
         current,
-      })
+      }
+      if (typeof aiChat.stream === 'function') {
+        const stream = aiChat.stream(askOptions)
+        let streamedText = ''
+        for await (const chunk of stream.textStream) {
+          streamedText += chunk
+          setChatMessages([...nextMessages, { role: 'assistant', content: streamedText, pending: true }])
+        }
+        const response = await stream.response
+        setChatMessages([...nextMessages, { role: 'assistant', content: response.text || streamedText || '(empty response)' }])
+        appendDebug('ai chat response', {
+          streamed: true,
+          toolCalls: response.toolCalls?.length ?? 0,
+          toolResults: response.toolResults?.length ?? 0,
+          finishReason: response.finishReason,
+          usage: response.usage,
+        })
+        return
+      }
+      const response = await aiChat.ask(askOptions)
       setChatMessages([...nextMessages, { role: 'assistant', content: response.text || '(empty response)' }])
       appendDebug('ai chat response', {
+        streamed: false,
         toolCalls: response.toolCalls?.length ?? 0,
         toolResults: response.toolResults?.length ?? 0,
         finishReason: response.finishReason,
@@ -462,6 +539,44 @@ function App() {
       appendDebug('ai chat failed', formatError(error))
     } finally {
       setChatBusy(false)
+    }
+  }
+
+  const addChatImages = async (files: FileList | File[]) => {
+    const images = Array.from(files).filter(file => file.type.startsWith('image/'))
+    if (!images.length) return
+    const attachments = await Promise.all(images.slice(0, 6).map(readChatImageAttachment))
+    setChatAttachments(items => [...items, ...attachments].slice(0, 6))
+  }
+
+  const removeChatAttachment = (id: string) => {
+    setChatAttachments(items => {
+      const attachment = items.find(item => item.id === id)
+      if (attachment) URL.revokeObjectURL(attachment.previewUrl)
+      return items.filter(item => item.id !== id)
+    })
+  }
+
+  const openChatCitation = async (href: string) => {
+    const citation = parseRebookJumpHref(href)
+    if (!citation || !readerRef.current) return
+    if (!readerRef.current.canGoTo?.(citation.sectionIndex)) {
+      setStatus('Trial limit reached.')
+      return
+    }
+    const sectionTarget = citation.sectionId ?? citation.sectionIndex
+    await readerRef.current.goTo(citation.blockId ? `${sectionTarget}#${citation.blockId}` : citation.sectionIndex)
+    readerRef.current.clearMarks?.('citation')
+    if (citation.blockId) {
+      readerRef.current.setMark?.({
+        id: 'ai-chat-citation',
+        kind: 'citation',
+        location: {
+          type: 'reflowable',
+          sectionIndex: citation.sectionIndex,
+          blockId: citation.blockId,
+        },
+      })
     }
   }
 
@@ -552,10 +667,10 @@ function App() {
       }}
     >
       <Header
-        title={bookTitle}
         busy={busy}
         sidebarOpen={sidebarOpen}
         activePanel={activePanel}
+        debugEnabled={config.debug}
         onToggleSidebar={() => setSidebarOpen(open => !open)}
         onOpenFile={() => fileInputRef.current?.click()}
         onOpenSettings={() => {
@@ -563,8 +678,6 @@ function App() {
           setSettingsOpen(true)
         }}
         onTogglePanel={panel => setActivePanel(activePanel === panel ? null : panel)}
-        onPrev={() => void readerRef.current?.prev?.()}
-        onNext={() => void readerRef.current?.next?.()}
       />
 
       <input
@@ -587,10 +700,6 @@ function App() {
         )}
 
         <section className="relative flex min-w-0 flex-1 flex-col px-4 pb-4 pt-3">
-          <div className="mb-2 flex items-center justify-between gap-3 text-xs text-slate-500">
-            <span className="truncate">{status}</span>
-            <span>{formatProgress(location)}</span>
-          </div>
           <div className="reader-canvas relative min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white">
             <div ref={viewerRef} id="viewer" />
             {!book && (
@@ -617,6 +726,16 @@ function App() {
           <RightPanel
             panel={activePanel}
             width={activePanel === 'chat' ? chatPanelWidth : 420}
+            onClearChat={activePanel === 'chat' ? () => {
+              setChatMessages(messages => {
+                revokeChatAttachmentURLs(messages.flatMap(message => message.attachments ?? []))
+                return []
+              })
+              setChatAttachments(items => {
+                revokeChatAttachmentURLs(items)
+                return []
+              })
+            } : undefined}
             setWidth={value => {
               const width = clampPanelWidth(value)
               setChatPanelWidth(width)
@@ -646,13 +765,15 @@ function App() {
             )}
             {activePanel === 'chat' && (
               <ChatPanel
-                enabled={Boolean(bookRef.current?.aiChat)}
                 messages={chatMessages}
                 input={chatInput}
+                attachments={chatAttachments}
                 busy={chatBusy}
                 setInput={setChatInput}
+                onAddImages={files => void addChatImages(files)}
+                onRemoveAttachment={removeChatAttachment}
                 onSend={() => void sendChatMessage()}
-                onClear={() => setChatMessages([])}
+                onCitation={href => void openChatCitation(href)}
               />
             )}
             {activePanel === 'debug' && (
@@ -667,7 +788,7 @@ function App() {
       </main>
 
       <Footer
-        location={location}
+        ttsEnabled={config.tts}
         ttsStatus={ttsStatus}
         onPlayTTS={() => void playTTS()}
         onStopTTS={stopTTS}
@@ -688,35 +809,24 @@ function App() {
 }
 
 function Header(props: {
-  title: string
   busy: boolean
   sidebarOpen: boolean
   activePanel: Panel
+  debugEnabled: boolean
   onToggleSidebar(): void
   onOpenFile(): void
   onOpenSettings(): void
   onTogglePanel(panel: Panel): void
-  onPrev(): void
-  onNext(): void
 }) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b border-slate-200 bg-white/92 px-3 backdrop-blur">
       <button className="icon-button" type="button" onClick={props.onToggleSidebar} title="Toggle sidebar">
         <PanelLeft className="h-4 w-4" />
       </button>
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <BookOpen className="h-4 w-4 shrink-0 text-blue-600" />
-        <h1 className="truncate text-sm font-semibold text-slate-900">{props.title}</h1>
-      </div>
+      <div className="min-w-0 flex-1" />
       <button className="toolbar-button" type="button" onClick={props.onOpenFile}>
         {props.busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
         Open
-      </button>
-      <button className="icon-button" type="button" onClick={props.onPrev} title="Previous">
-        <ChevronLeft className="h-4 w-4" />
-      </button>
-      <button className="icon-button" type="button" onClick={props.onNext} title="Next">
-        <ChevronRight className="h-4 w-4" />
       </button>
       <button className={panelButtonClass(props.activePanel === 'search')} type="button" onClick={() => props.onTogglePanel('search')}>
         <Search className="h-4 w-4" />
@@ -726,10 +836,12 @@ function Header(props: {
         <MessageSquareText className="h-4 w-4" />
         Chat
       </button>
-      <button className={panelButtonClass(props.activePanel === 'debug')} type="button" onClick={() => props.onTogglePanel('debug')}>
-        <Bug className="h-4 w-4" />
-        Debug
-      </button>
+      {props.debugEnabled ? (
+        <button className={panelButtonClass(props.activePanel === 'debug')} type="button" onClick={() => props.onTogglePanel('debug')}>
+          <Bug className="h-4 w-4" />
+          Debug
+        </button>
+      ) : null}
       <button className="icon-button" type="button" onClick={props.onOpenSettings} title="Settings">
         <Settings className="h-4 w-4" />
       </button>
@@ -785,6 +897,7 @@ function RightPanel(props: {
   width: number
   setWidth(value: number): void
   onClose(): void
+  onClearChat?: () => void
   children: React.ReactNode
 }) {
   const dragRef = useRef<{ right: number } | null>(null)
@@ -809,9 +922,16 @@ function RightPanel(props: {
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex h-11 shrink-0 items-center justify-between border-b border-slate-200 px-3">
           <span className="text-sm font-semibold capitalize text-slate-900">{props.panel}</span>
-          <button className="icon-button" type="button" onClick={props.onClose} title="Close">
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            {props.panel === 'chat' && props.onClearChat ? (
+              <button className="icon-button" type="button" onClick={props.onClearChat} title="Clear chat">
+                <Trash2 className="h-4 w-4" />
+              </button>
+            ) : null}
+            <button className="icon-button" type="button" onClick={props.onClose} title="Close">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">{props.children}</div>
       </div>
@@ -875,19 +995,33 @@ function SearchPanel(props: {
 }
 
 function ChatPanel(props: {
-  enabled: boolean
   messages: ChatMessage[]
   input: string
+  attachments: ChatAttachment[]
   busy: boolean
   setInput(value: string): void
+  onAddImages(files: FileList | File[]): void
+  onRemoveAttachment(id: string): void
   onSend(): void
-  onClear(): void
+  onCitation(href: string): void
 }) {
+  const imageInputRef = useRef<HTMLInputElement | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  const commandSuggestions = useMemo(() => getChatCommandSuggestions(props.input), [props.input])
+  const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
+  const applyCommand = (command: ChatCommand) => {
+    props.setInput(command.insertText)
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }
+
+  useEffect(() => {
+    if (selectedCommandIndex >= commandSuggestions.length) {
+      setSelectedCommandIndex(0)
+    }
+  }, [commandSuggestions.length, selectedCommandIndex])
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b border-slate-200 p-3 text-xs text-slate-500">
-        {props.enabled ? 'AI can search and read the current book.' : 'Enable AI Chat in Settings and apply configuration.'}
-      </div>
       <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
         {props.messages.length ? props.messages.map((message, index) => (
           <div
@@ -898,12 +1032,40 @@ function ChatPanel(props: {
               message.pending ? 'text-slate-500' : '',
             ].join(' ')}
           >
-            {message.role === 'assistant' && !message.pending ? (
-              <ReactMarkdown remarkPlugins={[remarkGfm]} className="markdown-body">
-                {message.content}
-              </ReactMarkdown>
+            {message.attachments?.length ? (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {message.attachments.map(attachment => (
+                  <img
+                    key={attachment.id}
+                    src={attachment.previewUrl}
+                    alt={attachment.name}
+                    className="h-20 w-20 rounded-lg border border-slate-200 object-cover"
+                  />
+                ))}
+              </div>
+            ) : null}
+            {message.role === 'assistant' && message.content ? (
+              <div className="chat-markdown">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkLooseStrong]}
+                  urlTransform={transformChatMarkdownUrl}
+                  components={{
+                    a: ({ node: _node, href, children, ...linkProps }) => (
+                      <ChatMarkdownLink href={href} onCitation={props.onCitation} {...linkProps}>
+                        {children}
+                      </ChatMarkdownLink>
+                    ),
+                  }}
+                >
+                  {message.content}
+                </ReactMarkdown>
+              </div>
             ) : (
-              <p className="whitespace-pre-wrap">{message.content}</p>
+              <p className="whitespace-pre-wrap">
+                {message.role === 'assistant' && message.pending && !message.content
+                  ? 'Thinking...'
+                  : message.displayContent ?? message.content}
+              </p>
             )}
           </div>
         )) : (
@@ -912,24 +1074,108 @@ function ChatPanel(props: {
           </div>
         )}
       </div>
-      <div className="space-y-2 border-t border-slate-200 p-3">
-        <textarea
-          className="input min-h-24 w-full resize-y"
-          value={props.input}
-          placeholder="Ask about this book. Shift+Enter for a new line."
-          onChange={event => props.setInput(event.target.value)}
-          onKeyDown={event => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault()
-              props.onSend()
-            }
+      <div className="border-t border-slate-200 p-3">
+        <input
+          ref={imageInputRef}
+          hidden
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={event => {
+            if (event.currentTarget.files) props.onAddImages(event.currentTarget.files)
+            event.currentTarget.value = ''
           }}
         />
-        <div className="flex justify-between">
-          <button className="toolbar-button" type="button" onClick={props.onClear}>Clear</button>
-          <button className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50" type="button" disabled={props.busy} onClick={props.onSend}>
-            {props.busy ? 'Thinking...' : 'Send'}
-          </button>
+        <div className="chat-composer">
+          {commandSuggestions.length ? (
+            <div className="chat-command-menu">
+              {commandSuggestions.map((command, index) => (
+                <button
+                  key={command.name}
+                  type="button"
+                  className={`chat-command-option ${index === selectedCommandIndex ? 'is-active' : ''}`}
+                  onMouseDown={event => {
+                    event.preventDefault()
+                    applyCommand(command)
+                  }}
+                >
+                  <span className="chat-command-name">{command.name}</span>
+                  <span className="chat-command-description">{command.description}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {props.attachments.length ? (
+            <div className="chat-composer-attachments">
+              {props.attachments.map(attachment => (
+                <div key={attachment.id} className="chat-composer-attachment">
+                  <img src={attachment.previewUrl} alt={attachment.name} />
+                  <button type="button" onClick={() => props.onRemoveAttachment(attachment.id)} title="Remove image">
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="chat-composer-row">
+            <button
+              className="chat-composer-icon"
+              type="button"
+              onClick={() => imageInputRef.current?.click()}
+              title="Attach image"
+            >
+              <Plus className="h-5 w-5" />
+            </button>
+            <textarea
+              ref={inputRef}
+              className="chat-composer-input"
+              value={props.input}
+              rows={1}
+              placeholder="Ask about this book"
+              onChange={event => props.setInput(event.target.value)}
+              onKeyDown={event => {
+                if (commandSuggestions.length) {
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault()
+                    setSelectedCommandIndex(index => (index + 1) % commandSuggestions.length)
+                    return
+                  }
+                  if (event.key === 'ArrowUp') {
+                    event.preventDefault()
+                    setSelectedCommandIndex(index => (index - 1 + commandSuggestions.length) % commandSuggestions.length)
+                    return
+                  }
+                  if (event.key === 'Tab') {
+                    event.preventDefault()
+                    applyCommand(commandSuggestions[selectedCommandIndex])
+                    return
+                  }
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    const selected = commandSuggestions[selectedCommandIndex]
+                    const token = getChatCommandToken(props.input)
+                    if (selected.name !== token || selected.requiresArgs) {
+                      event.preventDefault()
+                      applyCommand(selected)
+                      return
+                    }
+                  }
+                }
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  props.onSend()
+                }
+              }}
+            />
+            <button
+              className="chat-composer-send"
+              type="button"
+              disabled={props.busy || (!props.input.trim() && !props.attachments.length)}
+              onClick={props.onSend}
+              title="Send"
+            >
+              {props.busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -948,6 +1194,44 @@ function DebugPanel({ entries, onClear, onCopy }: { entries: string[]; onClear()
       </pre>
     </div>
   )
+}
+
+function ChatMarkdownLink({
+  href,
+  children,
+  onCitation,
+  ...props
+}: AnchorHTMLAttributes<HTMLAnchorElement> & { onCitation(href: string): void }) {
+  if (href && isRebookJumpHref(href)) {
+    const label = flattenReactText(children) || 'Open citation'
+    return (
+      <a
+        {...props}
+        href={href}
+        data-rebook-citation="true"
+        title={label}
+        aria-label={label}
+        onClick={event => {
+          event.preventDefault()
+          onCitation(href)
+        }}
+      >
+        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+        <span className="sr-only">{label}</span>
+      </a>
+    )
+  }
+  return (
+    <a {...props} href={href} target="_blank" rel="noreferrer">
+      {children}
+    </a>
+  )
+}
+
+function flattenReactText(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number') return String(value)
+  if (Array.isArray(value)) return value.map(flattenReactText).join('')
+  return ''
 }
 
 function SettingsDialog(props: {
@@ -1091,14 +1375,22 @@ function SettingsSectionForm({ section, config, setConfig }: { section: Settings
   )
 }
 
-function Footer({ location, ttsStatus, onPlayTTS, onStopTTS }: { location: any; ttsStatus: string; onPlayTTS(): void; onStopTTS(): void }) {
+function Footer({
+  ttsEnabled,
+  ttsStatus,
+  onPlayTTS,
+  onStopTTS,
+}: {
+  ttsEnabled: boolean
+  ttsStatus: string
+  onPlayTTS(): void
+  onStopTTS(): void
+}) {
+  if (!ttsEnabled) return null
   return (
     <footer className="flex h-11 shrink-0 items-center gap-3 border-t border-slate-200 bg-white/92 px-4 text-xs text-slate-500">
-      <div className="h-1.5 w-36 overflow-hidden rounded-full bg-slate-200">
-        <div className="h-full rounded-full bg-blue-600" style={{ width: `${Math.round((location?.totalFraction ?? 0) * 100)}%` }} />
-      </div>
-      <span className="w-12">{formatProgress(location)}</span>
-      <div className="min-w-0 flex-1 truncate">{ttsStatus}</div>
+      <div className="min-w-0 flex-1" />
+      <div className="min-w-0 max-w-xs truncate">{ttsStatus}</div>
       <button className="toolbar-button" type="button" onClick={onPlayTTS}>
         <Volume2 className="h-4 w-4" />
         Speak
@@ -1159,6 +1451,165 @@ function loadConfig(): DemoConfig {
 
 function saveConfig(config: DemoConfig) {
   localStorage.setItem(CONFIG_KEY, JSON.stringify(config))
+}
+
+function getChatCommandToken(input: string): string | null {
+  const value = input.trimStart()
+  if (!value.startsWith('/')) return null
+  return /^\/[^\s]*/.exec(value)?.[0].toLowerCase() ?? null
+}
+
+function getChatCommandSuggestions(input: string): ChatCommand[] {
+  const value = input.trimStart()
+  const token = getChatCommandToken(value)
+  if (!token) return []
+  const exactCommand = CHAT_COMMANDS.find(command => command.name === token)
+  const hasArgs = /\s/.test(value.slice(token.length))
+  if (exactCommand && hasArgs) return []
+  return CHAT_COMMANDS.filter(command => command.name.startsWith(token))
+}
+
+function resolveChatCommand(input: string): { prompt?: string; error?: string; insertText?: string } | null {
+  const match = /^(\/[^\s]+)(?:\s+([\s\S]*))?$/.exec(input.trim())
+  if (!match) return null
+  const command = CHAT_COMMANDS.find(item => item.name === match[1].toLowerCase())
+  if (!command) return null
+  const args = (match[2] ?? '').trim()
+  if (command.requiresArgs && !args) {
+    return { error: command.missingArgsMessage, insertText: command.insertText }
+  }
+  return { prompt: command.buildPrompt(args) }
+}
+
+interface RebookJumpTarget {
+  sectionIndex: number
+  sectionId?: string
+  blockId?: string
+}
+
+function isRebookJumpHref(href: string): boolean {
+  return href.startsWith('rebook://jump')
+}
+
+function transformChatMarkdownUrl(value: string): string {
+  if (isRebookJumpHref(value)) return value
+  return defaultUrlTransform(value)
+}
+
+function parseRebookJumpHref(href: string): RebookJumpTarget | null {
+  try {
+    const url = new URL(href)
+    if (url.protocol !== 'rebook:' || url.hostname !== 'jump') return null
+    const sectionIndex = Number(url.searchParams.get('sectionIndex'))
+    if (!Number.isInteger(sectionIndex) || sectionIndex < 0) return null
+    return {
+      sectionIndex,
+      sectionId: url.searchParams.get('sectionId') || undefined,
+      blockId: url.searchParams.get('blockId') || undefined,
+    }
+  } catch {
+    return null
+  }
+}
+
+function toAIChatMessage(message: ChatMessage) {
+  if (message.role !== 'user' || !message.attachments?.length) {
+    return { role: message.role, content: message.content }
+  }
+  return {
+    role: message.role,
+    content: [
+      { type: 'text', text: message.content || '请分析这些图片。' },
+      ...message.attachments.map(attachment => ({
+        type: 'image',
+        image: attachment.data,
+        mediaType: attachment.mediaType,
+      })),
+    ],
+  }
+}
+
+async function readChatImageAttachment(file: File): Promise<ChatAttachment> {
+  const dataUrl = await readFileAsDataURL(file)
+  const base64 = dataUrl.split(',')[1] || ''
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    name: file.name || 'image',
+    mediaType: file.type || 'image/png',
+    data: base64,
+    previewUrl: URL.createObjectURL(file),
+  }
+}
+
+function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error('Failed to read image.'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function revokeChatAttachmentURLs(attachments: readonly ChatAttachment[]) {
+  attachments.forEach(attachment => URL.revokeObjectURL(attachment.previewUrl))
+}
+
+interface MarkdownNode {
+  type?: string
+  value?: string
+  children?: MarkdownNode[]
+}
+
+function remarkLooseStrong() {
+  return (tree: MarkdownNode) => {
+    normalizeLooseStrong(tree)
+  }
+}
+
+function normalizeLooseStrong(node: MarkdownNode) {
+  if (!node.children?.length) return
+  const nextChildren: MarkdownNode[] = []
+  for (const child of node.children) {
+    if (child.type === 'text' && typeof child.value === 'string') {
+      nextChildren.push(...splitLooseStrongText(child.value))
+      continue
+    }
+    normalizeLooseStrong(child)
+    nextChildren.push(child)
+  }
+  node.children = nextChildren
+}
+
+function splitLooseStrongText(value: string): MarkdownNode[] {
+  const nodes: MarkdownNode[] = []
+  let cursor = 0
+  let changed = false
+
+  while (cursor < value.length) {
+    const start = value.indexOf('**', cursor)
+    if (start === -1) break
+    const end = value.indexOf('**', start + 2)
+    if (end === -1) break
+    const strongText = value.slice(start + 2, end)
+    if (!strongText.trim()) {
+      break
+    }
+    if (start > cursor) {
+      nodes.push({ type: 'text', value: value.slice(cursor, start) })
+    }
+    nodes.push({
+      type: 'strong',
+      children: [{ type: 'text', value: strongText }],
+    })
+    changed = true
+    cursor = end + 2
+  }
+
+  if (!changed) return [{ type: 'text', value }]
+  if (cursor < value.length) {
+    nodes.push({ type: 'text', value: value.slice(cursor) })
+  }
+  return nodes
 }
 
 function getReaderStyles(config: DemoConfig) {

@@ -2,12 +2,14 @@ import {
     generateText,
     jsonSchema,
     stepCountIs,
+    streamText,
     tool,
     type LanguageModel,
     type ModelMessage,
     type ToolSet,
+    type UserContent,
 } from 'ai'
-import type { Book, BookMetadata, Contributor, LanguageMap, RebookPlugin, Section, TOCItem } from '../core/types'
+import type { Book, BookMetadata, Contributor, LanguageMap, RebookPlugin, Section, TextBlock, TextSegment, TOCItem } from '../core/types'
 import { createSectionIndexLookup, findTOCItemForSection, flattenTOC, resolveTOCSectionIndex } from '../core/toc'
 import { getSectionSearchText, searchBook, type SearchResult, type SearchScope } from '../search'
 
@@ -15,8 +17,12 @@ export type AIChatRole = 'user' | 'assistant'
 
 export interface AIChatMessage {
     role: AIChatRole
-    content: string
+    content: string | readonly AIChatContentPart[]
 }
+
+export type AIChatContentPart =
+    | { type: 'text'; text: string }
+    | { type: 'image'; image: string | Uint8Array | ArrayBuffer | URL; mediaType?: string }
 
 export interface AIChatAskOptions {
     messages: readonly AIChatMessage[]
@@ -33,6 +39,11 @@ export interface AIChatResponse {
     finishReason?: string
 }
 
+export interface AIChatStreamResponse {
+    textStream: AsyncIterable<string>
+    response: Promise<AIChatResponse>
+}
+
 export interface AIChatSearchOptions {
     scope?: SearchScope
     sectionIndex?: number
@@ -42,6 +53,7 @@ export interface AIChatSearchOptions {
 
 export interface AIChatSectionContentOptions {
     maxChars?: number
+    includeBlocks?: boolean
 }
 
 export interface AIChatContextOptions {
@@ -63,8 +75,25 @@ export interface AIChatSectionContent {
     sectionId: string | number
     title?: string
     text: string
+    blocks?: AIChatContentBlock[]
     charCount: number
     truncated: boolean
+}
+
+export interface AIChatCitation {
+    label: string
+    href: string
+    sectionIndex: number
+    sectionId: string | number
+    blockId?: string
+    blockType?: string
+}
+
+export interface AIChatContentBlock {
+    blockId: string
+    blockType: string
+    text: string
+    citation: AIChatCitation
 }
 
 export interface AIChatContextResult {
@@ -91,6 +120,7 @@ export interface AIChatReadingContext {
 
 export interface AIChatController {
     ask(input: string | AIChatAskOptions): Promise<AIChatResponse>
+    stream(input: string | AIChatAskOptions): AIChatStreamResponse
     search(query: string, options?: AIChatSearchOptions): Promise<SearchResult[]>
     getTOC(maxItems?: number): AIChatTOCItem[]
     getSectionContent(sectionIndex: number, options?: AIChatSectionContentOptions): Promise<AIChatSectionContent>
@@ -150,6 +180,24 @@ export function createAIChatController(book: Book, options: AIChatOptions): AICh
                 finishReason: result.finishReason,
             }
         },
+        stream: input => {
+            const askOptions = typeof input === 'string'
+                ? { messages: [{ role: 'user' as const, content: input }] }
+                : input
+            const current = createReadingContext(book, askOptions)
+            const context = { currentSectionIndex: current.sectionIndex, current }
+            const tools = controller.createTools(context)
+            const result = streamText({
+                model: options.model,
+                system: buildSystemPrompt(book, options, current),
+                messages: toModelMessages(askOptions.messages),
+                tools,
+                stopWhen: stepCountIs(readNumberOption(options.maxToolSteps, DEFAULT_MAX_TOOL_STEPS)),
+                abortSignal: askOptions.abortSignal,
+            })
+
+            return createAIChatStreamResponse(result)
+        },
         search: (query, searchOptions = {}) => searchBook(book, query, {
             scope: searchOptions.scope ?? 'book',
             chapterIndex: searchOptions.sectionIndex,
@@ -158,7 +206,9 @@ export function createAIChatController(book: Book, options: AIChatOptions): AICh
         }),
         getTOC: maxItems => getTOCItems(book, maxItems),
         getSectionContent: (sectionIndex, sectionOptions = {}) =>
-            getSectionContent(book, sectionIndex, sectionOptions.maxChars ?? readNumberOption(options.maxSectionChars, DEFAULT_MAX_SECTION_CHARS)),
+            getSectionContent(book, sectionIndex, sectionOptions.maxChars ?? readNumberOption(options.maxSectionChars, DEFAULT_MAX_SECTION_CHARS), {
+                includeBlocks: sectionOptions.includeBlocks,
+            }),
         getCurrentContext: contextOptions =>
             getCurrentContext(book, {
                 ...contextOptions,
@@ -200,7 +250,7 @@ export function createAIChatTools(book: Book, options: AIChatOptions, context: A
             execute: async ({ maxItems }) => getTOCItems(book, maxItems ?? 80),
         }),
         searchBook: tool({
-            description: '在全书或当前章节中搜索关键词，返回带上下文的匹配片段。',
+            description: '在全书或当前章节中搜索关键词，返回带上下文和 citation.href 的匹配片段；回答中引用这些片段时应复制 citation.href 生成 Markdown 链接。',
             inputSchema: jsonSchema<{ query: string; scope?: SearchScope; sectionIndex?: number; maxResults?: number }>({
                 type: 'object',
                 properties: {
@@ -214,20 +264,20 @@ export function createAIChatTools(book: Book, options: AIChatOptions, context: A
             }),
             execute: async ({ query, scope, sectionIndex, maxResults }) => {
                 const chapterIndex = typeof sectionIndex === 'number' ? sectionIndex : context.currentSectionIndex
-                const results = await searchBook(book, query, {
+                const results = await searchBookWithCitations(book, query, {
                     scope: scope ?? 'book',
-                    chapterIndex,
+                    sectionIndex: chapterIndex,
                     maxResults: maxResults ?? readNumberOption(options.maxSearchResults, DEFAULT_MAX_SEARCH_RESULTS),
                     contextChars: 96,
                 })
                 return {
                     query,
-                    results: results.map(compactSearchResult),
+                    results,
                 }
             },
         }),
         getSectionContent: tool({
-            description: '获取指定章节正文。适合回答需要引用章节内容的问题。',
+            description: '获取指定章节正文和 block 级 citation.href。适合回答需要引用章节内容、总结本章并给出可点击出处的问题。',
             inputSchema: jsonSchema<{ sectionIndex?: number; maxChars?: number }>({
                 type: 'object',
                 properties: {
@@ -238,7 +288,9 @@ export function createAIChatTools(book: Book, options: AIChatOptions, context: A
             }),
             execute: async ({ sectionIndex, maxChars }) => {
                 const index = typeof sectionIndex === 'number' ? sectionIndex : context.currentSectionIndex ?? 0
-                return getSectionContent(book, index, maxChars ?? readNumberOption(options.maxSectionChars, DEFAULT_MAX_SECTION_CHARS))
+                return getSectionContent(book, index, maxChars ?? readNumberOption(options.maxSectionChars, DEFAULT_MAX_SECTION_CHARS), {
+                    includeBlocks: true,
+                })
             },
         }),
         getCurrentContext: tool({
@@ -282,6 +334,49 @@ function createReadingContext(book: Book, options: Pick<AIChatAskOptions, 'curre
     }
 }
 
+function createAIChatStreamResponse(result: {
+    textStream: AsyncIterable<string>
+    toolCalls: PromiseLike<unknown[]>
+    toolResults: PromiseLike<unknown[]>
+    usage: PromiseLike<unknown>
+    finishReason: PromiseLike<string>
+}): AIChatStreamResponse {
+    let text = ''
+    let resolveResponse!: (response: AIChatResponse) => void
+    let rejectResponse!: (error: unknown) => void
+    const response = new Promise<AIChatResponse>((resolve, reject) => {
+        resolveResponse = resolve
+        rejectResponse = reject
+    })
+
+    const textStream = (async function* () {
+        try {
+            for await (const chunk of result.textStream) {
+                text += chunk
+                yield chunk
+            }
+            const [toolCalls, toolResults, usage, finishReason] = await Promise.all([
+                result.toolCalls,
+                result.toolResults,
+                result.usage,
+                result.finishReason,
+            ])
+            resolveResponse({
+                text,
+                toolCalls: [...toolCalls],
+                toolResults: [...toolResults],
+                usage,
+                finishReason,
+            })
+        } catch (error) {
+            rejectResponse(error)
+            throw error
+        }
+    })()
+
+    return { textStream, response }
+}
+
 async function getCurrentContext(book: Book, options: AIChatContextOptions = {}): Promise<AIChatContextResult> {
     const currentSectionIndex = clampSectionIndex(book, options.currentSectionIndex ?? 0)
     const before = Math.max(0, Math.floor(options.before ?? 0))
@@ -301,11 +396,29 @@ async function getCurrentContext(book: Book, options: AIChatContextOptions = {})
     return { currentSectionIndex, sections }
 }
 
-async function getSectionContent(book: Book, sectionIndex: number, maxChars: number): Promise<AIChatSectionContent> {
+async function getSectionContent(
+    book: Book,
+    sectionIndex: number,
+    maxChars: number,
+    options: { includeBlocks?: boolean } = {},
+): Promise<AIChatSectionContent> {
     const index = clampSectionIndex(book, sectionIndex)
     const section = book.sections[index]
-    const text = await getSectionSearchText(section)
     const charLimit = Math.max(200, Math.floor(maxChars))
+    if (options.includeBlocks && section.getBlocks) {
+        const blockContent = await getSectionContentBlocks(book, index, charLimit)
+        return {
+            sectionIndex: index,
+            sectionId: section.id,
+            title: getSectionTitle(book, index, section),
+            text: blockContent.text,
+            blocks: blockContent.blocks,
+            charCount: blockContent.charCount,
+            truncated: blockContent.truncated,
+        }
+    }
+
+    const text = await getSectionSearchText(section)
     const clipped = clipText(text, charLimit)
     return {
         sectionIndex: index,
@@ -315,6 +428,206 @@ async function getSectionContent(book: Book, sectionIndex: number, maxChars: num
         charCount: text.length,
         truncated: clipped.truncated,
     }
+}
+
+async function searchBookWithCitations(
+    book: Book,
+    query: string,
+    options: AIChatSearchOptions = {},
+): Promise<Array<ReturnType<typeof compactCitationSearchResult>>> {
+    const maxResults = Math.max(0, Math.floor(options.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS))
+    if (!query.trim() || maxResults === 0) return []
+
+    const sectionIndexes = getCitationSearchSectionIndexes(book, options)
+    const normalizedQuery = query.toLocaleLowerCase()
+    const results: Array<ReturnType<typeof compactCitationSearchResult>> = []
+
+    for (const sectionIndex of sectionIndexes) {
+        const section = book.sections[sectionIndex]
+        if (!section.getBlocks) {
+            const fallback = await searchBook(book, query, {
+                scope: 'chapter',
+                chapterIndex: sectionIndex,
+                maxResults: maxResults - results.length,
+                contextChars: options.contextChars ?? 96,
+            })
+            results.push(...fallback.map(result => compactCitationSearchResult(book, result)))
+            if (results.length >= maxResults) break
+            continue
+        }
+
+        const entries = await getSectionBlockEntries(section)
+        let matchIndex = 0
+        for (const entry of entries) {
+            const haystack = entry.text.toLocaleLowerCase()
+            let fromIndex = 0
+            while (results.length < maxResults) {
+                const start = haystack.indexOf(normalizedQuery, fromIndex)
+                if (start < 0) break
+                const end = start + query.length
+                fromIndex = Math.max(start + 1, end)
+                results.push(createCitationSearchResult(book, sectionIndex, section, entry, query, start, end, matchIndex++, options.contextChars ?? 96))
+            }
+            if (results.length >= maxResults) break
+        }
+        if (results.length >= maxResults) break
+    }
+
+    return results
+}
+
+async function getSectionContentBlocks(book: Book, sectionIndex: number, maxChars: number): Promise<{
+    blocks: AIChatContentBlock[]
+    text: string
+    charCount: number
+    truncated: boolean
+}> {
+    const section = book.sections[sectionIndex]
+    const entries = await getSectionBlockEntries(section)
+    const chapterTitle = getSectionTitle(book, sectionIndex, section)
+    const blocks: AIChatContentBlock[] = []
+    const textParts: string[] = []
+    let used = 0
+    let truncated = false
+
+    for (const entry of entries) {
+        const remaining = maxChars - used
+        if (remaining <= 0) {
+            truncated = true
+            break
+        }
+        const text = entry.text.length > remaining ? entry.text.slice(0, remaining) : entry.text
+        if (entry.text.length > remaining) truncated = true
+        blocks.push({
+            blockId: entry.block.id,
+            blockType: entry.block.type,
+            text,
+            citation: createCitation(book, sectionIndex, section, entry.block, chapterTitle),
+        })
+        textParts.push(text)
+        used += text.length
+        if (truncated) break
+    }
+
+    const charCount = entries.reduce((sum, entry) => sum + entry.text.length, 0)
+    return {
+        blocks,
+        text: textParts.join('\n'),
+        charCount,
+        truncated,
+    }
+}
+
+interface AIChatBlockEntry {
+    block: TextBlock
+    text: string
+}
+
+function getCitationSearchSectionIndexes(book: Book, options: AIChatSearchOptions): number[] {
+    if (options.scope === 'chapter') {
+        return [clampSectionIndex(book, options.sectionIndex ?? 0)]
+    }
+    return book.sections.map((_, index) => index)
+}
+
+async function getSectionBlockEntries(section: Section): Promise<AIChatBlockEntry[]> {
+    if (!section.getBlocks) return []
+    const blocks = await section.getBlocks()
+    return blocks
+        .map(block => ({ block, text: textBlockToText(block) }))
+        .filter(entry => entry.text)
+}
+
+function createCitationSearchResult(
+    book: Book,
+    sectionIndex: number,
+    section: Section,
+    entry: AIChatBlockEntry,
+    query: string,
+    start: number,
+    end: number,
+    matchIndex: number,
+    contextChars: number,
+) {
+    const contextStart = Math.max(0, start - Math.max(0, contextChars))
+    const contextEnd = Math.min(entry.text.length, end + Math.max(0, contextChars))
+    const before = entry.text.slice(contextStart, start)
+    const match = entry.text.slice(start, end)
+    const after = entry.text.slice(end, contextEnd)
+    return {
+        query,
+        sectionIndex,
+        sectionId: section.id,
+        chapterLabel: getSectionTitle(book, sectionIndex, section),
+        matchIndex,
+        blockId: entry.block.id,
+        blockType: entry.block.type,
+        before,
+        match,
+        after,
+        excerpt: `${contextStart > 0 ? '...' : ''}${before}${match}${after}${contextEnd < entry.text.length ? '...' : ''}`,
+        citation: createCitation(book, sectionIndex, section, entry.block),
+    }
+}
+
+function compactCitationSearchResult(book: Book, result: SearchResult) {
+    const section = book.sections[result.sectionIndex]
+    return {
+        sectionIndex: result.sectionIndex,
+        sectionId: result.sectionId,
+        chapterLabel: result.chapterLabel,
+        matchIndex: result.matchIndex,
+        excerpt: result.excerpt,
+        citation: createCitation(book, result.sectionIndex, section),
+    }
+}
+
+function createCitation(
+    book: Book,
+    sectionIndex: number,
+    section: Section,
+    block?: TextBlock,
+    chapterTitle = getSectionTitle(book, sectionIndex, section),
+): AIChatCitation {
+    const label = [
+        chapterTitle || `Section ${sectionIndex + 1}`,
+        block?.id,
+    ].filter(Boolean).join(' · ')
+    const params = new URLSearchParams({
+        sectionIndex: String(sectionIndex),
+        sectionId: String(section.id),
+    })
+    if (block?.id) {
+        params.set('blockId', block.id)
+        params.set('blockType', block.type)
+    }
+    return {
+        label,
+        href: `rebook://jump?${params.toString()}`,
+        sectionIndex,
+        sectionId: section.id,
+        blockId: block?.id,
+        blockType: block?.type,
+    }
+}
+
+function textBlockToText(block: TextBlock): string {
+    if (block.type === 'image') return normalizeAIChatText(block.image?.alt ?? block.image?.title ?? '')
+    if (block.type === 'table') return normalizeAIChatText(block.table?.rows
+        .flatMap(row => row.cells.map(cell => cell.text))
+        .join(' ') ?? '')
+    return normalizeAIChatText(segmentsToPlainText(block.segments))
+}
+
+function segmentsToPlainText(segments: readonly TextSegment[]): string {
+    return segments
+        .filter(segment => segment.source?.nodeType !== 'img')
+        .map(segment => segment.text)
+        .join('')
+}
+
+function normalizeAIChatText(value: string): string {
+    return value.replace(/\s+/g, ' ').trim()
 }
 
 function getTOCItems(book: Book, maxItems = 80): AIChatTOCItem[] {
@@ -374,7 +687,20 @@ function buildSystemPrompt(book: Book, options: AIChatOptions, current?: AIChatR
         '# 回答格式',
         '- 回答尽量简洁、结构清晰。',
         '- 可以使用 Markdown。',
-        '- 引用或总结书中内容时，标明章节标题或 sectionIndex。',
+        '- 基于书中内容回答时，优先在对应观点后添加可点击引用，而不是只标明章节标题或 sectionIndex。',
+        '',
+        '# 可点击引用规则',
+        '- searchBook 和 getSectionContent 的结果会尽量提供 citation.href；getSectionContent 的 blocks 也会提供 blockId、blockType、sectionIndex、sectionId。',
+        '- 只要回答涉及书中具体内容、章节总结、概念解释、情节/人物/术语分析、检索结果或对原文观点的归纳，就应当使用工具并生成可点击引用。',
+        '- 生成引用的优先级：优先复制工具返回的 citation.href；如果没有 citation.href 但有 blockId，则按规则生成 rebook://jump 链接；如果两者都没有，才只标注章节标题或 sectionIndex。',
+        '- 当工具结果提供 citation.href 时，必须逐字复制 citation.href，用 Markdown 链接生成可点击出处：`[章节或段落说明](citation.href)`。',
+        '- 当工具结果没有 citation.href 但提供 blockId 时，必须使用工具返回的字段生成链接：`rebook://jump?sectionIndex=<sectionIndex>&sectionId=<encodeURIComponent(sectionId)>&blockId=<encodeURIComponent(blockId)>&blockType=<encodeURIComponent(blockType)>`。',
+        '- 如果 blockType 缺失，可以省略 blockType 参数；sectionId、blockId 必须来自工具结果，不要根据文本自行猜测。',
+        '- blockId 引用示例：`[出处](rebook://jump?sectionIndex=12&sectionId=OEBPS%2Fxhtml%2Fchapter2.xhtml&blockId=paragraph-21&blockType=paragraph)`。',
+        '- 引用应放在它支持的具体观点、句子或列表项后面；不要只把所有引用集中放在文末。',
+        '- 每个主要结论、关键概念或检索命中，原则上至少给一个可点击引用。',
+        '- 只有在寒暄、说明自身能力、解释如何使用功能、用户明确不需要出处，或工具结果既没有 citation.href 也没有 blockId 时，才可以不生成可点击引用。',
+        '- 禁止编造 sectionIndex、sectionId、blockId、blockType；所有定位字段必须来自工具结果。',
         '',
         '# 书籍信息',
         `- 书名：${title}`,
@@ -409,10 +735,34 @@ function roundContextNumber(value: number): number {
 }
 
 function toModelMessages(messages: readonly AIChatMessage[]): ModelMessage[] {
-    return messages.map(message => ({
-        role: message.role,
-        content: message.content,
-    }))
+    return messages.map(message => {
+        if (message.role === 'user') {
+            return {
+                role: 'user',
+                content: normalizeUserMessageContent(message.content),
+            }
+        }
+        return {
+            role: 'assistant',
+            content: normalizeAssistantMessageContent(message.content),
+        }
+    })
+}
+
+function normalizeUserMessageContent(content: AIChatMessage['content']): string | UserContent {
+    if (typeof content === 'string') return content
+    return content.map(part => {
+        if (part.type === 'text') return { type: 'text', text: part.text }
+        return { type: 'image', image: part.image, mediaType: part.mediaType }
+    })
+}
+
+function normalizeAssistantMessageContent(content: AIChatMessage['content']): string {
+    if (typeof content === 'string') return content
+    return content
+        .filter(part => part.type === 'text')
+        .map(part => part.text)
+        .join('\n')
 }
 
 function compactSearchResult(result: SearchResult) {
