@@ -60,9 +60,27 @@ export {
 } from './metadata'
 export {
     searchBook,
-    searchChapters,
-    getSectionSearchText,
+    searchContentUnits,
 } from '../search'
+export {
+    clampReadableContentUnitIndex,
+    createReadableContentCitation,
+    getReadableContent,
+    getReadableContentBlocks,
+    getReadableContentText,
+    getReadableContentUnit,
+    getReadableContentUnitCount,
+    getReadableContentUnits,
+    getSectionReadableText,
+    resolveReadableContentUnitIndex,
+    type ReadableContent,
+    type ReadableContentBlock,
+    type ReadableContentBlockType,
+    type ReadableContentCitation,
+    type ReadableContentOptions,
+    type ReadableContentUnit,
+    type ReadableContentUnitKind,
+} from './readable-content'
 export {
     createStaticTextProvider,
     searchTextChunks,
@@ -158,7 +176,7 @@ export type {
     SearchScope,
     SearchOptions,
     SearchResult,
-    ChapterSearchResult,
+    ContentUnitSearchResult,
 } from '../search'
 export {
     parseStyleDeclarations,

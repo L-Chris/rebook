@@ -23,8 +23,8 @@ import {
 } from './toc'
 import {
     searchBook,
-    searchChapters as searchBookChapters,
-    type ChapterSearchResult,
+    searchContentUnits as searchBookContentUnits,
+    type ContentUnitSearchResult,
     type SearchOptions,
     type SearchResult,
 } from '../search'
@@ -136,14 +136,14 @@ export class ReaderSession {
     }
 
     /**
-     * Search the current book and group matches by chapter.
+     * Search the current book and group matches by readable content unit.
      */
-    async searchChapters(
+    async searchContentUnits(
         query: string,
-        options: Omit<SearchOptions, 'scope' | 'chapterIndex' | 'sectionIndexes'> = {},
-    ): Promise<ChapterSearchResult[]> {
+        options: Omit<SearchOptions, 'scope' | 'unitIndex' | 'unitIndexes'> = {},
+    ): Promise<ContentUnitSearchResult[]> {
         if (!this.book) return []
-        return searchBookChapters(this.book, query, options)
+        return searchBookContentUnits(this.book, query, options)
     }
 
     /**

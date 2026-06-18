@@ -13,7 +13,8 @@ import { MOBIParser } from './parsers/mobi'
 import { FB2Parser } from './parsers/fb2'
 import { CBZParser } from './parsers/cbz'
 import { PDFParser } from './parsers/pdf'
-import { getSectionSearchText, searchBook } from './search'
+import { getReadableContent, getReadableContentUnit, getReadableContentUnits } from './core/readable-content'
+import { searchBook } from './search'
 
 const SERVER_VERSION = '0.2.1'
 
@@ -21,7 +22,7 @@ export interface RebookMCPServerOptions {
     name?: string
     version?: string
     defaultMaxResults?: number
-    maxChapterTextChars?: number
+    maxContentTextChars?: number
 }
 
 export async function createRebookMCPServer(
@@ -33,35 +34,28 @@ export async function createRebookMCPServer(
         version: options.version ?? SERVER_VERSION,
     })
     const defaultMaxResults = Math.max(1, Math.floor(options.defaultMaxResults ?? 20))
-    const maxChapterTextChars = Math.max(1, Math.floor(options.maxChapterTextChars ?? 12_000))
+    const maxContentTextChars = Math.max(1, Math.floor(options.maxContentTextChars ?? 12_000))
 
-    server.registerTool('list_chapters', {
-        description: 'List the readable sections/chapters in the current e-book.',
+    server.registerTool('list_content_units', {
+        description: 'List the readable content units in the current e-book. EPUB units are sections; PDF units are pages.',
         inputSchema: {},
     }, async () => {
-        const chapters = book.sections.map((section, index) => ({
-            index,
-            id: section.id,
-            title: getSectionTitle(book, index),
-            size: section.size,
-            linear: section.linear,
-        }))
-        return toolResult({ chapters })
+        return toolResult({ units: getReadableContentUnits(book) })
     })
 
     server.registerTool('search_book', {
-        description: 'Search the current e-book. Pass chapterIndex to search within one chapter.',
+        description: 'Search the current e-book. Pass unitIndex to search within one readable content unit.',
         inputSchema: {
             query: z.string().min(1).describe('Search query.'),
-            chapterIndex: z.number().int().min(0).optional().describe('Optional section/chapter index to limit the search.'),
+            unitIndex: z.number().int().min(0).optional().describe('Optional readable content unit index to limit the search.'),
             maxResults: z.number().int().min(1).optional().describe('Maximum results to return.'),
             caseSensitive: z.boolean().optional().describe('Whether matching is case-sensitive.'),
             wholeWord: z.boolean().optional().describe('Whether to match whole words only.'),
         },
-    }, async ({ query, chapterIndex, maxResults, caseSensitive, wholeWord }) => {
+    }, async ({ query, unitIndex, maxResults, caseSensitive, wholeWord }) => {
         const results = await searchBook(book, query, {
-            scope: typeof chapterIndex === 'number' ? 'chapter' : 'book',
-            chapterIndex,
+            scope: typeof unitIndex === 'number' ? 'unit' : 'book',
+            unitIndex,
             maxResults: maxResults ?? defaultMaxResults,
             caseSensitive,
             wholeWord,
@@ -69,9 +63,12 @@ export async function createRebookMCPServer(
         return toolResult({
             query,
             results: results.map(result => ({
+                unitIndex: result.unitIndex,
+                unitId: result.unitId,
+                unitKind: result.unitKind,
+                unitTitle: result.unitTitle,
                 sectionIndex: result.sectionIndex,
-                sectionId: result.sectionId,
-                chapterLabel: result.chapterLabel,
+                pageIndex: result.pageIndex,
                 matchIndex: result.matchIndex,
                 start: result.start,
                 end: result.end,
@@ -80,23 +77,25 @@ export async function createRebookMCPServer(
         })
     })
 
-    server.registerTool('get_chapter_text', {
-        description: 'Return readable text for one e-book chapter/section.',
+    server.registerTool('get_content_text', {
+        description: 'Return readable text for one readable content unit.',
         inputSchema: {
-            chapterIndex: z.number().int().min(0).describe('Section/chapter index.'),
+            unitIndex: z.number().int().min(0).describe('Readable content unit index.'),
             maxChars: z.number().int().min(1).optional().describe('Maximum characters to return.'),
         },
-    }, async ({ chapterIndex, maxChars }) => {
-        const section = book.sections[chapterIndex]
-        if (!section) throw new Error(`chapterIndex out of range: ${chapterIndex}`)
-        const limit = Math.max(1, Math.floor(maxChars ?? maxChapterTextChars))
-        const text = await getSectionSearchText(section)
+    }, async ({ unitIndex, maxChars }) => {
+        if (!getReadableContentUnit(book, unitIndex)) throw new Error(`unitIndex out of range: ${unitIndex}`)
+        const limit = Math.max(1, Math.floor(maxChars ?? maxContentTextChars))
+        const content = await getReadableContent(book, unitIndex)
         return toolResult({
-            chapterIndex,
-            id: section.id,
-            title: getSectionTitle(book, chapterIndex),
-            truncated: text.length > limit,
-            text: text.slice(0, limit),
+            unitIndex,
+            unitId: content.unit.id,
+            unitKind: content.unit.kind,
+            unitTitle: content.unit.title,
+            sectionIndex: content.unit.sectionIndex,
+            pageIndex: content.unit.pageIndex,
+            truncated: content.text.length > limit,
+            text: content.text.slice(0, limit),
         })
     })
 
@@ -140,21 +139,6 @@ function getParserForPath(filePath: string): Parser {
     if (lower.endsWith('.cbz') || lower.endsWith('.zip')) return new CBZParser()
     if (lower.endsWith('.pdf')) return new PDFParser()
     throw new Error(`Unsupported e-book format: ${filePath}`)
-}
-
-function getSectionTitle(book: Book, sectionIndex: number): string | undefined {
-    const section = book.sections[sectionIndex]
-    for (const item of flattenTOC(book.toc ?? [])) {
-        const resolved = book.resolveHref?.(item.href)
-        if (resolved?.index === sectionIndex) return item.label
-        const [id] = book.splitTOCHref?.(item.href) ?? [item.href]
-        if (id === section.id) return item.label
-    }
-    return undefined
-}
-
-function flattenTOC(items: NonNullable<Book['toc']>): NonNullable<Book['toc']>[number][] {
-    return items.flatMap(item => item.subitems?.length ? [item, ...flattenTOC(item.subitems)] : [item])
 }
 
 function toolResult(value: Record<string, unknown>) {

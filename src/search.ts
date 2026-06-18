@@ -1,15 +1,22 @@
-import type { Book, Section, TextBlock, TextSegment } from './core/types'
-import { findTOCItemForSection } from './core/toc'
+import type { Book } from './core/types'
+import {
+    getReadableContent,
+    getReadableContentText,
+    getReadableContentUnits,
+    type ReadableContentBlock,
+    type ReadableContentUnit,
+    type ReadableContentUnitKind,
+} from './core/readable-content'
 
-export type SearchScope = 'book' | 'chapter'
+export type SearchScope = 'book' | 'unit'
 
 export interface SearchOptions {
-    /** Search all chapters or a selected chapter. Defaults to 'book'. */
+    /** Search all readable units or one selected unit. Defaults to 'book'. */
     scope?: SearchScope
-    /** Chapter/section index used when scope is 'chapter'. */
-    chapterIndex?: number
-    /** Search only these section indexes. Overrides scope/chapterIndex. */
-    sectionIndexes?: readonly number[]
+    /** Readable unit index used when scope is 'unit'. */
+    unitIndex?: number
+    /** Search only these readable unit indexes. Overrides scope/unitIndex. */
+    unitIndexes?: readonly number[]
     /** Defaults to false. */
     caseSensitive?: boolean
     /** Match whole words only. Defaults to false. */
@@ -22,9 +29,14 @@ export interface SearchOptions {
 
 export interface SearchResult {
     query: string
-    sectionIndex: number
-    sectionId: string | number
-    chapterLabel?: string
+    unitIndex: number
+    unitId: string | number
+    unitKind: ReadableContentUnitKind
+    unitTitle?: string
+    sectionIndex?: number
+    pageIndex?: number
+    blockId?: string
+    blockType?: string
     matchIndex: number
     start: number
     end: number
@@ -34,23 +46,25 @@ export interface SearchResult {
     after: string
 }
 
-export interface ChapterSearchResult {
-    sectionIndex: number
-    sectionId: string | number
-    chapterLabel?: string
+export interface ContentUnitSearchResult {
+    unitIndex: number
+    unitId: string | number
+    unitKind: ReadableContentUnitKind
+    unitTitle?: string
+    sectionIndex?: number
+    pageIndex?: number
     results: SearchResult[]
 }
 
-interface SectionText {
-    sectionIndex: number
-    section: Section
-    chapterLabel?: string
+interface UnitSearchText {
+    unit: ReadableContentUnit
+    block?: ReadableContentBlock
     text: string
 }
 
 /**
- * Search a book's readable text. By default this scans every section; pass
- * `{ scope: 'chapter', chapterIndex }` to search a single chapter.
+ * Search a book's readable content. Reflowable books search sections; fixed
+ * documents search pages that expose text.
  */
 export async function searchBook(
     book: Book,
@@ -63,13 +77,13 @@ export async function searchBook(
     const maxResults = Math.max(0, Math.floor(options.maxResults ?? 100))
     if (maxResults === 0) return []
 
-    const sections = await getSearchableSections(book, options)
+    const units = await getSearchableUnits(book, options)
     const results: SearchResult[] = []
+    const matchIndexes = new Map<number, number>()
 
-    for (const item of sections) {
+    for (const item of units) {
         const haystack = options.caseSensitive ? item.text : item.text.toLocaleLowerCase()
         let fromIndex = 0
-        let matchIndex = 0
 
         while (results.length < maxResults) {
             const index = haystack.indexOf(normalizedQuery, fromIndex)
@@ -79,7 +93,9 @@ export async function searchBook(
 
             if (options.wholeWord && !isWholeWordMatch(item.text, index, end)) continue
 
-            results.push(createSearchResult(item, query, index, end, matchIndex++, options.contextChars ?? 48))
+            const matchIndex = matchIndexes.get(item.unit.index) ?? 0
+            matchIndexes.set(item.unit.index, matchIndex + 1)
+            results.push(createSearchResult(item, query, index, end, matchIndex, options.contextChars ?? 48))
         }
 
         if (results.length >= maxResults) break
@@ -89,28 +105,30 @@ export async function searchBook(
 }
 
 /**
- * Search every chapter and return grouped results. This is useful for chapter
- * search UIs that show a chapter list with per-chapter matches.
+ * Search every readable content unit and return grouped results.
  */
-export async function searchChapters(
+export async function searchContentUnits(
     book: Book,
     query: string,
-    options: Omit<SearchOptions, 'scope' | 'chapterIndex' | 'sectionIndexes'> = {},
-): Promise<ChapterSearchResult[]> {
-    const groups: ChapterSearchResult[] = []
+    options: Omit<SearchOptions, 'scope' | 'unitIndex' | 'unitIndexes'> = {},
+): Promise<ContentUnitSearchResult[]> {
+    const groups: ContentUnitSearchResult[] = []
+    const units = getReadableContentUnits(book)
 
-    for (let sectionIndex = 0; sectionIndex < book.sections.length; sectionIndex++) {
+    for (const unit of units) {
         const results = await searchBook(book, query, {
             ...options,
-            scope: 'chapter',
-            chapterIndex: sectionIndex,
+            scope: 'unit',
+            unitIndex: unit.index,
         })
         if (!results.length) continue
-        const section = book.sections[sectionIndex]
         groups.push({
-            sectionIndex,
-            sectionId: section.id,
-            chapterLabel: getChapterLabel(book, sectionIndex, section),
+            unitIndex: unit.index,
+            unitId: unit.id,
+            unitKind: unit.kind,
+            unitTitle: unit.title,
+            sectionIndex: unit.sectionIndex,
+            pageIndex: unit.pageIndex,
             results,
         })
     }
@@ -118,20 +136,8 @@ export async function searchChapters(
     return groups
 }
 
-export async function getSectionSearchText(section: Section): Promise<string> {
-    if (section.getBlocks) return blocksToText(await section.getBlocks())
-    if (section.getSegments) return segmentsToText(await section.getSegments())
-    if (section.getDocument) {
-        const document = await section.getDocument()
-        if (document) return normalizeSearchText(document.getText())
-    }
-    if (section.loadText) return normalizeSearchText(await section.loadText())
-    if (section.format === 'image') return ''
-    return htmlToText(await section.load())
-}
-
 function createSearchResult(
-    item: SectionText,
+    item: UnitSearchText,
     query: string,
     start: number,
     end: number,
@@ -146,9 +152,14 @@ function createSearchResult(
 
     return {
         query,
-        sectionIndex: item.sectionIndex,
-        sectionId: item.section.id,
-        chapterLabel: item.chapterLabel,
+        unitIndex: item.unit.index,
+        unitId: item.unit.id,
+        unitKind: item.unit.kind,
+        unitTitle: item.unit.title,
+        sectionIndex: item.unit.sectionIndex,
+        pageIndex: item.unit.pageIndex,
+        blockId: item.block?.id,
+        blockType: item.block?.type,
         matchIndex,
         start,
         end,
@@ -159,68 +170,33 @@ function createSearchResult(
     }
 }
 
-async function getSearchableSections(book: Book, options: SearchOptions): Promise<SectionText[]> {
-    const indexes = getSectionIndexes(book, options)
-    return Promise.all(indexes.map(async sectionIndex => {
-        const section = book.sections[sectionIndex]
-        return {
-            sectionIndex,
-            section,
-            chapterLabel: getChapterLabel(book, sectionIndex, section),
-            text: await getSectionSearchText(section),
+async function getSearchableUnits(book: Book, options: SearchOptions): Promise<UnitSearchText[]> {
+    const units = getSearchUnits(book, options)
+    const chunks: UnitSearchText[] = []
+    for (const unit of units) {
+        const content = await getReadableContent(book, unit.index, { includeBlocks: true })
+        if (content.blocks?.length) {
+            chunks.push(...content.blocks.map(block => ({ unit, block, text: block.text })))
+            continue
         }
-    }))
+        chunks.push({ unit, text: await getReadableContentText(book, unit) })
+    }
+    return chunks
 }
 
-function getSectionIndexes(book: Book, options: SearchOptions): number[] {
-    if (options.sectionIndexes) return uniqueValidIndexes(book, options.sectionIndexes)
-    if (options.scope === 'chapter') return uniqueValidIndexes(book, [options.chapterIndex ?? 0])
-    return book.sections.map((_, index) => index)
+function getSearchUnits(book: Book, options: SearchOptions): ReadableContentUnit[] {
+    const units = getReadableContentUnits(book)
+    if (options.unitIndexes) return uniqueValidUnits(units, options.unitIndexes)
+    if (options.scope === 'unit') return uniqueValidUnits(units, [options.unitIndex ?? 0])
+    return units
 }
 
-function uniqueValidIndexes(book: Book, indexes: readonly number[]): number[] {
+function uniqueValidUnits(units: readonly ReadableContentUnit[], indexes: readonly number[]): ReadableContentUnit[] {
+    const byIndex = new Map(units.map(unit => [unit.index, unit]))
     return [...new Set(indexes)]
         .map(index => Math.floor(index))
-        .filter(index => index >= 0 && index < book.sections.length)
-}
-
-function getChapterLabel(book: Book, sectionIndex: number, section: Section): string | undefined {
-    const tocItem = findTOCItemForSection(book, sectionIndex, section)
-    return tocItem?.label
-}
-
-function blocksToText(blocks: readonly TextBlock[]): string {
-    return normalizeSearchText(blocks.map(block => {
-        if (block.type === 'image') return block.image?.alt ?? block.image?.title ?? ''
-        if (block.type === 'table') return block.table?.rows
-            .flatMap(row => row.cells.map(cell => cell.text))
-            .join(' ') ?? ''
-        return segmentsToText(block.segments)
-    }).filter(Boolean).join('\n'))
-}
-
-function segmentsToText(segments: readonly TextSegment[]): string {
-    return normalizeSearchText(segments
-        .filter(segment => segment.source?.nodeType !== 'img')
-        .map(segment => segment.text)
-        .join(''))
-}
-
-function htmlToText(html: string): string {
-    return normalizeSearchText(html
-        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
-        .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'"))
-}
-
-function normalizeSearchText(value: string): string {
-    return value.replace(/\s+/g, ' ').trim()
+        .map(index => byIndex.get(index))
+        .filter((unit): unit is ReadableContentUnit => Boolean(unit))
 }
 
 function isWholeWordMatch(text: string, start: number, end: number): boolean {

@@ -1,5 +1,6 @@
 import type { Book } from './core/types'
-import { getSectionSearchText, searchBook, type SearchOptions, type SearchResult } from './search'
+import { getReadableContent, getReadableContentUnit, getReadableContentUnits } from './core/readable-content'
+import { searchBook, type SearchOptions, type SearchResult } from './search'
 
 type JSONSchema = Record<string, unknown>
 
@@ -18,20 +19,20 @@ export interface MCPToolCallResult {
 export interface BookMCPOptions {
     /** Defaults to 20. */
     defaultMaxResults?: number
-    /** Defaults to 100. */
-    maxChapterTextChars?: number
+    /** Defaults to 12000. */
+    maxContentTextChars?: number
 }
 
 export interface SearchBookToolArgs extends Record<string, unknown> {
     query?: string
-    chapterIndex?: number
+    unitIndex?: number
     maxResults?: number
     caseSensitive?: boolean
     wholeWord?: boolean
 }
 
-export interface GetChapterTextToolArgs extends Record<string, unknown> {
-    chapterIndex?: number
+export interface GetContentTextToolArgs extends Record<string, unknown> {
+    unitIndex?: number
     maxChars?: number
 }
 
@@ -42,27 +43,21 @@ export interface GetChapterTextToolArgs extends Record<string, unknown> {
  */
 export function createBookMCPTools(book: Book, options: BookMCPOptions = {}): MCPToolDefinition[] {
     const defaultMaxResults = Math.max(1, Math.floor(options.defaultMaxResults ?? 20))
-    const maxChapterTextChars = Math.max(1, Math.floor(options.maxChapterTextChars ?? 12_000))
+    const maxContentTextChars = Math.max(1, Math.floor(options.maxContentTextChars ?? 12_000))
 
     return [
         {
-            name: 'list_chapters',
-            description: 'List the readable sections/chapters in the current e-book.',
+            name: 'list_content_units',
+            description: 'List the readable content units in the current e-book. EPUB units are sections; PDF units are pages.',
             inputSchema: objectSchema({}),
-            handler: () => toToolResult(book.sections.map((section, index) => ({
-                index,
-                id: section.id,
-                title: getSectionTitle(book, index),
-                size: section.size,
-                linear: section.linear,
-            }))),
+            handler: () => toToolResult(getReadableContentUnits(book)),
         },
         {
             name: 'search_book',
-            description: 'Search the current e-book. Pass chapterIndex to search within one chapter.',
+            description: 'Search the current e-book. Pass unitIndex to search within one readable content unit.',
             inputSchema: objectSchema({
                 query: { type: 'string', description: 'Search query.' },
-                chapterIndex: { type: 'number', description: 'Optional section/chapter index to limit the search.' },
+                unitIndex: { type: 'number', description: 'Optional readable content unit index to limit the search.' },
                 maxResults: { type: 'number', description: 'Maximum results to return.' },
                 caseSensitive: { type: 'boolean', description: 'Whether matching is case-sensitive.' },
                 wholeWord: { type: 'boolean', description: 'Whether to match whole words only.' },
@@ -74,9 +69,9 @@ export function createBookMCPTools(book: Book, options: BookMCPOptions = {}): MC
                     caseSensitive: args.caseSensitive === true,
                     wholeWord: args.wholeWord === true,
                 }
-                if (typeof args.chapterIndex === 'number') {
-                    searchOptions.scope = 'chapter'
-                    searchOptions.chapterIndex = args.chapterIndex
+                if (typeof args.unitIndex === 'number') {
+                    searchOptions.scope = 'unit'
+                    searchOptions.unitIndex = args.unitIndex
                 }
                 const results = await searchBook(book, query, searchOptions)
                 return toToolResult({
@@ -86,23 +81,25 @@ export function createBookMCPTools(book: Book, options: BookMCPOptions = {}): MC
             },
         },
         {
-            name: 'get_chapter_text',
-            description: 'Return readable text for one e-book chapter/section.',
+            name: 'get_content_text',
+            description: 'Return readable text for one content unit.',
             inputSchema: objectSchema({
-                chapterIndex: { type: 'number', description: 'Section/chapter index.' },
+                unitIndex: { type: 'number', description: 'Readable content unit index.' },
                 maxChars: { type: 'number', description: 'Maximum characters to return.' },
-            }, ['chapterIndex']),
-            handler: async (args: GetChapterTextToolArgs) => {
-                const chapterIndex = getChapterIndex(book, args.chapterIndex)
-                const maxChars = getPositiveInteger(args.maxChars, maxChapterTextChars)
-                const section = book.sections[chapterIndex]
-                const text = await getSectionSearchText(section)
+            }, ['unitIndex']),
+            handler: async (args: GetContentTextToolArgs) => {
+                const unitIndex = getUnitIndex(book, args.unitIndex)
+                const maxChars = getPositiveInteger(args.maxChars, maxContentTextChars)
+                const content = await getReadableContent(book, unitIndex)
                 return toToolResult({
-                    chapterIndex,
-                    id: section.id,
-                    title: getSectionTitle(book, chapterIndex),
-                    truncated: text.length > maxChars,
-                    text: text.slice(0, maxChars),
+                    unitIndex,
+                    unitId: content.unit.id,
+                    unitKind: content.unit.kind,
+                    unitTitle: content.unit.title,
+                    sectionIndex: content.unit.sectionIndex,
+                    pageIndex: content.unit.pageIndex,
+                    truncated: content.text.length > maxChars,
+                    text: content.text.slice(0, maxChars),
                 })
             },
         },
@@ -122,8 +119,11 @@ export async function callBookMCPTool(
 function toMCPSearchResult(result: SearchResult) {
     return {
         sectionIndex: result.sectionIndex,
-        sectionId: result.sectionId,
-        chapterLabel: result.chapterLabel,
+        pageIndex: result.pageIndex,
+        unitIndex: result.unitIndex,
+        unitId: result.unitId,
+        unitKind: result.unitKind,
+        unitTitle: result.unitTitle,
         matchIndex: result.matchIndex,
         start: result.start,
         end: result.end,
@@ -136,22 +136,6 @@ function toToolResult(value: unknown): MCPToolCallResult {
         content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
         structuredContent: value,
     }
-}
-
-function getSectionTitle(book: Book, sectionIndex: number): string | undefined {
-    const section = book.sections[sectionIndex]
-    const items = flattenTOC(book.toc ?? [])
-    for (const item of items) {
-        const resolved = book.resolveHref?.(item.href)
-        if (resolved?.index === sectionIndex) return item.label
-        const [id] = book.splitTOCHref?.(item.href) ?? [item.href]
-        if (id === section.id) return item.label
-    }
-    return undefined
-}
-
-function flattenTOC(items: NonNullable<Book['toc']>): NonNullable<Book['toc']>[number][] {
-    return items.flatMap(item => item.subitems?.length ? [item, ...flattenTOC(item.subitems)] : [item])
 }
 
 function objectSchema(properties: Record<string, JSONSchema>, required: string[] = []): JSONSchema {
@@ -168,10 +152,10 @@ function getRequiredString(value: unknown, name: string): string {
     return value
 }
 
-function getChapterIndex(book: Book, value: unknown): number {
-    if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('chapterIndex must be a number')
+function getUnitIndex(book: Book, value: unknown): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('unitIndex must be a number')
     const index = Math.floor(value)
-    if (index < 0 || index >= book.sections.length) throw new Error(`chapterIndex out of range: ${index}`)
+    if (!getReadableContentUnit(book, index)) throw new Error(`unitIndex out of range: ${index}`)
     return index
 }
 

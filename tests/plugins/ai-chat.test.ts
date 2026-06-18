@@ -1,6 +1,10 @@
+import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import type { LanguageModel } from 'ai'
+import type { FixedDocument } from '../../src/core/fixed-document'
 import type { Book, TextBlock } from '../../src/core/types'
+import { nodePdfRuntime } from '../../src/pdf/runtime/node'
+import { PDFParser } from '../../src/parsers/pdf'
 import { createAIChatController, createAIChatTools, withAIChat, type AIChatBook } from '../../src/plugins/ai-chat'
 
 const makeBook = (): Book => {
@@ -43,14 +47,103 @@ describe('withAIChat', () => {
 
         expect(enhanced.aiChat).toBeTruthy()
         await expect(enhanced.aiChat.search('feedback')).resolves.toHaveLength(2)
-        await expect(enhanced.aiChat.getSectionContent(0)).resolves.toMatchObject({
-            sectionIndex: 0,
+        await expect(enhanced.aiChat.getContent(0)).resolves.toMatchObject({
+            unitIndex: 0,
+            unitKind: 'section',
             title: 'One: The Basics',
         })
         expect(enhanced.aiChat.getTOC()).toEqual([
-            { label: 'One: The Basics', href: 'section-1.xhtml', depth: 0, sectionIndex: 0 },
-            { label: 'Two: Examples', href: 'section-2.xhtml', depth: 0, sectionIndex: 1 },
+            { label: 'One: The Basics', href: 'section-1.xhtml', depth: 0, unitIndex: 0, unitKind: 'section' },
+            { label: 'Two: Examples', href: 'section-2.xhtml', depth: 0, unitIndex: 1, unitKind: 'section' },
         ])
+    })
+
+    it('reads and searches fixed-document page text through content units', async () => {
+        const fixedDocument: FixedDocument = {
+            kind: 'fixed-document',
+            format: 'pdf',
+            pageCount: 2,
+            getPage: pageIndex => ({ index: pageIndex, width: 600, height: 800 }),
+            getPageText: pageIndex => ({
+                pageIndex,
+                width: 600,
+                height: 800,
+                runs: [],
+                text: pageIndex === 0 ? 'Four thousand weeks begins here.' : 'Time management is a trap.',
+            }),
+        }
+        const book: Book = {
+            sections: [],
+            pageList: [
+                { label: '1', href: 'pdf:page:0' },
+                { label: '2', href: 'pdf:page:1' },
+            ],
+            toc: [{ label: 'Start', href: 'pdf:page:0' }],
+            fixedDocument,
+            resolveHref: href => {
+                const match = href.match(/^pdf:page:(\d+)$/)
+                return match ? { index: Number(match[1]) } : null
+            },
+            splitTOCHref: href => {
+                const match = href.match(/^pdf:page:(\d+)$/)
+                return [match ? Number(match[1]) : href, null]
+            },
+        }
+        const controller = createAIChatController(book, { model })
+
+        await expect(controller.getContent(1, { includeBlocks: true })).resolves.toMatchObject({
+            unitIndex: 1,
+            unitKind: 'page',
+            pageIndex: 1,
+            text: 'Time management is a trap.',
+            blocks: [
+                expect.objectContaining({
+                    citation: expect.objectContaining({
+                        unitKind: 'page',
+                        pageIndex: 1,
+                    }),
+                }),
+            ],
+        })
+        await expect(controller.search('management')).resolves.toEqual([
+            expect.objectContaining({
+                unitIndex: 1,
+                unitKind: 'page',
+                pageIndex: 1,
+            }),
+        ])
+    })
+
+    it('reads real PDF page text for AI chat content tools', async () => {
+        const data = await readFile('data/四千周.pdf')
+        const book = await new PDFParser().parse(data.buffer.slice(
+            data.byteOffset,
+            data.byteOffset + data.byteLength,
+        ), { runtime: nodePdfRuntime })
+        const controller = createAIChatController(book, { model })
+
+        expect(book.sections).toHaveLength(0)
+        expect(book.fixedDocument?.pageCount).toBeGreaterThan(0)
+
+        const context = await controller.getCurrentContext({ currentUnitIndex: 0, after: 8, maxChars: 8000 })
+        const textUnit = context.units.find(unit => /[\p{L}\p{N}]/u.test(unit.text))
+        expect(textUnit).toBeTruthy()
+        expect(textUnit?.unitKind).toBe('page')
+
+        const query = textUnit?.text.match(/[\p{Script=Han}]{2,}|[A-Za-z]{4,}/u)?.[0]
+        expect(query).toBeTruthy()
+
+        const results = await controller.search(query!, {
+            scope: 'unit',
+            unitIndex: textUnit!.unitIndex,
+            maxResults: 3,
+        })
+        expect(results.length).toBeGreaterThan(0)
+        expect(results[0]).toMatchObject({
+            unitIndex: textUnit!.unitIndex,
+            unitKind: 'page',
+            pageIndex: textUnit!.pageIndex,
+        })
     })
 })
 
@@ -58,27 +151,28 @@ describe('createAIChatTools', () => {
     it('creates bounded book tools that can read current context', async () => {
         const book = makeBook()
         const controller = createAIChatController(book, { model, maxContextChars: 80 })
-        const context = await controller.getCurrentContext({ currentSectionIndex: 1, before: 1 })
+        const context = await controller.getCurrentContext({ currentUnitIndex: 1, before: 1 })
 
-        expect(context.currentSectionIndex).toBe(1)
-        expect(context.sections.map(section => section.sectionIndex)).toEqual([0, 1])
+        expect(context.currentUnitIndex).toBe(1)
+        expect(context.units.map(unit => unit.unitIndex)).toEqual([0, 1])
 
-        const tools = createAIChatTools(book, { model }, { currentSectionIndex: 1 })
+        const tools = createAIChatTools(book, { model }, { currentUnitIndex: 1 })
         expect(Object.keys(tools).sort()).toEqual([
             'getBookMetadata',
+            'getContent',
             'getCurrentContext',
-            'getSectionContent',
             'getTOC',
             'searchBook',
         ])
 
-        const section = await tools.getSectionContent.execute?.({ maxChars: 120 }, {
+        const content = await tools.getContent.execute?.({ maxChars: 120 }, {
             toolCallId: 'call-1',
             messages: [],
             abortSignal: new AbortController().signal,
         })
-        expect(section).toMatchObject({
-            sectionIndex: 1,
+        expect(content).toMatchObject({
+            unitIndex: 1,
+            unitKind: 'section',
             title: 'Two: Examples',
         })
     })
@@ -95,15 +189,15 @@ describe('createAIChatTools', () => {
             toc: [{ label: 'Long Chapter', href: 'long.xhtml' }],
             resolveHref: () => ({ index: 0 }),
         }
-        const tools = createAIChatTools(book, { model }, { currentSectionIndex: 0 })
+        const tools = createAIChatTools(book, { model }, { currentUnitIndex: 0 })
         const context = await tools.getCurrentContext.execute?.({}, {
             toolCallId: 'call-context',
             messages: [],
             abortSignal: new AbortController().signal,
         })
 
-        expect(context.sections[0].text.length).toBeGreaterThan(19000)
-        expect(context.sections[0].text.length).toBeLessThan(20500)
-        expect(context.sections[0].truncated).toBe(true)
+        expect(context.units[0].text.length).toBeGreaterThan(19000)
+        expect(context.units[0].text.length).toBeLessThan(20500)
+        expect(context.units[0].truncated).toBe(true)
     })
 })

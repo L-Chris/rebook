@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type AnchorHTMLAttributes } from 'react'
+import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type AnchorHTMLAttributes, type HTMLAttributes, type ReactElement, type ReactNode } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -6,7 +6,9 @@ import {
   ArrowUp,
   ExternalLink,
   Loader2,
+  Maximize2,
   MessageSquareText,
+  Minimize2,
   PanelLeft,
   Plus,
   Search,
@@ -23,6 +25,7 @@ import {
   EBookError,
   UnsupportedFormatError,
   createReader,
+  getReadableContentUnit,
   registerBuiltInParsers,
   registry,
   setRebookDebug,
@@ -74,7 +77,7 @@ interface DemoConfig {
   chatBaseURL: string
   chatAPIKey: string
   chatModel: string
-  chatMaxSectionChars: string
+  chatMaxContentChars: string
   chatPanelWidth: string
 }
 
@@ -95,11 +98,14 @@ interface ChatAttachment {
 }
 
 interface SearchItem {
-  sectionIndex: number
-  chapterLabel?: string
+  unitIndex: number
+  unitId: string | number
+  unitKind: string
+  unitTitle?: string
+  sectionIndex?: number
+  pageIndex?: number
   excerpt: string
   match: string
-  sectionId: string | number
 }
 
 const CONFIG_KEY = 'rebook-demo-config'
@@ -171,7 +177,7 @@ const defaultConfig: DemoConfig = {
   chatBaseURL: '',
   chatAPIKey: '',
   chatModel: '',
-  chatMaxSectionChars: '6000',
+  chatMaxContentChars: '6000',
   chatPanelWidth: '420',
 }
 
@@ -206,7 +212,7 @@ function App() {
   const [dragging, setDragging] = useState(false)
   const [debugEntries, setDebugEntries] = useState<string[]>([])
   const [searchQuery, setSearchQuery] = useState('')
-  const [searchScope, setSearchScope] = useState<'chapter' | 'book'>('chapter')
+  const [searchScope, setSearchScope] = useState<'unit' | 'book'>('unit')
   const [searchResults, setSearchResults] = useState<SearchItem[]>([])
   const [searchStatus, setSearchStatus] = useState('Open a book to search.')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
@@ -306,8 +312,8 @@ function App() {
       if (model) {
         plugins.push(withAIChat({
           model,
-          maxSectionChars: () => Number(configRef.current.chatMaxSectionChars) || Number(defaultConfig.chatMaxSectionChars),
-          maxContextChars: () => Math.max(Number(configRef.current.chatMaxSectionChars) || Number(defaultConfig.chatMaxSectionChars), 20000),
+          maxContentChars: () => Number(configRef.current.chatMaxContentChars) || Number(defaultConfig.chatMaxContentChars),
+          maxContextChars: () => Math.max(Number(configRef.current.chatMaxContentChars) || Number(defaultConfig.chatMaxContentChars), 20000),
         }))
       }
     }
@@ -445,8 +451,8 @@ function App() {
     }
     setSearchStatus('Searching...')
     const results = await reader.search(query, {
-      scope: searchScope === 'chapter' ? 'chapter' : 'book',
-      chapterIndex: location?.index ?? 0,
+      scope: searchScope === 'unit' ? 'unit' : 'book',
+      unitIndex: location?.index ?? 0,
       maxResults: MAX_SEARCH_RESULTS,
       contextChars: 96,
     })
@@ -455,11 +461,11 @@ function App() {
   }
 
   const goToSearchResult = async (item: SearchItem) => {
-    if (!readerRef.current?.canGoTo?.(item.sectionIndex)) {
+    if (!readerRef.current?.canGoTo?.(item.unitIndex)) {
       setStatus('Trial limit reached.')
       return
     }
-    await readerRef.current.goTo(item.sectionIndex)
+    await readerRef.current.goTo(item.unitIndex)
   }
 
   const sendChatMessage = async () => {
@@ -504,7 +510,7 @@ function App() {
       const current = getCurrentChatContext(readerRef.current, bookRef.current)
       const askOptions = {
         messages: nextMessages.map(toAIChatMessage),
-        currentSectionIndex: current.sectionIndex,
+        currentUnitIndex: current.unitIndex,
         current,
       }
       if (typeof aiChat.stream === 'function') {
@@ -560,14 +566,14 @@ function App() {
   const openChatCitation = async (href: string) => {
     const citation = parseRebookJumpHref(href)
     if (!citation || !readerRef.current) return
-    if (!readerRef.current.canGoTo?.(citation.sectionIndex)) {
+    if (!readerRef.current.canGoTo?.(citation.unitIndex)) {
       setStatus('Trial limit reached.')
       return
     }
-    const sectionTarget = citation.sectionId ?? citation.sectionIndex
-    await readerRef.current.goTo(citation.blockId ? `${sectionTarget}#${citation.blockId}` : citation.sectionIndex)
+    const unitTarget = citation.unitId ?? citation.unitIndex
+    await readerRef.current.goTo(citation.blockId && citation.unitKind === 'section' ? `${unitTarget}#${citation.blockId}` : citation.unitIndex)
     readerRef.current.clearMarks?.('citation')
-    if (citation.blockId) {
+    if (citation.blockId && citation.unitKind === 'section' && typeof citation.sectionIndex === 'number') {
       readerRef.current.setMark?.({
         id: 'ai-chat-citation',
         kind: 'citation',
@@ -942,8 +948,8 @@ function RightPanel(props: {
 function SearchPanel(props: {
   query: string
   setQuery(value: string): void
-  scope: 'chapter' | 'book'
-  setScope(value: 'chapter' | 'book'): void
+  scope: 'unit' | 'book'
+  setScope(value: 'unit' | 'book'): void
   status: string
   results: SearchItem[]
   onRun(): void
@@ -967,7 +973,7 @@ function SearchPanel(props: {
         </div>
         <div className="flex items-center gap-2">
           <select className="input flex-1" value={props.scope} onChange={event => props.setScope(event.target.value as any)}>
-            <option value="chapter">This chapter</option>
+            <option value="unit">Current unit</option>
             <option value="book">Whole book</option>
           </select>
           <button className="toolbar-button" type="button" onClick={props.onClear}>Clear</button>
@@ -977,14 +983,14 @@ function SearchPanel(props: {
       <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
         {props.results.map((item, index) => (
           <button
-            key={`${item.sectionIndex}-${item.match}-${index}`}
+            key={`${item.unitIndex}-${item.match}-${index}`}
             type="button"
             className="w-full rounded-lg border border-slate-200 bg-white p-3 text-left text-sm hover:border-blue-300 hover:bg-blue-50"
             onClick={() => props.onNavigate(item)}
           >
             <div className="mb-1 flex items-center gap-2 text-xs text-slate-500">
               <span>#{index + 1}</span>
-              <span className="truncate">{item.chapterLabel || `Section ${item.sectionIndex + 1}`}</span>
+              <span className="truncate">{item.unitTitle || `${item.unitKind} ${item.unitIndex + 1}`}</span>
             </div>
             <p className="line-clamp-4 text-slate-700">{item.excerpt}</p>
           </button>
@@ -1054,6 +1060,9 @@ function ChatPanel(props: {
                       <ChatMarkdownLink href={href} onCitation={props.onCitation} {...linkProps}>
                         {children}
                       </ChatMarkdownLink>
+                    ),
+                    pre: ({ node: _node, children, ...preProps }) => (
+                      <ChatMarkdownPre {...preProps}>{children}</ChatMarkdownPre>
                     ),
                   }}
                 >
@@ -1228,6 +1237,155 @@ function ChatMarkdownLink({
   )
 }
 
+function ChatMarkdownPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
+  const preview = getRenderableCodePreview(children)
+  if (!preview) return <pre {...props}>{children}</pre>
+  return <ChatCodePreview preview={preview} preProps={props} />
+}
+
+function ChatCodePreview({
+  preview,
+  preProps,
+}: {
+  preview: RenderableCodePreview
+  preProps: HTMLAttributes<HTMLPreElement>
+}) {
+  const [tab, setTab] = useState<'preview' | 'code'>('preview')
+  const [collapsed, setCollapsed] = useState(false)
+  const [frameHeight, setFrameHeight] = useState(360)
+  const frameRef = useRef<HTMLIFrameElement | null>(null)
+  const measureFrameHeight = useCallback(() => {
+    const doc = frameRef.current?.contentDocument
+    if (!doc) return
+    const body = doc.body
+    const root = doc.documentElement
+    const height = Math.max(
+      root?.scrollHeight ?? 0,
+      root?.offsetHeight ?? 0,
+      body?.scrollHeight ?? 0,
+      body?.offsetHeight ?? 0,
+    )
+    if (height > 0) setFrameHeight(clampPreviewFrameHeight(height + 2))
+  }, [])
+
+  useEffect(() => {
+    setFrameHeight(360)
+    setCollapsed(false)
+  }, [preview.srcDoc])
+
+  useEffect(() => {
+    if (tab !== 'preview') return
+    const frame = requestAnimationFrame(measureFrameHeight)
+    return () => cancelAnimationFrame(frame)
+  }, [measureFrameHeight, tab, preview.srcDoc])
+
+  const effectiveFrameHeight = collapsed ? Math.min(frameHeight, 260) : frameHeight
+
+  return (
+    <div className="chat-code-preview">
+      <div className="chat-code-preview-header">
+        <span>{preview.label}</span>
+        <div className="chat-code-preview-actions">
+          {tab === 'preview' ? (
+            <button
+              type="button"
+              className="chat-code-preview-icon"
+              onClick={() => setCollapsed(value => !value)}
+              title={collapsed ? 'Expand preview height' : 'Collapse preview height'}
+            >
+              {collapsed ? <Maximize2 className="h-3.5 w-3.5" /> : <Minimize2 className="h-3.5 w-3.5" />}
+            </button>
+          ) : null}
+          <div className="chat-code-preview-tabs">
+            <button
+              type="button"
+              className={tab === 'preview' ? 'is-active' : ''}
+              onClick={() => setTab('preview')}
+            >
+              Preview
+            </button>
+            <button
+              type="button"
+              className={tab === 'code' ? 'is-active' : ''}
+              onClick={() => setTab('code')}
+            >
+              Code
+            </button>
+          </div>
+        </div>
+      </div>
+      {tab === 'preview' ? (
+        <iframe
+          ref={frameRef}
+          className="chat-code-preview-frame"
+          sandbox="allow-same-origin"
+          srcDoc={preview.srcDoc}
+          style={{ height: effectiveFrameHeight }}
+          title={`${preview.label} preview`}
+          onLoad={measureFrameHeight}
+        />
+      ) : (
+        <pre {...preProps}><code className={preview.className}>{preview.code}</code></pre>
+      )}
+    </div>
+  )
+}
+
+function clampPreviewFrameHeight(height: number): number {
+  return Math.max(260, Math.min(1200, Math.ceil(height)))
+}
+
+interface RenderableCodePreview {
+  label: string
+  srcDoc: string
+  code: string
+  className?: string
+}
+
+function getRenderableCodePreview(children: ReactNode): RenderableCodePreview | null {
+  const child = Array.isArray(children) ? children.find(isValidElement) : children
+  if (!isValidElement(child)) return null
+  const element = child as ReactElement<{ className?: string; children?: ReactNode }>
+  const className = element.props.className ?? ''
+  const language = /\blanguage-(html|svg)\b/i.exec(className)?.[1]?.toLowerCase()
+  const code = flattenReactText(element.props.children).trim()
+  if (!code) return null
+
+  if (language === 'svg' || looksLikeSVG(code)) {
+    return {
+      label: 'SVG',
+      srcDoc: createSVGPreviewDocument(code),
+      code,
+      className,
+    }
+  }
+  if (language === 'html' || looksLikeHTML(code)) {
+    return {
+      label: 'HTML',
+      srcDoc: createHTMLPreviewDocument(code),
+      code,
+      className,
+    }
+  }
+  return null
+}
+
+function looksLikeSVG(value: string): boolean {
+  return /^\s*<svg[\s>]/i.test(value)
+}
+
+function looksLikeHTML(value: string): boolean {
+  return /^\s*(?:<!doctype\s+html|<html[\s>]|<body[\s>]|<(?:div|main|section|article|style|canvas|table|form|button|h[1-6]|p|ul|ol|svg)[\s>])/i.test(value)
+}
+
+function createSVGPreviewDocument(svg: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;min-height:100%;background:#fff}body{display:grid;place-items:center;padding:16px;box-sizing:border-box}svg{max-width:100%;height:auto}</style></head><body>${svg}</body></html>`
+}
+
+function createHTMLPreviewDocument(html: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;min-height:100%;background:#fff;color:#111827;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}</style></head><body>${html}</body></html>`
+}
+
 function flattenReactText(value: unknown): string {
   if (typeof value === 'string' || typeof value === 'number') return String(value)
   if (Array.isArray(value)) return value.map(flattenReactText).join('')
@@ -1356,7 +1514,7 @@ function SettingsSectionForm({ section, config, setConfig }: { section: Settings
         <TextField label="Base URL" value={config.chatBaseURL} onChange={value => update('chatBaseURL', value)} />
         <TextField label="API key" value={config.chatAPIKey} type="password" onChange={value => update('chatAPIKey', value)} />
         <TextField label="Model" value={config.chatModel} onChange={value => update('chatModel', value)} placeholder="gpt-4o-mini" />
-        <TextField label="Section chars" value={config.chatMaxSectionChars} type="number" onChange={value => update('chatMaxSectionChars', value)} />
+        <TextField label="Content chars" value={config.chatMaxContentChars} type="number" onChange={value => update('chatMaxContentChars', value)} />
       </FormGrid>
     )
   }
@@ -1482,8 +1640,11 @@ function resolveChatCommand(input: string): { prompt?: string; error?: string; i
 }
 
 interface RebookJumpTarget {
-  sectionIndex: number
-  sectionId?: string
+  unitIndex: number
+  unitId?: string
+  unitKind?: string
+  sectionIndex?: number
+  pageIndex?: number
   blockId?: string
 }
 
@@ -1500,11 +1661,19 @@ function parseRebookJumpHref(href: string): RebookJumpTarget | null {
   try {
     const url = new URL(href)
     if (url.protocol !== 'rebook:' || url.hostname !== 'jump') return null
-    const sectionIndex = Number(url.searchParams.get('sectionIndex'))
-    if (!Number.isInteger(sectionIndex) || sectionIndex < 0) return null
+    const rawUnitIndex = url.searchParams.get('unitIndex') ?? url.searchParams.get('sectionIndex') ?? url.searchParams.get('pageIndex')
+    const unitIndex = Number(rawUnitIndex)
+    if (!Number.isInteger(unitIndex) || unitIndex < 0) return null
+    const sectionIndexParam = url.searchParams.get('sectionIndex')
+    const pageIndexParam = url.searchParams.get('pageIndex')
+    const sectionIndex = sectionIndexParam == null ? undefined : Number(sectionIndexParam)
+    const pageIndex = pageIndexParam == null ? undefined : Number(pageIndexParam)
     return {
-      sectionIndex,
-      sectionId: url.searchParams.get('sectionId') || undefined,
+      unitIndex,
+      unitId: url.searchParams.get('unitId') || url.searchParams.get('sectionId') || undefined,
+      unitKind: url.searchParams.get('unitKind') || (sectionIndexParam != null ? 'section' : pageIndexParam != null ? 'page' : undefined),
+      sectionIndex: Number.isInteger(sectionIndex) ? sectionIndex : undefined,
+      pageIndex: Number.isInteger(pageIndex) ? pageIndex : undefined,
       blockId: url.searchParams.get('blockId') || undefined,
     }
   } catch {
@@ -1631,12 +1800,16 @@ function getReaderStyles(config: DemoConfig) {
 
 function getCurrentChatContext(reader: any, book: any) {
   const loc = reader?.getLocation?.()
-  const sectionIndex = typeof loc?.index === 'number' ? loc.index : 0
-  const section = book?.sections?.[sectionIndex]
+  const unitIndex = typeof loc?.index === 'number' ? loc.index : 0
+  const unit = book ? getReadableContentUnit(book, unitIndex) : undefined
   return {
-    sectionIndex,
-    sectionId: section?.id,
-    sectionTitle: loc?.tocItem?.label,
+    unitIndex,
+    unitId: unit?.id,
+    unitKind: unit?.kind,
+    unitTitle: unit?.title ?? loc?.tocItem?.label,
+    sectionIndex: unit?.sectionIndex,
+    sectionId: unit?.kind === 'section' ? unit.id : undefined,
+    sectionTitle: unit?.kind === 'section' ? unit.title ?? loc?.tocItem?.label : undefined,
     tocLabel: loc?.tocItem?.label,
     tocHref: loc?.tocItem?.href,
     sectionFraction: typeof loc?.fraction === 'number' ? loc.fraction : undefined,

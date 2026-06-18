@@ -1,9 +1,10 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import type { Book, TextBlock } from '../src/core/types'
+import type { FixedDocument } from '../src/core/fixed-document'
 import type { ReaderMark, Renderer } from '../src/core/renderer'
 import { ReaderSession } from '../src/core/reader'
-import { searchBook, searchChapters } from '../src/search'
+import { searchBook, searchContentUnits } from '../src/search'
 import { EPUBParser } from '../src/parsers/epub'
 import { NodeDOMAdapter, NodeURLFactory } from '../src/adapters/node'
 
@@ -97,20 +98,20 @@ describe('searchBook', () => {
         const results = await searchBook(makeBook(), 'beta')
 
         expect(results).toHaveLength(2)
-        expect(results.map(result => result.sectionIndex)).toEqual([0, 1])
-        expect(results[0].chapterLabel).toBe('One')
-        expect(results[1].chapterLabel).toBe('Two')
+        expect(results.map(result => result.unitIndex)).toEqual([0, 1])
+        expect(results[0].unitTitle).toBe('One')
+        expect(results[1].unitTitle).toBe('Two')
         expect(results[0].excerpt).toContain('Alpha beta gamma')
     })
 
-    it('searches within a selected chapter', async () => {
+    it('searches within a selected readable unit', async () => {
         const results = await searchBook(makeBook(), 'alpha', {
-            scope: 'chapter',
-            chapterIndex: 0,
+            scope: 'unit',
+            unitIndex: 0,
         })
 
         expect(results).toHaveLength(2)
-        expect(results.every(result => result.sectionIndex === 0)).toBe(true)
+        expect(results.every(result => result.unitIndex === 0)).toBe(true)
     })
 
     it('does not search hidden footnote content extracted from inline markers', async () => {
@@ -118,16 +119,59 @@ describe('searchBook', () => {
 
         expect(results).toHaveLength(0)
     })
+
+    it('searches fixed-document page text through the same readable unit API', async () => {
+        const fixedDocument: FixedDocument = {
+            kind: 'fixed-document',
+            format: 'pdf',
+            pageCount: 2,
+            getPage: pageIndex => ({ index: pageIndex, width: 600, height: 800 }),
+            getPageText: pageIndex => ({
+                pageIndex,
+                width: 600,
+                height: 800,
+                runs: [],
+                text: pageIndex === 0 ? 'Four thousand weeks is a short life.' : 'Attention shapes time.',
+            }),
+        }
+        const book: Book = {
+            sections: [],
+            pageList: [
+                { label: '1', href: 'pdf:page:0' },
+                { label: '2', href: 'pdf:page:1' },
+            ],
+            toc: [{ label: 'Page 1', href: 'pdf:page:0' }],
+            fixedDocument,
+            resolveHref: href => {
+                const match = href.match(/^pdf:page:(\d+)$/)
+                return match ? { index: Number(match[1]) } : null
+            },
+            splitTOCHref: href => {
+                const match = href.match(/^pdf:page:(\d+)$/)
+                return [match ? Number(match[1]) : href, null]
+            },
+        }
+
+        const results = await searchBook(book, 'attention')
+
+        expect(results).toHaveLength(1)
+        expect(results[0]).toMatchObject({
+            unitIndex: 1,
+            unitKind: 'page',
+            unitTitle: '2',
+            pageIndex: 1,
+        })
+    })
 })
 
-describe('searchChapters', () => {
-    it('groups search results by chapter', async () => {
-        const groups = await searchChapters(makeBook(), 'beta')
+describe('searchContentUnits', () => {
+    it('groups search results by readable content unit', async () => {
+        const groups = await searchContentUnits(makeBook(), 'beta')
 
         expect(groups).toHaveLength(2)
-        expect(groups[0].chapterLabel).toBe('One')
+        expect(groups[0].unitTitle).toBe('One')
         expect(groups[0].results).toHaveLength(1)
-        expect(groups[1].chapterLabel).toBe('Two')
+        expect(groups[1].unitTitle).toBe('Two')
     })
 })
 
@@ -141,11 +185,11 @@ describe('ReaderSession search', () => {
 
         await reader.openBook(makeBook())
         const results = await reader.search('beta')
-        const groups = await reader.searchChapters('beta')
+        const groups = await reader.searchContentUnits('beta')
 
-        expect(results.map(result => result.sectionIndex)).toEqual([0, 1])
+        expect(results.map(result => result.unitIndex)).toEqual([0, 1])
         expect(groups).toHaveLength(2)
-        expect(groups[0].chapterLabel).toBe('One')
+        expect(groups[0].unitTitle).toBe('One')
 
         reader.destroy()
     })
@@ -184,20 +228,20 @@ describe('searchBook with real EPUB content', () => {
 
         const allResults = await searchBook(book, 'CabNet', { maxResults: 5 })
         const firstChapterResults = await searchBook(book, 'CabNet', {
-            scope: 'chapter',
-            chapterIndex: 1,
+            scope: 'unit',
+            unitIndex: 1,
             maxResults: 5,
         })
         const secondChapterResults = await searchBook(book, 'CabNet', {
-            scope: 'chapter',
-            chapterIndex: 2,
+            scope: 'unit',
+            unitIndex: 2,
             maxResults: 5,
         })
 
         expect(allResults.length).toBeGreaterThan(0)
-        expect(allResults[0].chapterLabel).toBe('第一章 另一条路')
+        expect(allResults[0].unitTitle).toBe('第一章 另一条路')
         expect(firstChapterResults.length).toBeGreaterThan(0)
-        expect(firstChapterResults.every(result => result.sectionIndex === 1)).toBe(true)
+        expect(firstChapterResults.every(result => result.unitIndex === 1)).toBe(true)
         expect(secondChapterResults).toHaveLength(0)
     })
 })

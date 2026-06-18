@@ -359,9 +359,20 @@ export {
 // Search
 export {
     searchBook,
-    searchChapters,
-    getSectionSearchText,
+    searchContentUnits,
 } from './search'
+export {
+    clampReadableContentUnitIndex,
+    createReadableContentCitation,
+    getReadableContent,
+    getReadableContentBlocks,
+    getReadableContentText,
+    getReadableContentUnit,
+    getReadableContentUnitCount,
+    getReadableContentUnits,
+    getSectionReadableText,
+    resolveReadableContentUnitIndex,
+} from './core/readable-content'
 
 export {
     withTrialLimit,
@@ -389,8 +400,8 @@ export type {
     AIChatResponse,
     AIChatRole,
     AIChatSearchOptions,
-    AIChatSectionContent,
-    AIChatSectionContentOptions,
+    AIChatContent,
+    AIChatContentOptions,
     AIChatTOCItem,
     AIChatToolContext,
 } from './plugins/ai-chat'
@@ -444,8 +455,17 @@ export type {
     SearchScope,
     SearchOptions,
     SearchResult,
-    ChapterSearchResult,
+    ContentUnitSearchResult,
 } from './search'
+export type {
+    ReadableContent,
+    ReadableContentBlock,
+    ReadableContentBlockType,
+    ReadableContentCitation,
+    ReadableContentOptions,
+    ReadableContentUnit,
+    ReadableContentUnitKind,
+} from './core/readable-content'
 
 export {
     setRebookDebug,
@@ -462,7 +482,7 @@ export type {
     MCPToolCallResult,
     BookMCPOptions,
     SearchBookToolArgs,
-    GetChapterTextToolArgs,
+    GetContentTextToolArgs,
 } from './mcp'
 
 // Parsers
