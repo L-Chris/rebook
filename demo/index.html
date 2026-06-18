@@ -566,7 +566,7 @@
             <input type="checkbox" id="translate-check">
         </div>
         <div id="translation-fields">
-            <div class="setting-stack">
+            <div class="setting-stack" id="local-translation-fields">
                 <input type="text" id="baseurl-input" placeholder="API Base URL (Optional)">
                 <input type="password" id="api-key-input" placeholder="OpenAI API Key">
                 <input type="text" id="model-input" placeholder="Model (Default: gpt-4o-mini)">
@@ -578,13 +578,18 @@
                 <option value="replace">Replace (替换)</option>
             </select>
             </div>
-            <div class="setting-row">
+            <div class="setting-row" id="translate-toc-row">
                 <label>TOC</label>
                 <input type="checkbox" id="translate-toc-check">
             </div>
             <div class="setting-row">
                 <label>Professional</label>
                 <input type="checkbox" id="professional-translation-check">
+            </div>
+            <div class="setting-stack" id="professional-translation-fields">
+                <input type="text" id="professional-service-url-input" placeholder="Rebook Service URL (Default: http://127.0.0.1:8083)">
+                <input type="text" id="professional-book-id-input" placeholder="Backend Book ID (Auto after upload)">
+                <button id="btn-professional-stop" type="button" title="Cancel backend translation job">Stop Job</button>
             </div>
             <div class="setting-row">
                 <label>Prefetch</label>
@@ -746,12 +751,18 @@
         const trialStatus = document.getElementById('trial-status')
         const translateCheck = document.getElementById('translate-check')
         const translationFields = document.getElementById('translation-fields')
+        const localTranslationFields = document.getElementById('local-translation-fields')
         const baseUrlInput = document.getElementById('baseurl-input')
         const apiKeyInput = document.getElementById('api-key-input')
         const modelInput = document.getElementById('model-input')
         const translateModeSelect = document.getElementById('translate-mode-select')
+        const translateTocRow = document.getElementById('translate-toc-row')
         const translateTocCheck = document.getElementById('translate-toc-check')
         const professionalTranslationCheck = document.getElementById('professional-translation-check')
+        const professionalTranslationFields = document.getElementById('professional-translation-fields')
+        const professionalServiceUrlInput = document.getElementById('professional-service-url-input')
+        const professionalBookIdInput = document.getElementById('professional-book-id-input')
+        const btnProfessionalStop = document.getElementById('btn-professional-stop')
         const prefetchPagesInput = document.getElementById('prefetch-pages-input')
         const translationStatus = document.getElementById('translation-status')
         const ttsCheck = document.getElementById('tts-check')
@@ -803,6 +814,7 @@
             translate: false,
             translateTOC: false,
             professionalTranslation: false,
+            professionalServiceBaseUrl: 'http://127.0.0.1:8083',
             baseURL: '',
             apiKey: '',
             model: '',
@@ -840,6 +852,9 @@
         let fixedBenchmarkRunning = false
         let fixedPerformanceStatusToken = 0
         let webGpuCapabilityPromise = null
+        let currentProfessionalStatus = null
+        let currentProfessionalJobId = ''
+        let professionalCancelPromise = null
 
         const loadConfig = () => {
             try {
@@ -866,6 +881,7 @@
                 translate: translateCheck.checked,
                 translateTOC: translateTocCheck.checked,
                 professionalTranslation: professionalTranslationCheck.checked,
+                professionalServiceBaseUrl: professionalServiceUrlInput.value,
                 baseURL: baseUrlInput.value,
                 apiKey: apiKeyInput.value,
                 model: modelInput.value,
@@ -906,6 +922,10 @@
             translateCheck.checked = config.translate
             translateTocCheck.checked = config.translateTOC
             professionalTranslationCheck.checked = !!config.professionalTranslation
+            professionalServiceUrlInput.value = config.professionalServiceBaseUrl ?? defaultConfig.professionalServiceBaseUrl
+            professionalBookIdInput.value = ''
+            professionalBookIdInput.dataset.auto = '0'
+            professionalBookIdInput.dataset.fileKey = ''
             baseUrlInput.value = config.baseURL
             apiKeyInput.value = config.apiKey
             modelInput.value = config.model
@@ -1031,24 +1051,209 @@
         })
 
         const updateTranslationFields = () => {
+            const professional = professionalTranslationCheck.checked
             translationFields.style.display = translateCheck.checked ? 'block' : 'none'
+            localTranslationFields.style.display = professional ? 'none' : 'grid'
+            translateTocRow.style.display = professional ? 'none' : 'flex'
+            professionalTranslationFields.style.display = professional ? 'grid' : 'none'
+            updateProfessionalStopButton()
             updateTranslationStatus()
         }
 
+        const updateProfessionalStopButton = (status = currentProfessionalStatus || currentBook?.professionalTranslationStatus) => {
+            const jobId = status?.jobId || currentProfessionalJobId
+            const terminal = ['done', 'cancelled', 'error'].includes(status?.phase)
+            btnProfessionalStop.disabled = !translateCheck.checked
+                || !professionalTranslationCheck.checked
+                || !getProfessionalServiceBaseUrl()
+                || !jobId
+                || terminal
+                || !!professionalCancelPromise
+            btnProfessionalStop.textContent = professionalCancelPromise ? 'Stopping...' : 'Stop Job'
+        }
+
         const updateTranslationStatus = (status = currentBook?.professionalTranslationStatus) => {
+            if (status) {
+                currentProfessionalStatus = status
+                if (status.jobId) currentProfessionalJobId = status.jobId
+            }
             if (!translateCheck.checked) {
                 translationStatus.textContent = 'Translation plugin disabled.'
+                updateProfessionalStopButton(status)
+                return
+            }
+            if (professionalTranslationCheck.checked) {
+                if (!getProfessionalServiceBaseUrl()) {
+                    translationStatus.textContent = 'Enter a rebook-service URL to enable professional translation.'
+                    updateProfessionalStopButton(status)
+                    return
+                }
+                if (status?.phase === 'uploading') {
+                    translationStatus.textContent = status.message
+                    updateProfessionalStopButton(status)
+                    return
+                }
+                if (!getProfessionalBookId()) {
+                    translationStatus.textContent = currentFile
+                        ? 'Professional translation will upload the book to rebook-service when opening or reloading.'
+                        : 'Open a book to upload it to rebook-service for professional translation.'
+                    updateProfessionalStopButton(status)
+                    return
+                }
+                translationStatus.textContent = status?.message ?? 'Backend professional translation will start after opening or reloading a book.'
+                updateProfessionalStopButton(status)
                 return
             }
             if (!apiKeyInput.value.trim()) {
                 translationStatus.textContent = 'Enter an API key to enable translation.'
+                updateProfessionalStopButton(status)
                 return
             }
-            if (!professionalTranslationCheck.checked) {
-                translationStatus.textContent = 'Basic block translation enabled.'
+            translationStatus.textContent = 'Basic block translation enabled.'
+            updateProfessionalStopButton(status)
+        }
+
+        const getProfessionalServiceBaseUrl = () =>
+            (professionalServiceUrlInput.value.trim() || defaultConfig.professionalServiceBaseUrl).replace(/\/+$/, '')
+
+        const getProfessionalBookId = () => professionalBookIdInput.value.trim()
+
+        const getFileCacheKey = (file) => file
+            ? `${file.name}:${file.size}:${file.lastModified || 0}`
+            : ''
+
+        const clearAutoProfessionalBookId = () => {
+            if (professionalBookIdInput.dataset.auto !== '1') return
+            professionalBookIdInput.value = ''
+            professionalBookIdInput.dataset.auto = '0'
+            professionalBookIdInput.dataset.fileKey = ''
+        }
+
+        let professionalUploadPromise = null
+
+        const ensureProfessionalBackendBook = async (file) => {
+            if (!translateCheck.checked || !professionalTranslationCheck.checked) return null
+            const serviceBaseUrl = getProfessionalServiceBaseUrl()
+            if (!serviceBaseUrl) throw new Error('Enter a rebook-service URL to enable professional translation.')
+
+            const fileKey = getFileCacheKey(file)
+            const existingBookId = getProfessionalBookId()
+            const existingAuto = professionalBookIdInput.dataset.auto === '1'
+            if (existingBookId && (!existingAuto || professionalBookIdInput.dataset.fileKey === fileKey)) {
+                return existingBookId
+            }
+
+            if (professionalUploadPromise) return professionalUploadPromise
+
+            professionalBookIdInput.value = ''
+            professionalBookIdInput.dataset.auto = '0'
+            professionalBookIdInput.dataset.fileKey = ''
+            professionalUploadPromise = uploadProfessionalBook(file, serviceBaseUrl, fileKey)
+            try {
+                return await professionalUploadPromise
+            } finally {
+                professionalUploadPromise = null
+            }
+        }
+
+        const uploadProfessionalBook = async (file, serviceBaseUrl, fileKey) => {
+            updateTranslationStatus({
+                phase: 'uploading',
+                message: `Uploading ${file.name} to rebook-service...`,
+            })
+            const form = new FormData()
+            form.append('file', file, file.name || 'book')
+            const response = await fetch(`${serviceBaseUrl}/api/books/upload`, {
+                method: 'POST',
+                body: form,
+            })
+            if (!response.ok) {
+                throw new Error(`rebook-service upload failed (${response.status}): ${await readServiceError(response)}`)
+            }
+            const backendBook = await response.json()
+            if (!backendBook?.id) {
+                throw new Error('rebook-service upload response did not include a book id.')
+            }
+            professionalBookIdInput.value = backendBook.id
+            professionalBookIdInput.dataset.auto = '1'
+            professionalBookIdInput.dataset.fileKey = fileKey
+            updateTranslationStatus({
+                phase: 'uploaded',
+                message: `Backend book ready: ${backendBook.title || backendBook.id}.`,
+                bookId: backendBook.id,
+            })
+            return backendBook.id
+        }
+
+        const readServiceError = async (response) => {
+            try {
+                const data = await response.clone().json()
+                return data?.message || data?.error || JSON.stringify(data)
+            } catch {
+                return await response.text().catch(() => response.statusText) || response.statusText
+            }
+        }
+
+        const cancelProfessionalJob = async () => {
+            const serviceBaseUrl = getProfessionalServiceBaseUrl()
+            const status = currentProfessionalStatus || currentBook?.professionalTranslationStatus
+            const jobId = status?.jobId || currentProfessionalJobId
+            if (!serviceBaseUrl || !jobId || professionalCancelPromise) {
+                updateTranslationStatus({
+                    phase: 'error',
+                    message: 'No active backend translation job to stop.',
+                    bookId: getProfessionalBookId() || undefined,
+                    jobId,
+                })
                 return
             }
-            translationStatus.textContent = status?.message ?? 'Professional translation analysis will start after opening or reloading a book.'
+
+            professionalCancelPromise = (async () => {
+                updateTranslationStatus({
+                    ...status,
+                    phase: 'running',
+                    message: `Stopping backend translation job ${jobId}...`,
+                    bookId: getProfessionalBookId() || status?.bookId,
+                    jobId,
+                })
+                const response = await fetch(`${serviceBaseUrl}/api/jobs/${encodeURIComponent(jobId)}/cancel`, {
+                    method: 'POST',
+                })
+                if (!response.ok) {
+                    throw new Error(`rebook-service cancel failed (${response.status}): ${await readServiceError(response)}`)
+                }
+                const snapshot = await response.json()
+                const job = snapshot?.job
+                updateTranslationStatus({
+                    phase: job?.status === 'cancelled' ? 'cancelled' : 'running',
+                    message: job?.status === 'cancelled'
+                        ? (job.errorMessage || 'Backend professional translation was cancelled.')
+                        : `Backend professional translation ${job?.stage || job?.status || 'updated'}.`,
+                    bookId: job?.bookId || getProfessionalBookId() || undefined,
+                    jobId,
+                    stage: job?.stage,
+                    progress: job?.progress,
+                    completedChunks: job?.completedChunks,
+                    totalChunks: job?.totalChunks,
+                    chunkStats: snapshot?.chunkStats,
+                })
+                refreshReaderForConfig()
+            })()
+
+            try {
+                await professionalCancelPromise
+            } catch (error) {
+                updateTranslationStatus({
+                    phase: 'error',
+                    message: error instanceof Error ? error.message : String(error),
+                    bookId: getProfessionalBookId() || undefined,
+                    jobId,
+                    error,
+                })
+            } finally {
+                professionalCancelPromise = null
+                updateProfessionalStopButton()
+            }
         }
 
         const updateTrialStatus = () => {
@@ -1169,31 +1374,45 @@
                 }))
             }
             
-            if (translateCheck.checked && apiKeyInput.value.trim()) {
-                const model = createAIModel()
-                const translationOptions = {
-                    model,
-                    targetLanguage: 'zh-CN',
-                    mode: () => translateModeSelect.value,
-                    translateTOC: () => translateTocCheck.checked,
-                    prefetchPages: () => Number(prefetchPagesInput.value) || 0,
-                    onTOCUpdate: () => {
-                        refreshCurrentTOC()
-                    },
-                    onUpdate: ({ sectionIndex }) => {
-                        if (reader?.getLocation()?.index === sectionIndex) {
-                            scheduleReaderRefresh()
-                        }
+            if (translateCheck.checked) {
+                const onUpdate = ({ sectionIndex }) => {
+                    if (reader?.getLocation()?.index === sectionIndex) {
+                        scheduleReaderRefresh()
                     }
                 }
-                plugins.push(professionalTranslationCheck.checked
-                    ? withProfessionalTranslation({
-                        ...translationOptions,
-                        pipeline: {
+
+                if (professionalTranslationCheck.checked) {
+                    const serviceBaseUrl = getProfessionalServiceBaseUrl()
+                    const bookId = getProfessionalBookId()
+                    if (serviceBaseUrl && bookId) {
+                        plugins.push(withProfessionalTranslation({
+                            serviceBaseUrl,
+                            bookId,
+                            targetLanguage: 'zh-CN',
+                            mode: () => translateModeSelect.value,
+                            prefetchPages: () => Number(prefetchPagesInput.value) || 0,
                             onStatus: updateTranslationStatus,
+                            onUpdate,
+                            pipeline: {
+                                audience: 'general demo readers',
+                                style: 'Faithful, precise, publication-quality Chinese.',
+                            },
+                        }))
+                    }
+                } else if (apiKeyInput.value.trim()) {
+                    const model = createAIModel()
+                    plugins.push(withTranslation({
+                        model,
+                        targetLanguage: 'zh-CN',
+                        mode: () => translateModeSelect.value,
+                        translateTOC: () => translateTocCheck.checked,
+                        prefetchPages: () => Number(prefetchPagesInput.value) || 0,
+                        onTOCUpdate: () => {
+                            refreshCurrentTOC()
                         },
-                    })
-                    : withTranslation(translationOptions))
+                        onUpdate,
+                    }))
+                }
             }
 
             if (ttsCheck.checked) {
@@ -1337,11 +1556,26 @@
             if (currentFile) await openFile(currentFile, { preserveFile: true })
         }
 
+        function handleReaderActionError(label, error) {
+            const detail = formatErrorDetail(error)
+            console.error(`${label}:`, error)
+            debugDemo(label, { detail })
+        }
+
+        function reloadReaderForConfig() {
+            void recreateReader().catch(error => handleReaderActionError('reader reload failed', error))
+        }
+
+        function refreshReaderForConfig() {
+            if (!hasOpenBook()) return
+            void reader.refresh().catch(error => handleReaderActionError('reader refresh failed', error))
+        }
+
         function scheduleReaderRefresh() {
             clearTimeout(refreshTimer)
             refreshTimer = setTimeout(() => {
                 refreshTimer = null
-                reader.refresh()
+                refreshReaderForConfig()
             }, 150)
         }
 
@@ -1613,7 +1847,10 @@
             alert('Trial limit reached.')
         }
 
+        const hasOpenBook = () => !!currentBook && !!reader.getBook?.()
+
         const guardedGoTo = async (target) => {
+            if (!hasOpenBook()) return
             if (!reader.canGoTo(target)) {
                 showTrialBlocked()
                 return
@@ -1622,11 +1859,23 @@
         }
 
         const guardedGoRight = async () => {
-            if (!reader.canGoNext()) {
+            if (!hasOpenBook()) return
+            const movesNext = reader.getBook()?.dir === 'rtl' ? false : true
+            if (movesNext && !reader.canGoNext()) {
                 showTrialBlocked()
                 return
             }
             await reader.goRight()
+        }
+
+        const guardedGoLeft = async () => {
+            if (!hasOpenBook()) return
+            const movesNext = reader.getBook()?.dir === 'rtl'
+            if (movesNext && !reader.canGoNext()) {
+                showTrialBlocked()
+                return
+            }
+            await reader.goLeft()
         }
 
         // Render TOC
@@ -1655,7 +1904,7 @@
                         showTrialBlocked()
                         return
                     }
-                    guardedGoTo(target)
+                    void guardedGoTo(target).catch(error => handleReaderActionError('toc navigation failed', error))
                 })
 
                 li.appendChild(a)
@@ -1763,7 +2012,10 @@
         // Open a file
         const openFile = async (file, options = {}) => {
             try {
-                if (!options.preserveFile) currentFile = file
+                if (!options.preserveFile) {
+                    if (getFileCacheKey(file) !== getFileCacheKey(currentFile)) clearAutoProfessionalBookId()
+                    currentFile = file
+                }
                 dropTarget.classList.add('hidden')
 
                 // Detect FB2 files
@@ -1778,6 +2030,13 @@
                     size: file.size,
                     type: file.type,
                 })
+                if (translateCheck.checked && professionalTranslationCheck.checked) {
+                    await ensureProfessionalBackendBook(file)
+                    reader.destroy()
+                    viewer.textContent = ''
+                    reader = createDemoReader()
+                    wireReaderEvents()
+                }
                 const book = await reader.open(file)
                 const openMs = Math.round((performance.now() - openStarted) * 10) / 10
                 currentBook = book
@@ -1926,7 +2185,7 @@
 
         fixedPainterSelect.addEventListener('change', () => {
             saveConfig()
-            recreateReader()
+            reloadReaderForConfig()
         })
 
         pdfBenchmarkCheck.addEventListener('change', () => {
@@ -1936,7 +2195,7 @@
             }
             updateFixedPerformanceFields()
             saveConfig()
-            if (pdfBenchmarkCheck.checked) void runFixedPainterBenchmark()
+            if (pdfBenchmarkCheck.checked && hasOpenBook()) void runFixedPainterBenchmark()
         })
 
         pdfBenchmarkPagesInput.addEventListener('change', () => {
@@ -1966,19 +2225,19 @@
         trialCheck.addEventListener('change', () => {
             updateTrialFields()
             saveConfig()
-            recreateReader()
+            reloadReaderForConfig()
         })
 
         trialPagesInput.addEventListener('change', () => {
             saveConfig()
-            if (trialCheck.checked) recreateReader()
+            if (trialCheck.checked) reloadReaderForConfig()
             else updateTrialStatus()
         })
 
         translateCheck.addEventListener('change', (e) => {
             updateTranslationFields()
             saveConfig()
-            recreateReader()
+            reloadReaderForConfig()
         })
 
         translateTocCheck.addEventListener('change', () => {
@@ -1988,37 +2247,57 @@
         })
 
         professionalTranslationCheck.addEventListener('change', () => {
+            updateTranslationFields()
             saveConfig()
-            if (translateCheck.checked) recreateReader()
+            if (translateCheck.checked) reloadReaderForConfig()
             else updateTranslationStatus()
         })
 
         baseUrlInput.addEventListener('change', () => {
             saveConfig()
-            if (translateCheck.checked) recreateReader()
+            if (translateCheck.checked && !professionalTranslationCheck.checked) reloadReaderForConfig()
         })
 
         apiKeyInput.addEventListener('change', () => {
             saveConfig()
             updateTranslationStatus()
-            if (translateCheck.checked) recreateReader()
+            if (translateCheck.checked && !professionalTranslationCheck.checked) reloadReaderForConfig()
         })
 
         modelInput.addEventListener('change', () => {
             saveConfig()
-            if (translateCheck.checked) recreateReader()
+            if (translateCheck.checked && !professionalTranslationCheck.checked) reloadReaderForConfig()
+        })
+
+        professionalServiceUrlInput.addEventListener('change', () => {
+            clearAutoProfessionalBookId()
+            saveConfig()
+            updateTranslationStatus()
+            if (translateCheck.checked && professionalTranslationCheck.checked && currentFile) reloadReaderForConfig()
+        })
+
+        professionalBookIdInput.addEventListener('change', () => {
+            professionalBookIdInput.dataset.auto = '0'
+            professionalBookIdInput.dataset.fileKey = ''
+            saveConfig()
+            updateTranslationStatus()
+            if (translateCheck.checked && professionalTranslationCheck.checked && currentFile) reloadReaderForConfig()
+        })
+
+        btnProfessionalStop.addEventListener('click', () => {
+            void cancelProfessionalJob()
         })
 
         translateModeSelect.addEventListener('change', () => {
             saveConfig()
             currentBook?.refreshTranslatedTOC?.()
             refreshCurrentTOC()
-            if (translateCheck.checked) reader.refresh()
+            if (translateCheck.checked) refreshReaderForConfig()
         })
 
         prefetchPagesInput.addEventListener('change', () => {
             saveConfig()
-            if (translateCheck.checked) recreateReader()
+            if (translateCheck.checked) reloadReaderForConfig()
         })
 
         exportSectionCount.addEventListener('change', saveConfig)
@@ -2027,7 +2306,7 @@
             updateTTSFields()
             saveConfig()
             stopTTS()
-            recreateReader()
+            reloadReaderForConfig()
         })
 
         ;[
@@ -2051,7 +2330,7 @@
                 saveConfig()
                 if (ttsCheck.checked) {
                     stopTTS()
-                    recreateReader()
+                    reloadReaderForConfig()
                 }
             })
         })
@@ -2092,7 +2371,7 @@
         }
 
         async function speakCurrentSection() {
-            if (!currentBook?.tts) {
+            if (!currentBook?.tts || !hasOpenBook()) {
                 alert('Enable TTS and reload the current book first.')
                 return
             }
@@ -2129,6 +2408,7 @@
             ttsStopRequested = false
             let playedAny = false
             while (!ttsStopRequested && !abortController.signal.aborted) {
+                if (!hasOpenBook()) break
                 const location = reader.getLocation()
                 const sectionIndex = location?.index ?? 0
                 const prefetch = await getPrefetch(sectionIndex)
@@ -2158,7 +2438,7 @@
 
                 if (ttsStopRequested || abortController.signal.aborted) break
                 reader.clearMarks('tts')
-                if (!reader.canGoNext()) break
+                if (!hasOpenBook() || !reader.canGoNext()) break
 
                 const before = getLocationKey(reader.getLocation())
                 await reader.next()
@@ -2242,6 +2522,7 @@
 
         // Progress bar click
         progressBar.addEventListener('click', (e) => {
+            if (!hasOpenBook()) return
             const rect = progressBar.getBoundingClientRect()
             const fraction = (e.clientX - rect.left) / rect.width
             const trialLimit = reader.getTrialLimit()
@@ -2249,13 +2530,16 @@
                 showTrialBlocked()
                 return
             }
-            reader.goToFraction(fraction)
+            void reader.goToFraction(fraction).catch(error => handleReaderActionError('progress navigation failed', error))
         })
 
         // Keyboard navigation
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'ArrowLeft' || e.key === 'h') reader.goLeft()
-            else if (e.key === 'ArrowRight' || e.key === 'l') guardedGoRight()
+            if (e.key === 'ArrowLeft' || e.key === 'h') {
+                void guardedGoLeft().catch(error => handleReaderActionError('keyboard navigation failed', error))
+            } else if (e.key === 'ArrowRight' || e.key === 'l') {
+                void guardedGoRight().catch(error => handleReaderActionError('keyboard navigation failed', error))
+            }
         })
 
         function wireReaderEvents() {

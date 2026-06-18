@@ -9,26 +9,43 @@ type TranslationUpdate = { sectionIndex: number; blocks: TextBlock[] }
 type TranslationItem = { block: TextBlock, index: number, text: string, tableCell?: { rowIndex: number, cellIndex: number } }
 type TableCellTranslations = Map<string, string>
 type BlockTranslation = string | { tableCells: TableCellTranslations }
-type ProfessionalPipelinePhase = 'idle' | 'analyzing' | 'ready' | 'error'
+type ProfessionalPipelinePhase = 'idle' | 'starting' | 'running' | 'ready' | 'done' | 'cancelled' | 'error'
+type BackendChunk = {
+    id: string
+    chapterIndex: number
+    chunkIndex: number
+    title?: string | null
+    content: string
+    translation?: string | null
+    status: string
+}
+type BackendJob = {
+    id: string
+    bookId: string
+    status: string
+    stage: string
+    progress: number
+    completedChunks: number
+    totalChunks: number
+    errorMessage?: string | null
+}
+type BackendChunkStat = {
+    status: string
+    _count: { status: number }
+}
+type BackendJobSnapshot = {
+    job: BackendJob
+    chunkStats: BackendChunkStat[]
+}
+type BackendSectionTranslation = {
+    chunks: BackendChunk[]
+    signature: string
+}
 type TranslationBook = Book & {
     refreshTranslatedTOC?: () => void
     requestBlockTranslations?: (sectionIndex: number, blockIds: readonly string[]) => void
     readonly translationPrefetchPageCount?: number
     readonly professionalTranslationStatus?: ProfessionalTranslationStatus
-}
-type NormalizedProfessionalTranslationPipelineOptions = {
-    enabled: () => boolean
-    bookType?: string
-    audience?: string
-    style?: string
-    sectionSampleChars: number
-    onStatus?: (status: ProfessionalTranslationStatus) => void
-}
-type ProfessionalTranslationContext = {
-    profile: ProfessionalTranslationProfile
-    currentChapter: TranslationChapterSummary | null
-    previousChapter: TranslationChapterSummary | null
-    nextChapter: TranslationChapterSummary | null
 }
 
 export type TranslationTermCategory = 'term' | 'person' | 'organization' | 'place' | 'concept' | 'abbreviation'
@@ -78,24 +95,59 @@ export interface ProfessionalBookAnalysis {
 export interface ProfessionalTranslationStatus {
     phase: ProfessionalPipelinePhase
     message: string
-    analysis?: ProfessionalBookAnalysis
-    profile?: ProfessionalTranslationProfile
+    bookId?: string
+    jobId?: string
+    stage?: string
+    progress?: number
+    completedChunks?: number
+    totalChunks?: number
+    chunkStats?: BackendChunkStat[]
     error?: unknown
 }
 
 export interface ProfessionalTranslationPipelineOptions {
-    /** Enable the professional pipeline. Defaults to true when this object is supplied. */
-    enabled?: ValueOrGetter<boolean>
     /** Optional book type hint, e.g. "computer science textbook". */
     bookType?: string
     /** Optional target reader hint. */
     audience?: string
     /** Optional preferred translation style. */
     style?: string
-    /** Maximum characters sampled per section during whole-book analysis. Defaults to 1200. */
-    sectionSampleChars?: number
-    /** Called when analysis/profile generation status changes. */
+    /** Maximum translation review/refine loops per chunk. Defaults to the backend setting. */
+    maxReviewLoops?: number
+}
+
+export interface BackendProfessionalTranslationOptions {
+    /** Base URL of rebook-service, e.g. "http://127.0.0.1:8083". */
+    serviceBaseUrl: string
+    /** Server-side rebook-service book id. The book must already be uploaded/imported there. */
+    bookId: string
+    /** Existing job id to attach to. When omitted and autoStart is true, the plugin starts one. */
+    jobId?: string
+    /** Target language sent when starting a new backend job. Defaults to zh-CN. */
+    targetLanguage?: string
+    /** Optional source language sent when starting a new backend job. */
+    sourceLanguage?: string
+    /** Display mode. Defaults to bilingual. */
+    mode?: ValueOrGetter<TranslationMode>
+    /** Number of pages ahead for renderer-driven backend status/chunk refreshes. Defaults to 2. */
+    prefetchPages?: ValueOrGetter<number>
+    /** Start a backend expert translation job when jobId is not supplied. Defaults to true. */
+    autoStart?: boolean
+    /** Poll interval for backend job/chunk refresh. Defaults to 2000ms. */
+    pollIntervalMs?: number
+    /** Extra fetch init options, useful for credentials or headers. */
+    requestInit?: RequestInit
+    /** Optional fetch implementation for non-browser runtimes. */
+    fetcher?: typeof fetch
+    /** Backend expert translation hints. */
+    pipeline?: ProfessionalTranslationPipelineOptions
+    /** Called when backend translation status changes. */
     onStatus?: (status: ProfessionalTranslationStatus) => void
+    /**
+     * Called when backend translated chunks have updated a section.
+     * Readers can use this to refresh the current section.
+     */
+    onUpdate?: (event: TranslationUpdate) => void
 }
 
 class TranslationFormatError extends Error {
@@ -135,11 +187,6 @@ export interface TranslationOptions {
     /** Number of pages ahead for renderer-driven block prefetching. Defaults to 2. */
     prefetchPages?: ValueOrGetter<number>
     /**
-     * Enable the professional translation pipeline:
-     * whole-book analysis -> terminology/profile generation -> contextual chapter translation.
-     */
-    pipeline?: ValueOrGetter<boolean> | ProfessionalTranslationPipelineOptions
-    /**
      * Called when a background translation has updated a section.
      * Readers can use this to refresh the current section without blocking
      * initial rendering on the translation request.
@@ -150,19 +197,203 @@ export interface TranslationOptions {
 }
 
 /**
- * A professional translation plugin preset.
+ * A professional translation plugin backed by rebook-service.
  *
- * It keeps the same lazy block translation behavior as `withTranslation`, while
- * adding a whole-book analysis pass, terminology extraction, translation
- * strategy generation, and chapter-aware prompts before any translated batch.
+ * Expert translation no longer runs in-process. The server owns the LangGraph
+ * workflow, glossary, review/refine loop, persistence, and progress stream.
  */
 export function withProfessionalTranslation(
-    options: Omit<TranslationOptions, 'pipeline'> & { pipeline?: ProfessionalTranslationPipelineOptions | ValueOrGetter<boolean> }
+    options: BackendProfessionalTranslationOptions
 ): RebookPlugin {
-    return withTranslation({
-        ...options,
-        pipeline: options.pipeline ?? true,
-    })
+    if (!options) {
+        throw new Error('withProfessionalTranslation requires options.')
+    }
+    const {
+        serviceBaseUrl,
+        bookId,
+        targetLanguage = 'zh-CN',
+        sourceLanguage,
+        mode = 'bilingual',
+        prefetchPages = 2,
+        autoStart = true,
+        pollIntervalMs = 2000,
+        requestInit,
+        fetcher = globalThis.fetch?.bind(globalThis),
+        pipeline,
+        onStatus,
+        onUpdate,
+    } = options
+    if (!serviceBaseUrl?.trim()) {
+        throw new Error('withProfessionalTranslation requires options.serviceBaseUrl.')
+    }
+    if (!bookId?.trim()) {
+        throw new Error('withProfessionalTranslation requires options.bookId.')
+    }
+    const normalizedBaseUrl = serviceBaseUrl.trim().replace(/\/+$/, '')
+    const normalizedBookId = bookId.trim()
+
+    if (!fetcher) {
+        throw new Error('withProfessionalTranslation requires fetch support or options.fetcher.')
+    }
+
+    return (book: Book): Book => {
+        const sectionTranslations = new Map<number, BackendSectionTranslation>()
+        let professionalStatus: ProfessionalTranslationStatus = {
+            phase: 'idle',
+            message: 'Backend professional translation is waiting to start.',
+            bookId: normalizedBookId,
+            jobId: options.jobId,
+        }
+        let jobId = options.jobId
+        let startPromise: Promise<void> | null = null
+        let refreshPromise: Promise<void> | null = null
+        let pollTimer: ReturnType<typeof setTimeout> | null = null
+        const originalBlockPromises = new Map<number, Promise<TextBlock[]>>()
+
+        const getMode = () => getValue(mode)
+        const setProfessionalStatus = (status: ProfessionalTranslationStatus) => {
+            professionalStatus = status
+            onStatus?.(status)
+        }
+        const getOriginalBlocks = (sectionIndex: number) => {
+            const section = book.sections[sectionIndex]
+            const originalGetBlocks = section?.getBlocks?.bind(section)
+            if (!originalGetBlocks) return Promise.resolve([] as TextBlock[])
+            let promise = originalBlockPromises.get(sectionIndex)
+            if (!promise) {
+                promise = Promise.resolve(originalGetBlocks()).then(blocks => blocks.map(cloneTextBlock))
+                originalBlockPromises.set(sectionIndex, promise)
+            }
+            return promise
+        }
+        const ensureStarted = () => {
+            if (startPromise) return startPromise
+            startPromise = startBackendTranslation({
+                baseUrl: normalizedBaseUrl,
+                bookId: normalizedBookId,
+                jobId,
+                autoStart,
+                targetLanguage,
+                sourceLanguage,
+                pipeline,
+                requestInit,
+                fetcher,
+            })
+                .then(startedJobId => {
+                    jobId = startedJobId
+                    setProfessionalStatus({
+                        phase: 'starting',
+                        message: `Backend professional translation job ${jobId} is starting.`,
+                        bookId: normalizedBookId,
+                        jobId,
+                    })
+                    schedulePoll(0)
+                })
+                .catch(error => {
+                    setProfessionalStatus({
+                        phase: 'error',
+                        message: error instanceof Error ? error.message : String(error),
+                        bookId: normalizedBookId,
+                        jobId,
+                        error,
+                    })
+                })
+            return startPromise
+        }
+        const refreshFromBackend = () => {
+            if (!jobId) return ensureStarted()
+            if (refreshPromise) return refreshPromise
+            refreshPromise = Promise.all([
+                fetchBackendJob(normalizedBaseUrl, jobId, requestInit, fetcher),
+                fetchBackendChunks(normalizedBaseUrl, normalizedBookId, requestInit, fetcher),
+            ])
+                .then(async ([snapshot, chunks]) => {
+                    const changedSections = updateSectionTranslations(sectionTranslations, chunks)
+                    const job = snapshot.job
+                    const phase = getBackendPhase(job.status)
+                    setProfessionalStatus({
+                        phase,
+                        message: job.status === 'done'
+                            ? 'Backend professional translation is complete.'
+                            : job.status === 'failed'
+                                ? job.errorMessage || 'Backend professional translation failed.'
+                                : job.status === 'cancelled'
+                                    ? job.errorMessage || 'Backend professional translation was cancelled.'
+                                    : `Backend professional translation ${job.stage || job.status}.`,
+                        bookId: normalizedBookId,
+                        jobId,
+                        stage: job.stage,
+                        progress: job.progress,
+                        completedChunks: job.completedChunks,
+                        totalChunks: job.totalChunks,
+                        chunkStats: snapshot.chunkStats,
+                        error: job.status === 'failed' ? job.errorMessage : undefined,
+                    })
+                    for (const sectionIndex of changedSections) {
+                        const blocks = await getOriginalBlocks(sectionIndex)
+                        const sectionTranslation = sectionTranslations.get(sectionIndex)
+                        onUpdate?.({
+                            sectionIndex,
+                            blocks: renderBackendTranslatedBlocks(blocks, sectionTranslation?.chunks || [], getMode()),
+                        })
+                    }
+                    if (!isBackendJobTerminal(job.status)) schedulePoll(pollIntervalMs)
+                })
+                .catch(error => {
+                    setProfessionalStatus({
+                        phase: 'error',
+                        message: error instanceof Error ? error.message : String(error),
+                        bookId: normalizedBookId,
+                        jobId,
+                        error,
+                    })
+                })
+                .finally(() => {
+                    refreshPromise = null
+                })
+            return refreshPromise
+        }
+        const schedulePoll = (delay: number) => {
+            if (pollTimer) clearTimeout(pollTimer)
+            pollTimer = setTimeout(() => {
+                pollTimer = null
+                void refreshFromBackend()
+            }, delay)
+        }
+
+        const wrappedSections = book.sections.map((section, sectionIndex) => {
+            const originalGetBlocks = section.getBlocks?.bind(section)
+            if (!originalGetBlocks) return section
+            return {
+                ...section,
+                getBlocks: async () => {
+                    void ensureStarted()
+                    const blocks = await getOriginalBlocks(sectionIndex)
+                    const sectionTranslation = sectionTranslations.get(sectionIndex)
+                    return renderBackendTranslatedBlocks(blocks, sectionTranslation?.chunks || [], getMode())
+                },
+            }
+        })
+
+        void ensureStarted()
+
+        const translatedBook: TranslationBook = {
+            ...book,
+            requestBlockTranslations(sectionIndex: number) {
+                void ensureStarted()
+                if (!sectionTranslations.has(sectionIndex)) void refreshFromBackend()
+            },
+            get translationPrefetchPageCount() {
+                return getSafePageCount(prefetchPages)
+            },
+            get professionalTranslationStatus() {
+                return professionalStatus
+            },
+            sections: wrappedSections,
+        }
+
+        return translatedBook
+    }
 }
 
 /**
@@ -180,77 +411,21 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
         translateTOC = false,
         onTOCUpdate
     } = options
-    const pipelineOptions = normalizePipelineOptions(options.pipeline)
 
     return (book: Book): Book => {
         const sectionTranslators = new Map<number, (blockIds: readonly string[]) => void>()
         let translatedTOCLabels: string[] | null = null
         let tocTranslationPromise: Promise<string[] | null> | null = null
-        let professionalStatus: ProfessionalTranslationStatus = {
-            phase: 'idle',
-            message: pipelineOptions.enabled() ? 'Professional translation analysis is waiting to start.' : 'Professional translation pipeline disabled.',
-        }
-        let professionalProfilePromise: Promise<ProfessionalTranslationProfile | null> | null = null
 
         const getMode = () => getValue(mode)
         const shouldTranslateTOC = () => getValue(translateTOC)
-        const shouldUsePipeline = () => pipelineOptions.enabled()
 
         const getTOC = () => renderTOCItems(book.toc, translatedTOCLabels, shouldTranslateTOC(), getMode())
-        const setProfessionalStatus = (status: ProfessionalTranslationStatus) => {
-            professionalStatus = status
-            pipelineOptions.onStatus?.(status)
-        }
-
-        const startProfessionalPipeline = () => {
-            if (!shouldUsePipeline()) return Promise.resolve(null)
-            if (professionalProfilePromise) return professionalProfilePromise
-
-            setProfessionalStatus({
-                phase: 'analyzing',
-                message: 'Analyzing the whole book for chapters, terminology, names, tables, code, formulas, and notes.',
-            })
-            professionalProfilePromise = buildProfessionalTranslationProfile(book, model, targetLanguage, pipelineOptions)
-                .then(({ analysis, profile }) => {
-                    setProfessionalStatus({
-                        phase: 'ready',
-                        message: `Professional translation profile ready: ${profile.terms.length} terms, ${profile.chapterSummaries.length} chapter summaries.`,
-                        analysis,
-                        profile,
-                    })
-                    return profile
-                })
-                .catch(error => {
-                    const message = error instanceof Error ? error.message : String(error)
-                    setProfessionalStatus({
-                        phase: 'error',
-                        message: `Professional translation analysis failed; falling back to basic translation. ${message}`,
-                        error,
-                    })
-                    console.error('Professional translation analysis failed:', error)
-                    return null
-                })
-
-            return professionalProfilePromise
-        }
-
-        const getProfessionalContext = async (sectionIndex: number): Promise<ProfessionalTranslationContext | null> => {
-            if (!shouldUsePipeline()) return null
-            const profile = await startProfessionalPipeline()
-            if (!profile) return null
-            return {
-                profile,
-                currentChapter: profile.chapterSummaries.find(summary => summary.sectionIndex === sectionIndex) ?? null,
-                previousChapter: [...profile.chapterSummaries].reverse().find(summary => summary.sectionIndex < sectionIndex) ?? null,
-                nextChapter: profile.chapterSummaries.find(summary => summary.sectionIndex > sectionIndex) ?? null,
-            }
-        }
 
         const startTOCTranslation = () => {
             if (!book.toc || !shouldTranslateTOC() || tocTranslationPromise || translatedTOCLabels) return
             tocTranslationPromise = Promise.resolve()
                 .then(async () => {
-                    if (shouldUsePipeline()) await startProfessionalPipeline()
                     return translateTOCLabels(book.toc!, model, targetLanguage)
                 })
                 .then(labels => {
@@ -316,7 +491,6 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                         if (!requestedItems.length) return
                         for (const item of requestedItems) queuedBlockIds.add(item.block.id)
 
-                        const professionalContext = await getProfessionalContext(index)
                         await translateBlockItems(requestedItems, model, targetLanguage, concurrency, tokensPerBatch, {
                             onBatchStart: batch => {
                                 for (const item of batch) {
@@ -336,7 +510,7 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                                     inFlightBlockIds.delete(item.block.id)
                                 }
                             },
-                        }, professionalContext)
+                        })
                     })
                     .catch(console.error)
                     .finally(() => {
@@ -386,7 +560,6 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
         })
 
         startTOCTranslation()
-        void startProfessionalPipeline()
 
         const translatedBook: TranslationBook = {
             ...book,
@@ -403,9 +576,6 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
             },
             get translationPrefetchPageCount() {
                 return getSafePageCount(prefetchPages)
-            },
-            get professionalTranslationStatus() {
-                return professionalStatus
             },
             sections: wrappedSections
         }
@@ -438,7 +608,6 @@ async function translateBlockItems(
         onBatchComplete?: (translations: Map<number, BlockTranslation>, batch: TranslationItem[]) => void
         onBatchError?: (batch: TranslationItem[], error: unknown) => void
     } = {},
-    context?: ProfessionalTranslationContext | null,
 ): Promise<Map<number, BlockTranslation>> {
     const translations = new Map<number, BlockTranslation>()
 
@@ -471,7 +640,7 @@ async function translateBlockItems(
 
         try {
             callbacks.onBatchStart?.(batch)
-            const batchTranslations = await requestTranslations(model, targetLanguage, payload, context)
+            const batchTranslations = await requestTranslations(model, targetLanguage, payload)
 
             for (let i = 0; i < batch.length; i++) {
                 const { index } = batch[i]
@@ -503,6 +672,172 @@ async function translateBlockItems(
     await Promise.all(active)
 
     return translations
+}
+
+async function startBackendTranslation(params: {
+    baseUrl: string
+    bookId: string
+    jobId?: string
+    autoStart: boolean
+    targetLanguage: string
+    sourceLanguage?: string
+    pipeline?: ProfessionalTranslationPipelineOptions
+    requestInit?: RequestInit
+    fetcher: typeof fetch
+}): Promise<string> {
+    if (params.jobId) return params.jobId
+    if (!params.autoStart) {
+        throw new Error('withProfessionalTranslation requires options.jobId when autoStart is false.')
+    }
+    const response = await fetchJson<{ jobId: string }>(
+        `${params.baseUrl}/api/books/${encodeURIComponent(params.bookId)}/translate`,
+        {
+            ...params.requestInit,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(params.requestInit?.headers || {}),
+            },
+            body: JSON.stringify({
+                targetLanguage: params.targetLanguage,
+                sourceLanguage: params.sourceLanguage,
+                ...params.pipeline,
+            }),
+        },
+        params.fetcher,
+    )
+    if (!response.jobId) throw new Error('Backend translation did not return a jobId.')
+    return response.jobId
+}
+
+function fetchBackendJob(
+    baseUrl: string,
+    jobId: string,
+    requestInit: RequestInit | undefined,
+    fetcher: typeof fetch,
+): Promise<BackendJobSnapshot> {
+    return fetchJson(`${baseUrl}/api/jobs/${encodeURIComponent(jobId)}`, requestInit, fetcher)
+}
+
+function fetchBackendChunks(
+    baseUrl: string,
+    bookId: string,
+    requestInit: RequestInit | undefined,
+    fetcher: typeof fetch,
+): Promise<BackendChunk[]> {
+    return fetchJson(`${baseUrl}/api/books/${encodeURIComponent(bookId)}/chunks`, requestInit, fetcher)
+}
+
+async function fetchJson<T>(url: string, init: RequestInit | undefined, fetcher: typeof fetch): Promise<T> {
+    const response = await fetcher(url, init)
+    if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        throw new Error(`Backend request failed (${response.status}) ${body || response.statusText}`)
+    }
+    return response.json() as Promise<T>
+}
+
+function updateSectionTranslations(target: Map<number, BackendSectionTranslation>, chunks: BackendChunk[]): number[] {
+    const grouped = new Map<number, BackendChunk[]>()
+    for (const chunk of chunks) {
+        if (!chunk.translation || chunk.status !== 'done') continue
+        const group = grouped.get(chunk.chapterIndex) || []
+        group.push(chunk)
+        grouped.set(chunk.chapterIndex, group)
+    }
+
+    const changed: number[] = []
+    for (const [sectionIndex, sectionChunks] of grouped) {
+        sectionChunks.sort((a, b) => a.chunkIndex - b.chunkIndex)
+        const nextSignature = getBackendChunksSignature(sectionChunks)
+        if (target.get(sectionIndex)?.signature === nextSignature) continue
+        target.set(sectionIndex, {
+            chunks: sectionChunks.map(chunk => ({ ...chunk })),
+            signature: nextSignature,
+        })
+        changed.push(sectionIndex)
+    }
+    return changed
+}
+
+function getBackendChunksSignature(chunks: readonly BackendChunk[]): string {
+    return chunks.map(chunk => `${chunk.id}:${chunk.status}:${chunk.translation || ''}`).join('\n\n')
+}
+
+function renderBackendTranslatedBlocks(
+    originalBlocks: readonly TextBlock[],
+    translatedChunks: readonly BackendChunk[],
+    mode: TranslationMode,
+): TextBlock[] {
+    if (!translatedChunks.length) return originalBlocks.map(cloneTextBlock)
+    const translatedTextByIndex = mapBackendChunksToBlockTranslations(originalBlocks, translatedChunks)
+    if (translatedTextByIndex.size === 0) return originalBlocks.map(cloneTextBlock)
+    return renderTranslatedBlocks(originalBlocks, translatedTextByIndex, mode)
+}
+
+function mapBackendChunksToBlockTranslations(
+    blocks: readonly TextBlock[],
+    translatedChunks: readonly BackendChunk[],
+): Map<number, BlockTranslation> {
+    const translatedParts = translatedChunks.flatMap(chunk => splitBackendTranslation(chunk.translation || ''))
+    const translations = new Map<number, BlockTranslation>()
+    let partIndex = 0
+
+    for (let blockIndex = 0; blockIndex < blocks.length && partIndex < translatedParts.length; blockIndex++) {
+        const block = blocks[blockIndex]
+        if (!isTranslatableBlock(block)) continue
+        const translatedPart = translatedParts[partIndex++]
+        if (!translatedPart) continue
+
+        if (block.type === 'table' && block.table) {
+            const tableCells = mapBackendTableTranslation(block.table, translatedPart)
+            if (tableCells.size > 0) translations.set(blockIndex, { tableCells })
+            continue
+        }
+
+        translations.set(blockIndex, translatedPart)
+    }
+
+    return translations
+}
+
+function splitBackendTranslation(text: string): string[] {
+    return text
+        .split(/\n{2,}/)
+        .map(part => part.trim())
+        .filter(Boolean)
+}
+
+function mapBackendTableTranslation(table: TextTable, translatedText: string): TableCellTranslations {
+    const translatedRows = translatedText.split(/\n+/).map(row => row.trim()).filter(Boolean)
+    const tableCells: TableCellTranslations = new Map()
+    for (let rowIndex = 0; rowIndex < table.rows.length && rowIndex < translatedRows.length; rowIndex++) {
+        const expectedCells = table.rows[rowIndex].cells.length
+        const cells = splitBackendTableRow(translatedRows[rowIndex], expectedCells)
+        if (cells.length !== expectedCells) continue
+        for (let cellIndex = 0; cellIndex < expectedCells; cellIndex++) {
+            if (cells[cellIndex]) tableCells.set(getTableCellKey(rowIndex, cellIndex), cells[cellIndex])
+        }
+    }
+    return tableCells
+}
+
+function splitBackendTableRow(row: string, expectedCells: number): string[] {
+    if (row.includes('\t')) return row.split('\t').map(cell => cell.trim())
+    const pipeCells = row.split(/\s*\|\s*/).map(cell => cell.trim()).filter(Boolean)
+    if (pipeCells.length === expectedCells) return pipeCells
+    return expectedCells === 1 ? [row.trim()] : []
+}
+
+function getBackendPhase(status: string): ProfessionalPipelinePhase {
+    if (status === 'done') return 'done'
+    if (status === 'failed') return 'error'
+    if (status === 'cancelled') return 'cancelled'
+    return 'running'
+}
+
+function isBackendJobTerminal(status: string): boolean {
+    return status === 'done' || status === 'failed' || status === 'cancelled'
 }
 
 function isTranslatableItem(item: TranslationItem): boolean {
@@ -690,7 +1025,6 @@ async function requestTranslations(
     model: LanguageModel,
     targetLanguage: string,
     payload: string[],
-    context: ProfessionalTranslationContext | null = null,
 ): Promise<Array<string | null>> {
     let lastError: unknown
     const entries = payload.map((text, index) => ({ key: index.toString(36), text }))
@@ -710,10 +1044,8 @@ async function requestTranslations(
                     schema: jsonSchema<Record<string, string>>(schema),
                     description: 'Translations keyed by the same short block ids as the input.',
                 }),
-                system: buildTranslationSystemPrompt(targetLanguage, context),
-                prompt: context
-                    ? JSON.stringify({ context: serializeProfessionalContext(context), input })
-                    : JSON.stringify(input),
+                system: buildTranslationSystemPrompt(targetLanguage),
+                prompt: JSON.stringify(input),
             })
 
             if (!output || typeof output !== 'object' || Array.isArray(output)) {
@@ -759,475 +1091,10 @@ function isRetryableTranslationError(error: unknown): boolean {
     return name === 'AI_NoObjectGeneratedError' || name === 'NoObjectGeneratedError'
 }
 
-function normalizePipelineOptions(
-    pipeline: TranslationOptions['pipeline']
-): NormalizedProfessionalTranslationPipelineOptions {
-    const defaultSampleChars = 1200
-
-    if (pipeline === undefined) {
-        return {
-            enabled: () => false,
-            sectionSampleChars: defaultSampleChars,
-        }
-    }
-
-    if (typeof pipeline === 'boolean' || typeof pipeline === 'function') {
-        return {
-            enabled: () => Boolean(getValue(pipeline)),
-            sectionSampleChars: defaultSampleChars,
-        }
-    }
-
-    return {
-        enabled: () => pipeline.enabled === undefined ? true : Boolean(getValue(pipeline.enabled)),
-        bookType: pipeline.bookType,
-        audience: pipeline.audience,
-        style: pipeline.style,
-        sectionSampleChars: getPositiveInteger(pipeline.sectionSampleChars, defaultSampleChars),
-        onStatus: pipeline.onStatus,
-    }
-}
-
-async function buildProfessionalTranslationProfile(
-    book: Book,
-    model: LanguageModel,
-    targetLanguage: string,
-    options: NormalizedProfessionalTranslationPipelineOptions,
-): Promise<{ analysis: ProfessionalBookAnalysis, profile: ProfessionalTranslationProfile }> {
-    const analysis = await analyzeBookForTranslation(book, options)
-    try {
-        const profile = await requestProfessionalTranslationProfile(model, targetLanguage, analysis, options)
-        return { analysis, profile }
-    } catch (error) {
-        console.warn('Professional translation profile generation failed; using heuristic profile.', error)
-        return { analysis, profile: createHeuristicProfessionalProfile(analysis, targetLanguage, options) }
-    }
-}
-
-async function analyzeBookForTranslation(
-    book: Book,
-    options: NormalizedProfessionalTranslationPipelineOptions,
-): Promise<ProfessionalBookAnalysis> {
-    const tocEntries = flattenTOCEntries(book.toc ?? [])
-    const titleBySection = getSectionTitles(book, tocEntries)
-    const chapters: ProfessionalBookAnalysis['chapters'] = []
-    const structureSamples: ProfessionalBookAnalysis['structureSamples'] = {
-        tables: [],
-        codeBlocks: [],
-        formulas: [],
-        footnotes: [],
-    }
-
-    for (let sectionIndex = 0; sectionIndex < book.sections.length; sectionIndex++) {
-        const section = book.sections[sectionIndex]
-        const blocks = section.getBlocks ? await Promise.resolve(section.getBlocks()).catch(error => {
-            console.warn(`Unable to analyze section ${sectionIndex} for translation.`, error)
-            return [] as TextBlock[]
-        }) : []
-        const structures = new Set<ProfessionalBookAnalysis['chapters'][number]['structures'][number]>()
-        const textParts: string[] = []
-
-        for (const block of blocks) {
-            const text = getBlockPlainText(block)
-            if (text) {
-                textParts.push(text)
-            }
-            if (block.type === 'table') {
-                structures.add('table')
-                pushLimitedSample(structureSamples.tables, text)
-            }
-            if (isCodeBlock(block)) {
-                structures.add('code')
-                pushLimitedSample(structureSamples.codeBlocks, text)
-            }
-            if (isFormulaBlock(block)) {
-                structures.add('formula')
-                pushLimitedSample(structureSamples.formulas, text)
-            }
-            if (isFootnoteBlock(block)) {
-                structures.add('footnote')
-                pushLimitedSample(structureSamples.footnotes, getFootnoteSample(block) || text)
-            }
-        }
-
-        const title = titleBySection.get(sectionIndex)
-            ?? blocks.find(block => block.type === 'heading')?.segments.map(segment => segment.text).join('').trim()
-            ?? `Section ${sectionIndex + 1}`
-        chapters.push({
-            sectionIndex,
-            title,
-            structures: [...structures],
-            sample: truncateText(textParts.join('\n'), options.sectionSampleChars),
-        })
-    }
-
-    return {
-        title: formatLanguageMap(book.metadata?.title),
-        authors: formatContributors(book.metadata?.author),
-        language: Array.isArray(book.metadata?.language) ? book.metadata?.language.join(', ') : book.metadata?.language,
-        toc: tocEntries.map(({ label, depth }) => ({ label, depth })),
-        chapters,
-        structureSamples,
-    }
-}
-
-function getProfilePromptAnalysis(analysis: ProfessionalBookAnalysis) {
-    return {
-        title: analysis.title,
-        authors: analysis.authors,
-        language: analysis.language,
-        toc: analysis.toc.slice(0, 120),
-        chapters: analysis.chapters.map(chapter => ({
-            sectionIndex: chapter.sectionIndex,
-            title: chapter.title,
-            sample: chapter.sample,
-        })),
-    }
-}
-
-async function requestProfessionalTranslationProfile(
-    model: LanguageModel,
-    targetLanguage: string,
-    analysis: ProfessionalBookAnalysis,
-    options: NormalizedProfessionalTranslationPipelineOptions,
-): Promise<ProfessionalTranslationProfile> {
-    const schema = {
-        type: 'object',
-        properties: {
-            bookType: { type: 'string' },
-            audience: { type: 'string' },
-            styleGuide: { type: 'string' },
-            terminologyRules: { type: 'array', items: { type: 'string' } },
-            properNounRules: { type: 'array', items: { type: 'string' } },
-            terms: {
-                type: 'array',
-                items: {
-                    type: 'object',
-                    properties: {
-                        source: { type: 'string' },
-                        target: { type: 'string' },
-                        category: { type: 'string' },
-                        note: { type: 'string' },
-                    },
-                    required: ['source', 'category'],
-                    additionalProperties: false,
-                },
-            },
-            chapterSummaries: {
-                type: 'array',
-                items: {
-                    type: 'object',
-                    properties: {
-                        sectionIndex: { type: 'number' },
-                        title: { type: 'string' },
-                        summary: { type: 'string' },
-                    },
-                    required: ['sectionIndex', 'title', 'summary'],
-                    additionalProperties: false,
-                },
-            },
-        },
-        required: ['bookType', 'audience', 'styleGuide', 'terminologyRules', 'properNounRules', 'terms', 'chapterSummaries'],
-        additionalProperties: false,
-    }
-    const prompt = {
-        targetLanguage,
-        hints: {
-            bookType: options.bookType,
-            audience: options.audience,
-            style: options.style,
-        },
-        analysis: getProfilePromptAnalysis(analysis),
-    }
-    const { output } = await generateText({
-        model,
-        output: Output.object({
-            schema: jsonSchema<ProfessionalTranslationProfile>(schema),
-            description: 'Professional translation profile with strategy, glossary, and chapter summaries.',
-        }),
-        system: [
-            'You are a senior translation editor designing a professional book translation pipeline.',
-            `Target language: ${targetLanguage}.`,
-            'Infer the book type, target reader, style guide, terminology rules, proper-noun rules, glossary entries, and concise chapter summaries.',
-            'Keep glossary source terms exact. Provide target terms when confident; otherwise leave target empty.',
-        ].join('\n'),
-        prompt: JSON.stringify(prompt),
-    })
-
-    return normalizeProfessionalProfile(output, analysis, targetLanguage, options)
-}
-
-function createHeuristicProfessionalProfile(
-    analysis: ProfessionalBookAnalysis,
-    targetLanguage: string,
-    options: NormalizedProfessionalTranslationPipelineOptions,
-): ProfessionalTranslationProfile {
-    return {
-        bookType: options.bookType ?? 'book',
-        audience: options.audience ?? 'General readers of the original book topic.',
-        styleGuide: options.style ?? `Translate into ${targetLanguage} with clear, faithful, publication-quality prose.`,
-        terminologyRules: [
-            'Keep recurring technical terms consistent across chapters.',
-            'Prefer established translations for domain terms; keep the original in parentheses when ambiguity is high.',
-        ],
-        properNounRules: [
-            'Preserve personal names, place names, organization names, and abbreviations unless a widely accepted localized form exists.',
-            'Do not translate code identifiers, file names, URLs, or mathematical notation.',
-        ],
-        terms: [],
-        chapterSummaries: analysis.chapters.map(chapter => ({
-            sectionIndex: chapter.sectionIndex,
-            title: chapter.title,
-            summary: summarizeChapterHeuristically(chapter),
-        })),
-    }
-}
-
-function normalizeProfessionalProfile(
-    output: unknown,
-    analysis: ProfessionalBookAnalysis,
-    targetLanguage: string,
-    options: NormalizedProfessionalTranslationPipelineOptions,
-): ProfessionalTranslationProfile {
-    if (!output || typeof output !== 'object' || Array.isArray(output)) {
-        throw new TranslationFormatError('Professional translation profile output was not an object.')
-    }
-    const value = output as Record<string, unknown>
-    return {
-        bookType: stringOrFallback(value.bookType, options.bookType ?? 'book'),
-        audience: stringOrFallback(value.audience, options.audience ?? 'General readers of the original book topic.'),
-        styleGuide: stringOrFallback(value.styleGuide, options.style ?? `Translate into ${targetLanguage} with clear, faithful prose.`),
-        terminologyRules: stringArrayOrFallback(value.terminologyRules, [
-            'Keep recurring technical terms consistent across chapters.',
-        ]),
-        properNounRules: stringArrayOrFallback(value.properNounRules, [
-            'Preserve proper nouns unless a standard localized form exists.',
-        ]),
-        terms: normalizeTerms(value.terms, []),
-        chapterSummaries: normalizeChapterSummaries(value.chapterSummaries, analysis),
-    }
-}
-
 function buildTranslationSystemPrompt(
     targetLanguage: string,
-    context: ProfessionalTranslationContext | null,
 ): string {
-    if (!context) {
-        return `You are a professional translator. Translate each value into ${targetLanguage}. Preserve the original tone and style. Keep the exact same keys.`
-    }
-    return [
-        'You are a professional book translator working inside a multi-stage translation pipeline.',
-        `Translate each input value into ${targetLanguage}. Keep the exact same keys.`,
-        'Follow the provided book profile, glossary, terminology rules, proper-noun rules, and chapter context.',
-        'Preserve code identifiers, formulas, URLs, citations, footnote markers, table structure, and numbers unless translation is required around them.',
-        'Maintain consistency with previous and next chapter summaries. Do not add commentary outside the JSON object.',
-    ].join('\n')
-}
-
-function serializeProfessionalContext(context: ProfessionalTranslationContext) {
-    return {
-        bookType: context.profile.bookType,
-        audience: context.profile.audience,
-        styleGuide: context.profile.styleGuide,
-        terminologyRules: context.profile.terminologyRules,
-        properNounRules: context.profile.properNounRules,
-        glossary: context.profile.terms.slice(0, 120),
-        chapter: context.currentChapter,
-        previousChapter: context.previousChapter,
-        nextChapter: context.nextChapter,
-    }
-}
-
-function getPositiveInteger(value: number | undefined, fallback: number): number {
-    return Number.isFinite(value) && value !== undefined ? Math.max(1, Math.floor(value)) : fallback
-}
-
-function flattenTOCEntries(
-    items: readonly NonNullable<Book['toc']>[number][],
-    depth = 0,
-): Array<{ label: string, href: string, depth: number }> {
-    return items.flatMap(item => [
-        { label: item.label, href: item.href, depth },
-        ...flattenTOCEntries(item.subitems ?? [], depth + 1),
-    ])
-}
-
-function getSectionTitles(
-    book: Book,
-    toc: Array<{ label: string, href: string, depth: number }>,
-): Map<number, string> {
-    const titles = new Map<number, string>()
-    for (const item of toc) {
-        const resolved = book.resolveHref?.(item.href)
-        const index = resolved && typeof resolved.index === 'number' ? resolved.index : null
-        if (index != null && !titles.has(index)) {
-            titles.set(index, item.label)
-        }
-    }
-    return titles
-}
-
-function getBlockPlainText(block: TextBlock): string {
-    if (block.type === 'table' && block.table) {
-        return block.table.rows
-            .flatMap(row => row.cells.map(cell => cell.text))
-            .join('\n')
-            .trim()
-    }
-    return block.segments.map(segment => segment.text).join('').trim()
-}
-
-function isCodeBlock(block: TextBlock): boolean {
-    if (block.type === 'pre') return true
-    const attrs = flattenAttrs(block)
-    return hasAttrToken(attrs, /(^|\b)(code|source|programlisting|preformatted)(\b|$)/i)
-        || block.segments.some(segment => {
-            const nodeType = segment.source?.nodeType
-            return nodeType === 'code' || nodeType === 'kbd' || nodeType === 'samp' || nodeType === 'tt'
-        })
-}
-
-function isFormulaBlock(block: TextBlock): boolean {
-    const text = getBlockPlainText(block)
-    const attrs = flattenAttrs(block)
-    return hasAttrToken(attrs, /(^|\b)(math|formula|equation|tex|latex)(\b|$)/i)
-        || block.segments.some(segment => segment.source?.nodeType === 'math')
-        || /\\(?:frac|sum|int|sqrt|begin\{)|[∑∫√≈≤≥]/.test(text)
-}
-
-function isFootnoteBlock(block: TextBlock): boolean {
-    const attrs = flattenAttrs(block)
-    return Boolean(block.attrs?.['data-rebook-footnote-content'])
-        || hasAttrToken(attrs, /(^|\b)(footnote|note-ref|noteref|epub-footnote)(\b|$)/i)
-        || block.segments.some(segment => {
-            const sourceAttrs = segment.source?.attrs
-            return Boolean(sourceAttrs?.['data-rebook-footnote-content'])
-                || hasAttrToken(flattenRecord(sourceAttrs), /(^|\b)(footnote|note-ref|noteref|epub-footnote)(\b|$)/i)
-        })
-}
-
-function getFootnoteSample(block: TextBlock): string {
-    return block.attrs?.['data-rebook-footnote-content']
-        ?? block.segments.map(segment => segment.source?.attrs?.['data-rebook-footnote-content']).find(Boolean)
-        ?? ''
-}
-
-function pushLimitedSample(samples: string[], text: string, maxSamples = 20): void {
-    const sample = truncateText(text, 240)
-    if (!sample || samples.length >= maxSamples || samples.includes(sample)) return
-    samples.push(sample)
-}
-
-function flattenAttrs(block: TextBlock): string {
-    return flattenRecord(block.attrs)
-}
-
-function flattenRecord(record: Readonly<Record<string, string>> | undefined): string {
-    return Object.entries(record ?? {})
-        .map(([key, value]) => `${key} ${value}`)
-        .join(' ')
-}
-
-function hasAttrToken(attrs: string, pattern: RegExp): boolean {
-    return pattern.test(attrs)
-}
-
-function summarizeChapterHeuristically(chapter: ProfessionalBookAnalysis['chapters'][number]): string {
-    const details = chapter.structures.length ? `Includes ${chapter.structures.join(', ')} content.` : 'Text section.'
-    const sample = truncateText(chapter.sample.replace(/\s+/g, ' '), 220)
-    return `${chapter.title}: ${details} ${sample}`.trim()
-}
-
-function normalizeTerms(value: unknown, fallback: TranslationTerm[]): TranslationTerm[] {
-    if (!Array.isArray(value)) return fallback
-    const terms: TranslationTerm[] = []
-    for (const item of value) {
-        if (!item || typeof item !== 'object' || Array.isArray(item)) continue
-        const record = item as Record<string, unknown>
-        const source = typeof record.source === 'string' ? record.source.trim() : ''
-        if (!source) continue
-        terms.push({
-            source,
-            target: typeof record.target === 'string' ? record.target.trim() : undefined,
-            category: normalizeTermCategory(record.category),
-            note: typeof record.note === 'string' ? record.note.trim() : undefined,
-        })
-    }
-    return terms.length ? terms : fallback
-}
-
-function normalizeTermCategory(value: unknown): TranslationTermCategory {
-    const category = typeof value === 'string' ? value : ''
-    return category === 'person'
-        || category === 'organization'
-        || category === 'place'
-        || category === 'concept'
-        || category === 'abbreviation'
-        || category === 'term'
-        ? category
-        : 'term'
-}
-
-function normalizeChapterSummaries(
-    value: unknown,
-    analysis: ProfessionalBookAnalysis,
-): TranslationChapterSummary[] {
-    if (!Array.isArray(value)) {
-        return analysis.chapters.map(chapter => ({
-            sectionIndex: chapter.sectionIndex,
-            title: chapter.title,
-            summary: summarizeChapterHeuristically(chapter),
-        }))
-    }
-
-    const summaries = value
-        .map(item => {
-            if (!item || typeof item !== 'object' || Array.isArray(item)) return null
-            const record = item as Record<string, unknown>
-            const sectionIndex = typeof record.sectionIndex === 'number' ? Math.floor(record.sectionIndex) : null
-            const title = typeof record.title === 'string' ? record.title : ''
-            const summary = typeof record.summary === 'string' ? record.summary : ''
-            if (sectionIndex == null || !title || !summary) return null
-            return { sectionIndex, title, summary }
-        })
-        .filter((item): item is TranslationChapterSummary => Boolean(item))
-
-    return summaries.length ? summaries : normalizeChapterSummaries(null, analysis)
-}
-
-function stringOrFallback(value: unknown, fallback: string): string {
-    return typeof value === 'string' && value.trim() ? value.trim() : fallback
-}
-
-function stringArrayOrFallback(value: unknown, fallback: string[]): string[] {
-    if (!Array.isArray(value)) return fallback
-    const strings = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    return strings.length ? strings : fallback
-}
-
-function formatLanguageMap(value: unknown): string | undefined {
-    if (!value) return undefined
-    if (typeof value === 'string') return value
-    if (typeof value !== 'object' || Array.isArray(value)) return undefined
-    const record = value as Record<string, unknown>
-    const first = Object.values(record).find(item => typeof item === 'string')
-    return typeof first === 'string' ? first : undefined
-}
-
-function formatContributors(value: unknown): string[] {
-    if (!value) return []
-    if (Array.isArray(value)) return value.flatMap(formatContributors)
-    if (typeof value === 'string') return [value]
-    if (typeof value !== 'object') return []
-    const name = (value as { name?: unknown }).name
-    const formatted = formatLanguageMap(name)
-    return formatted ? [formatted] : []
-}
-
-function truncateText(text: string, maxChars: number): string {
-    const normalized = text.replace(/\s+/g, ' ').trim()
-    if (normalized.length <= maxChars) return normalized
-    return `${normalized.slice(0, Math.max(0, maxChars - 3)).trim()}...`
+    return `You are a professional translator. Translate each value into ${targetLanguage}. Preserve the original tone and style. Keep the exact same keys.`
 }
 
 function getValue<T>(value: ValueOrGetter<T>): T {

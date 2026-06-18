@@ -393,38 +393,64 @@ await reader.openBook(book)
 
 ### Translation
 
-`withTranslation()` translates renderer-requested text blocks lazily. Browser
-and Mini Program renderers emit block-window events for the current viewport plus
-configured prefetch pages, so translation work follows reading progress instead
-of translating the whole book up front.
-
-`withProfessionalTranslation()` is a preset for the professional pipeline:
-whole-book analysis, terminology and proper-noun extraction, translation
-strategy generation, chapter summaries, and contextual chunk translation.
+`withTranslation()` keeps the lightweight local mode. It translates
+renderer-requested text blocks lazily with the supplied AI SDK `LanguageModel`.
+Browser and Mini Program renderers emit block-window events for the current
+viewport plus configured prefetch pages, so translation work follows reading
+progress instead of translating the whole book up front.
 
 ```typescript
 import { createOpenAI } from '@ai-sdk/openai'
 import { createReader } from 'rebook'
-import { withProfessionalTranslation } from 'rebook/plugins/translation'
+import { withTranslation } from 'rebook/plugins/translation'
 
 const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 const reader = createReader({
   container,
   plugins: [
-    withProfessionalTranslation({
+    withTranslation({
       model: openai.chat('gpt-4o-mini'),
       targetLanguage: 'zh-CN',
       mode: 'bilingual',
       translateTOC: true,
       prefetchPages: 2,
+      onUpdate: ({ sectionIndex }) => {
+        if (reader.getLocation()?.index === sectionIndex) reader.refresh()
+      },
+    }),
+  ],
+})
+```
+
+`withProfessionalTranslation()` uses `rebook-service` instead of running a local
+model. The backend owns the LangGraph workflow, glossary, review/refine loop,
+persistence, and progress state. The frontend plugin attaches to a server-side
+book and renders translated chunks when they become available.
+
+The `bookId` must refer to a book that has already been uploaded or imported
+into `rebook-service`.
+
+```typescript
+import { createReader } from 'rebook'
+import { withProfessionalTranslation } from 'rebook/plugins/translation'
+
+const reader = createReader({
+  container,
+  plugins: [
+    withProfessionalTranslation({
+      serviceBaseUrl: 'http://127.0.0.1:8083',
+      bookId: serverBookId,
+      targetLanguage: 'zh-CN',
+      mode: 'bilingual',
       pipeline: {
         bookType: 'technical textbook',
         audience: 'professional readers',
         style: 'Faithful, precise, publication-quality Chinese.',
-        onStatus: status => {
-          console.log(status.phase, status.message)
-        },
+        maxReviewLoops: 1,
+      },
+      onStatus: status => {
+        console.log(status.phase, status.progress, status.message)
       },
       onUpdate: ({ sectionIndex }) => {
         if (reader.getLocation()?.index === sectionIndex) reader.refresh()
@@ -434,23 +460,9 @@ const reader = createReader({
 })
 ```
 
-The returned `Book` exposes `professionalTranslationStatus` when the
-professional pipeline is enabled. The status contains the current phase, message,
-whole-book analysis snapshot, and generated translation profile when ready.
-
-`withTranslation()` also accepts `pipeline: true` or a `pipeline` option object
-if you prefer to keep one entry point:
-
-```typescript
-import { withTranslation } from 'rebook/plugins/translation'
-
-withTranslation({
-  model,
-  pipeline: {
-    sectionSampleChars: 1600,
-  },
-})
-```
+The returned `Book` exposes `professionalTranslationStatus` for backend job
+state, including `jobId`, `stage`, `progress`, `completedChunks`, and
+`totalChunks`.
 
 ### Text To Speech
 
