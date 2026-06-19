@@ -30,6 +30,7 @@ export interface FixedPageFitOptions {
 export interface FixedPageFit {
     readonly margin: number
     readonly availableInlineSize: number
+    readonly availableBlockSize: number
     readonly targetInlineSize: number
     readonly scale: number
     readonly viewport: FixedPageViewport
@@ -46,6 +47,7 @@ export interface FixedPageContentRenderContext {
 export interface FixedSpreadFit {
     readonly margin: number
     readonly availableInlineSize: number
+    readonly availableBlockSize: number
     readonly targetInlineSize: number
     readonly scale: number
     readonly gap: number
@@ -67,16 +69,20 @@ export function resolveFixedPageFit(
 ): FixedPageFit {
     const margin = parseCSSPixels(options.margin, options.defaultMargin ?? 0)
     const availableInlineSize = Math.max(1, metrics.inlineSize - margin * 2)
+    const availableBlockSize = Math.max(1, metrics.blockSize - margin * 2)
     const maxInlineSize = parseCSSPixels(
         options.maxInlineSize ?? options.maxColumnWidth,
         availableInlineSize,
     )
-    const targetInlineSize = Math.max(1, Math.min(availableInlineSize, maxInlineSize))
-    const unclampedScale = targetInlineSize / Math.max(1, page.width)
+    const widthScale = Math.max(1, Math.min(availableInlineSize, maxInlineSize)) / Math.max(1, page.width)
+    const heightScale = availableBlockSize / Math.max(1, page.height)
+    const unclampedScale = Math.min(widthScale, heightScale)
     const scale = clampScale(unclampedScale, options.minScale, options.maxScale)
+    const targetInlineSize = page.width * scale
     return {
         margin,
         availableInlineSize,
+        availableBlockSize,
         targetInlineSize,
         scale,
         viewport: createFixedPageViewport(page, {
@@ -110,6 +116,7 @@ export function resolveFixedSpreadFit(
     const margin = parseCSSPixels(options.margin, options.defaultMargin ?? 0)
     const gap = parseCSSPixels(options.gap, options.defaultGap ?? 0)
     const availableInlineSize = Math.max(1, metrics.inlineSize - margin * 2)
+    const availableBlockSize = Math.max(1, metrics.blockSize - margin * 2)
     const maxInlineSize = parseCSSPixels(
         options.maxColumnWidth ?? options.maxInlineSize,
         availableInlineSize,
@@ -117,7 +124,9 @@ export function resolveFixedSpreadFit(
     const pageCount = Math.max(1, pages.length)
     const availableForPages = Math.max(1, availableInlineSize - gap * (pageCount - 1))
     const targetPageInlineSize = Math.max(1, Math.min(maxInlineSize, availableForPages / pageCount))
-    const unclampedScale = Math.min(...pages.map(page => targetPageInlineSize / Math.max(1, page.width)))
+    const widthScale = Math.min(...pages.map(page => targetPageInlineSize / Math.max(1, page.width)))
+    const heightScale = Math.min(...pages.map(page => availableBlockSize / Math.max(1, page.height)))
+    const unclampedScale = Math.min(widthScale, heightScale)
     const scale = clampScale(unclampedScale, options.minScale, options.maxScale)
     const unscaledGap = gap / Math.max(scale, 1e-6)
     const spreadWidth = pages.reduce((total, page, index) => total + page.width + (index > 0 ? unscaledGap : 0), 0)
@@ -125,6 +134,7 @@ export function resolveFixedSpreadFit(
     return {
         margin,
         availableInlineSize,
+        availableBlockSize,
         targetInlineSize: spreadWidth * scale,
         scale,
         gap: unscaledGap,

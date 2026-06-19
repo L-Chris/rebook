@@ -21056,20 +21056,6 @@ function resolveTOCSectionIndex(book, href, sectionLookup = createSectionIndexLo
   }
   return -1;
 }
-function findTOCItemForSection(book, sectionIndex, section = book.sections[sectionIndex], sectionLookup = createSectionIndexLookup(book)) {
-  var _a2, _b2;
-  const items = flattenTOC(book.toc);
-  if (!items.length) return null;
-  for (const item of items) {
-    const index = resolveTOCSectionIndex(book, item.href, sectionLookup);
-    if (index === sectionIndex) return item;
-    if (section && index < 0) {
-      const [id] = (_b2 = (_a2 = book.splitTOCHref) == null ? void 0 : _a2.call(book, item.href)) != null ? _b2 : [item.href];
-      if (id === section.id) return item;
-    }
-  }
-  return null;
-}
 class SectionProgress {
   constructor(sections, sizePerLoc = 1500) {
     __publicField(this, "sizes");
@@ -21193,6 +21179,10 @@ function getPagePaddingBlock(mode, pageHeight, margin) {
   const preferred = mode === "paginated" ? Math.max(20, margin) : Math.max(12, margin * 0.5);
   return Math.min(preferred, Math.max(12, pageHeight * 0.14));
 }
+function getPagePaddingInline(value2, legacyGap, fallback) {
+  const legacyGapPadding = parseCSSPixels(legacyGap, fallback * 2) / 2;
+  return Math.max(0, parseCSSPixels(value2, legacyGapPadding));
+}
 function getAnchorIds(value2) {
   if (typeof value2 !== "string") {
     const id = getElementLikeId(value2);
@@ -21224,8 +21214,138 @@ function getSpreadVisibleItemCount(layoutMode, maxItemCount, metrics, options = 
   const availableInlineSize = Math.max(1, metrics.inlineSize - margin * 2);
   return getColumnCount(layoutMode, availableInlineSize, minColumnWidth, gap, maxItemCount);
 }
+const PAPER_PAGE_RATIO = 148 / 210;
+const PAPER_SINGLE_INLINE_FRACTION = 0.94;
+const PAPER_SPREAD_INLINE_FRACTION = 0.96;
+const PAPER_BLOCK_FRACTION = 0.92;
+const PAPER_AUTO_MIN_INLINE_SIZE = 640;
+const PAPER_AUTO_MIN_BLOCK_SIZE = 520;
+const PAPER_PADDING_TOP_RATIO = 15 / 148;
+const PAPER_PADDING_BOTTOM_RATIO = 20 / 148;
+const PAPER_PADDING_OUTER_RATIO = 16 / 148;
+const PAPER_PADDING_INNER_RATIO = 22 / 148;
+function resolveReflowablePageGeometry(options) {
+  var _a2;
+  const gap = Math.max(0, options.gap);
+  const availableInlineSize = Math.max(1, options.availableInlineSize);
+  const availableBlockSize = Math.max(1, options.availableBlockSize);
+  const minColumnWidth = Math.max(1, options.minColumnWidth);
+  const maxColumnWidth = Math.max(1, options.maxColumnWidth);
+  const columns = getSpreadVisibleItemCount(options.layoutMode, options.maxColumnCount, {
+    inlineSize: availableInlineSize
+  }, {
+    gap,
+    minColumnWidth
+  });
+  const pageFit = shouldUsePaperPageFit(
+    (_a2 = options.pageFit) != null ? _a2 : "auto",
+    options.layoutMode,
+    availableInlineSize,
+    availableBlockSize
+  ) ? "paper" : "viewport";
+  if (pageFit === "paper") {
+    return resolvePaperPageGeometry({
+      columns,
+      availableInlineSize,
+      availableBlockSize,
+      gap,
+      maxColumnWidth,
+      pagePaddingInline: options.pagePaddingInline,
+      pagePaddingBlock: options.pagePaddingBlock,
+      usePaperPadding: options.usePaperPadding !== false
+    });
+  }
+  const rawColumnWidth = columns > 1 ? (availableInlineSize - gap * (columns - 1)) / columns : availableInlineSize;
+  const columnWidth = Math.max(1, Math.min(maxColumnWidth, rawColumnWidth));
+  const pagePaddingInline = Math.max(0, options.pagePaddingInline);
+  const pagePaddingBlock = Math.max(0, options.pagePaddingBlock);
+  return {
+    columns,
+    columnWidth,
+    inlineSize: Math.max(1, columnWidth - pagePaddingInline * 2),
+    pageHeight: availableBlockSize,
+    pageFrameHeight: availableBlockSize,
+    pageFrameTop: 0,
+    pagePaddingInline,
+    pagePaddingInlineStart: pagePaddingInline,
+    pagePaddingInlineEnd: pagePaddingInline,
+    pagePaddingBlock,
+    pagePaddingBlockStart: pagePaddingBlock,
+    pagePaddingBlockEnd: pagePaddingBlock,
+    pageFit
+  };
+}
+function getReflowableColumnInlinePadding(layout2, columnIndex) {
+  var _a2, _b2;
+  const start = (_a2 = layout2.pagePaddingInlineStart) != null ? _a2 : layout2.pagePaddingInline;
+  const end = (_b2 = layout2.pagePaddingInlineEnd) != null ? _b2 : layout2.pagePaddingInline;
+  if (layout2.columns > 1 && columnIndex % 2 === 1) {
+    return { start: end, end: start };
+  }
+  return { start, end };
+}
+function getReflowableColumnIndexForLeft(layout2, left) {
+  const step = Math.max(1, layout2.columnWidth + layout2.gap);
+  const column = Math.round(Math.max(0, left) / step);
+  return Math.max(0, Math.min(Math.max(1, layout2.columns) - 1, column));
+}
+function getReflowableBlockPaddingStart(layout2) {
+  var _a2;
+  return (_a2 = layout2.pagePaddingBlockStart) != null ? _a2 : layout2.pagePaddingBlock;
+}
+function getReflowableBlockPaddingEnd(layout2) {
+  var _a2;
+  return (_a2 = layout2.pagePaddingBlockEnd) != null ? _a2 : layout2.pagePaddingBlock;
+}
+function shouldUsePaperPageFit(fit, layoutMode, availableInlineSize, availableBlockSize) {
+  if (layoutMode !== "paginated") return false;
+  if (fit === "paper") return true;
+  if (fit === "viewport") return false;
+  return availableInlineSize >= PAPER_AUTO_MIN_INLINE_SIZE && availableBlockSize >= PAPER_AUTO_MIN_BLOCK_SIZE;
+}
+function resolvePaperPageGeometry(options) {
+  const columns = Math.max(1, options.columns);
+  const pageAreaRatio = PAPER_PAGE_RATIO * columns;
+  const maxSpreadWidth = options.maxColumnWidth * columns + options.gap * (columns - 1);
+  const inlineFraction = columns > 1 ? PAPER_SPREAD_INLINE_FRACTION : PAPER_SINGLE_INLINE_FRACTION;
+  const spreadWidth = Math.max(1, Math.min(
+    maxSpreadWidth,
+    options.availableInlineSize * inlineFraction,
+    options.availableBlockSize * PAPER_BLOCK_FRACTION * pageAreaRatio + options.gap * (columns - 1)
+  ));
+  const columnWidth = Math.max(1, (spreadWidth - options.gap * (columns - 1)) / columns);
+  const pageFrameHeight = Math.min(options.availableBlockSize * PAPER_BLOCK_FRACTION, columnWidth / PAPER_PAGE_RATIO);
+  const pageFrameTop = Math.max(0, (options.availableBlockSize - pageFrameHeight) / 2);
+  const defaultInlinePadding = Math.max(0, options.pagePaddingInline);
+  const outerPadding = options.usePaperPadding ? columnWidth * PAPER_PADDING_OUTER_RATIO : defaultInlinePadding;
+  const innerPadding = options.usePaperPadding ? columnWidth * PAPER_PADDING_INNER_RATIO : defaultInlinePadding;
+  const singlePagePadding = (outerPadding + innerPadding) / 2;
+  const pagePaddingInlineStart = columns > 1 ? outerPadding : singlePagePadding;
+  const pagePaddingInlineEnd = columns > 1 ? innerPadding : singlePagePadding;
+  const pagePaddingBlockStart = options.usePaperPadding ? pageFrameTop + columnWidth * PAPER_PADDING_TOP_RATIO : Math.max(0, options.pagePaddingBlock);
+  const pagePaddingBlockEnd = options.usePaperPadding ? pageFrameTop + columnWidth * PAPER_PADDING_BOTTOM_RATIO : Math.max(0, options.pagePaddingBlock);
+  const pagePaddingInline = (pagePaddingInlineStart + pagePaddingInlineEnd) / 2;
+  return {
+    columns,
+    columnWidth,
+    inlineSize: Math.max(1, columnWidth - pagePaddingInlineStart - pagePaddingInlineEnd),
+    pageHeight: options.availableBlockSize,
+    pageFrameHeight,
+    pageFrameTop,
+    pagePaddingInline,
+    pagePaddingInlineStart,
+    pagePaddingInlineEnd,
+    pagePaddingBlock: pagePaddingBlockStart,
+    pagePaddingBlockStart,
+    pagePaddingBlockEnd,
+    pageFit: "paper"
+  };
+}
 const DEFAULT_MARGIN = 32;
-const DEFAULT_GAP = 48;
+const DEFAULT_COLUMN_GAP = 0;
+const DEFAULT_PAGE_PADDING_INLINE = 24;
+const DEFAULT_MIN_COLUMN_WIDTH = 360;
+const DEFAULT_MAX_COLUMN_WIDTH = 960;
 class WechatMiniProgramRenderer {
   constructor(config) {
     __publicField(this, "width");
@@ -21253,12 +21373,20 @@ class WechatMiniProgramRenderer {
     __publicField(this, "marks", new ReaderMarkStore());
     __publicField(this, "columnLayout", {
       margin: DEFAULT_MARGIN,
-      gap: DEFAULT_GAP,
+      gap: DEFAULT_COLUMN_GAP,
       columnWidth: 0,
       columns: 1,
       pageHeight: 0,
+      pageFrameHeight: 0,
+      pageFrameTop: 0,
       columnHeight: 0,
+      pagePaddingInline: DEFAULT_PAGE_PADDING_INLINE,
+      pagePaddingInlineStart: DEFAULT_PAGE_PADDING_INLINE,
+      pagePaddingInlineEnd: DEFAULT_PAGE_PADDING_INLINE,
       pagePaddingBlock: 0,
+      pagePaddingBlockStart: 0,
+      pagePaddingBlockEnd: 0,
+      pageFit: "viewport",
       totalHeight: 0,
       pageCount: 1
     });
@@ -21517,21 +21645,31 @@ class WechatMiniProgramRenderer {
       return;
     }
     const margin = parseCSSPixels(this.styles.margin, DEFAULT_MARGIN);
-    const gap = parseCSSPixels(this.styles.gap, DEFAULT_GAP);
-    const minColumnWidth = parseCSSPixels(this.styles.minColumnWidth, 320);
-    const maxColumnWidth = parseCSSPixels((_a2 = this.styles.maxColumnWidth) != null ? _a2 : this.styles.maxInlineSize, 720);
+    const gap = DEFAULT_COLUMN_GAP;
+    const pagePaddingInline = getPagePaddingInline(this.styles.pagePaddingInline, this.styles.gap, DEFAULT_PAGE_PADDING_INLINE);
+    const minColumnWidth = parseCSSPixels(this.styles.minColumnWidth, DEFAULT_MIN_COLUMN_WIDTH);
+    const maxColumnWidth = parseCSSPixels((_a2 = this.styles.maxColumnWidth) != null ? _a2 : this.styles.maxInlineSize, DEFAULT_MAX_COLUMN_WIDTH);
     const availableWidth = Math.max(1, this.width - margin * 2);
-    const columns = getSpreadVisibleItemCount(this.layoutMode, this.maxColumnCount, {
-      inlineSize: availableWidth
-    }, {
+    const geometry = resolveReflowablePageGeometry({
+      layoutMode: this.layoutMode,
+      maxColumnCount: this.maxColumnCount,
+      availableInlineSize: availableWidth,
+      availableBlockSize: Math.max(1, this.height),
       gap,
-      minColumnWidth
+      minColumnWidth,
+      maxColumnWidth,
+      pagePaddingInline,
+      pagePaddingBlock: getPagePaddingBlock(this.layoutMode, this.height, margin),
+      pageFit: this.styles.reflowablePageFit,
+      usePaperPadding: this.styles.pagePaddingInline == null && this.styles.gap == null
     });
-    const rawWidth = columns > 1 ? (availableWidth - gap * (columns - 1)) / columns : availableWidth;
-    const inlineSize = Math.max(1, Math.min(maxColumnWidth, rawWidth));
-    const pageHeight = Math.max(1, this.height);
-    const pagePaddingBlock = getPagePaddingBlock(this.layoutMode, pageHeight, margin);
-    const columnHeight = this.layoutMode === "paginated" ? Math.max(this.getLineHeightPixels(), pageHeight - pagePaddingBlock * 2) : Number.POSITIVE_INFINITY;
+    const columns = geometry.columns;
+    const pageInlineSize = geometry.columnWidth;
+    const inlineSize = geometry.inlineSize;
+    const pageHeight = geometry.pageHeight;
+    const pagePaddingBlockStart = geometry.pagePaddingBlockStart;
+    const pagePaddingBlockEnd = geometry.pagePaddingBlockEnd;
+    const columnHeight = this.layoutMode === "paginated" ? Math.max(this.getLineHeightPixels(), pageHeight - pagePaddingBlockStart - pagePaddingBlockEnd) : Number.POSITIVE_INFINITY;
     this.lines = layout(this.prepared, {
       inlineSize,
       lineHeight: this.getLineHeightPixels(),
@@ -21540,15 +21678,23 @@ class WechatMiniProgramRenderer {
     });
     const contentHeight = this.getContentHeight();
     const pageCount = this.layoutMode === "paginated" ? getReadablePageCount(this.lines, columnHeight, columns) : 1;
-    const totalHeight = this.layoutMode === "paginated" ? pageCount * pageHeight : contentHeight + pagePaddingBlock * 2;
+    const totalHeight = this.layoutMode === "paginated" ? pageCount * pageHeight : contentHeight + pagePaddingBlockStart + pagePaddingBlockEnd;
     this.columnLayout = {
       margin,
       gap,
-      columnWidth: inlineSize,
+      columnWidth: pageInlineSize,
       columns,
       pageHeight,
+      pageFrameHeight: geometry.pageFrameHeight,
+      pageFrameTop: geometry.pageFrameTop,
       columnHeight,
-      pagePaddingBlock,
+      pagePaddingInline: geometry.pagePaddingInline,
+      pagePaddingInlineStart: geometry.pagePaddingInlineStart,
+      pagePaddingInlineEnd: geometry.pagePaddingInlineEnd,
+      pagePaddingBlock: geometry.pagePaddingBlock,
+      pagePaddingBlockStart,
+      pagePaddingBlockEnd,
+      pageFit: geometry.pageFit,
       totalHeight,
       pageCount
     };
@@ -21559,12 +21705,20 @@ class WechatMiniProgramRenderer {
   createEmptyLayout() {
     return {
       margin: parseCSSPixels(this.styles.margin, DEFAULT_MARGIN),
-      gap: parseCSSPixels(this.styles.gap, DEFAULT_GAP),
+      gap: DEFAULT_COLUMN_GAP,
       columnWidth: Math.max(1, this.width - parseCSSPixels(this.styles.margin, DEFAULT_MARGIN) * 2),
       columns: 1,
       pageHeight: this.height,
+      pageFrameHeight: this.height,
+      pageFrameTop: 0,
       columnHeight: this.height,
+      pagePaddingInline: getPagePaddingInline(this.styles.pagePaddingInline, this.styles.gap, DEFAULT_PAGE_PADDING_INLINE),
+      pagePaddingInlineStart: getPagePaddingInline(this.styles.pagePaddingInline, this.styles.gap, DEFAULT_PAGE_PADDING_INLINE),
+      pagePaddingInlineEnd: getPagePaddingInline(this.styles.pagePaddingInline, this.styles.gap, DEFAULT_PAGE_PADDING_INLINE),
       pagePaddingBlock: 0,
+      pagePaddingBlockStart: 0,
+      pagePaddingBlockEnd: 0,
+      pageFit: "viewport",
       totalHeight: this.height,
       pageCount: 1
     };
@@ -21602,8 +21756,10 @@ class WechatMiniProgramRenderer {
   getLineStyle(line, position) {
     var _a2, _b2, _c, _d;
     const inlineOffset = (_a2 = line.inlineOffset) != null ? _a2 : 0;
-    const left = position.left + inlineOffset;
-    const width = Math.max(1, line.kind === "image" ? line.width : this.columnLayout.columnWidth - inlineOffset);
+    const padding = this.getColumnContentPadding(position);
+    const left = position.left + padding.start + inlineOffset;
+    const contentWidth = this.getColumnContentWidth(position);
+    const width = Math.max(1, line.kind === "image" ? line.width : contentWidth - inlineOffset);
     return {
       position: "absolute",
       top: `${position.top}px`,
@@ -21614,6 +21770,18 @@ class WechatMiniProgramRenderer {
       textAlign: getTextAlign((_c = (_b2 = line.block) == null ? void 0 : _b2.style) == null ? void 0 : _c.textAlign),
       color: (_d = this.styles.color) != null ? _d : "inherit"
     };
+  }
+  getColumnContentWidth(position) {
+    return position ? this.getColumnContentWidthForPadding(this.getColumnContentPadding(position)) : this.getColumnContentWidthForPadding(getReflowableColumnInlinePadding(this.columnLayout, 0));
+  }
+  getColumnContentPadding(position) {
+    return getReflowableColumnInlinePadding(
+      this.columnLayout,
+      getReflowableColumnIndexForLeft(this.columnLayout, position.left)
+    );
+  }
+  getColumnContentWidthForPadding(padding) {
+    return Math.max(1, this.columnLayout.columnWidth - padding.start - padding.end);
   }
   createTextFragment(fragment, index) {
     var _a2, _b2;
@@ -21802,25 +21970,28 @@ class WechatMiniProgramRenderer {
       const pageSourceHeight = Math.max(1, this.columnLayout.columnHeight * this.columnLayout.columns);
       return Math.floor(safeSourceTop / pageSourceHeight) * this.columnLayout.pageHeight;
     }
-    return safeSourceTop + this.columnLayout.pagePaddingBlock;
+    return safeSourceTop + getReflowableBlockPaddingStart(this.columnLayout);
   }
   getRenderedLinePosition(line) {
-    const { columns, pageHeight, columnHeight, columnWidth, gap, pagePaddingBlock } = this.columnLayout;
-    if (this.layoutMode !== "paginated") return { top: line.top + pagePaddingBlock, left: 0 };
+    const { columns, pageHeight, columnHeight, columnWidth, gap } = this.columnLayout;
+    const pagePaddingBlockStart = getReflowableBlockPaddingStart(this.columnLayout);
+    if (this.layoutMode !== "paginated") return { top: line.top + pagePaddingBlockStart, left: 0 };
     const sourceColumn = Math.floor(line.top / columnHeight);
     const row = Math.floor(sourceColumn / columns);
     const column = sourceColumn % columns;
     return {
-      top: (row - this.pageIndex) * pageHeight + pagePaddingBlock + line.top % columnHeight,
+      top: (row - this.pageIndex) * pageHeight + pagePaddingBlockStart + line.top % columnHeight,
       left: column * (columnWidth + gap)
     };
   }
   getSourceScrollTop() {
-    if (this.layoutMode !== "paginated") return Math.max(0, this.scrollTop - this.columnLayout.pagePaddingBlock);
+    if (this.layoutMode !== "paginated") return Math.max(0, this.scrollTop - getReflowableBlockPaddingStart(this.columnLayout));
     return this.pageIndex * this.columnLayout.columnHeight * this.columnLayout.columns;
   }
   getSourceViewportHeight() {
-    if (this.layoutMode !== "paginated") return this.height + this.columnLayout.pagePaddingBlock * 2;
+    if (this.layoutMode !== "paginated") {
+      return this.height + getReflowableBlockPaddingStart(this.columnLayout) + getReflowableBlockPaddingEnd(this.columnLayout);
+    }
     return this.columnLayout.columnHeight * this.columnLayout.columns;
   }
   getSectionFraction() {
@@ -21974,24 +22145,61 @@ async function applyRebookPlugins(book, plugins) {
   }
   return current;
 }
+const readableContentIndexCache = /* @__PURE__ */ new WeakMap();
 function getReadableContentUnits(book) {
-  var _a2;
-  if (book.sections.length > 0) {
-    return book.sections.map((section, sectionIndex) => {
-      const tocItem = findTOCItemForSection(book, sectionIndex, section);
-      return {
-        index: sectionIndex,
-        id: section.id,
-        kind: "section",
-        title: tocItem == null ? void 0 : tocItem.label,
-        href: tocItem == null ? void 0 : tocItem.href,
-        sectionIndex,
-        size: section.size,
-        linear: section.linear,
-        format: section.format
-      };
-    });
+  return getReadableContentIndex(book).units;
+}
+function getReadableContentIndex(book) {
+  const cached = readableContentIndexCache.get(book);
+  if (cached && cached.sections === book.sections && cached.toc === book.toc) return cached;
+  const sectionLookup = createSectionIndexLookup(book);
+  const units2 = book.sections.length > 0 ? createSectionReadableContentUnits(book, sectionLookup) : createFixedReadableContentUnits(book);
+  const next = {
+    sections: book.sections,
+    toc: book.toc,
+    units: units2,
+    sectionLookup
+  };
+  readableContentIndexCache.set(book, next);
+  return next;
+}
+function getReadableContentUnitCount(book) {
+  var _a2, _b2;
+  if (book.sections.length > 0) return book.sections.length;
+  return (_b2 = (_a2 = book.fixedDocument) == null ? void 0 : _a2.pageCount) != null ? _b2 : 0;
+}
+function clampReadableContentUnitIndex(book, index) {
+  const count = getReadableContentUnitCount(book);
+  if (count <= 0) return 0;
+  return Math.min(count - 1, Math.max(0, Math.floor(index)));
+}
+function getReadableContentUnit(book, index) {
+  return getReadableContentIndex(book).units[clampReadableContentUnitIndex(book, index)];
+}
+function createSectionReadableContentUnits(book, sectionLookup) {
+  const tocBySection = /* @__PURE__ */ new Map();
+  for (const item of flattenTOC(book.toc)) {
+    const sectionIndex = resolveTOCSectionIndex(book, item.href, sectionLookup);
+    if (sectionIndex < 0 || tocBySection.has(sectionIndex)) continue;
+    tocBySection.set(sectionIndex, item);
   }
+  return book.sections.map((section, sectionIndex) => {
+    const tocItem = tocBySection.get(sectionIndex);
+    return {
+      index: sectionIndex,
+      id: section.id,
+      kind: "section",
+      title: tocItem == null ? void 0 : tocItem.label,
+      href: tocItem == null ? void 0 : tocItem.href,
+      sectionIndex,
+      size: section.size,
+      linear: section.linear,
+      format: section.format
+    };
+  });
+}
+function createFixedReadableContentUnits(book) {
+  var _a2;
   const fixedDocument = book.fixedDocument;
   if (!fixedDocument) return [];
   const pageTitles = getFixedPageTitles(book);
@@ -22010,19 +22218,6 @@ function getReadableContentUnits(book) {
       format: fixedDocument.format
     };
   });
-}
-function getReadableContentUnitCount(book) {
-  var _a2, _b2;
-  if (book.sections.length > 0) return book.sections.length;
-  return (_b2 = (_a2 = book.fixedDocument) == null ? void 0 : _a2.pageCount) != null ? _b2 : 0;
-}
-function clampReadableContentUnitIndex(book, index) {
-  const count = getReadableContentUnitCount(book);
-  if (count <= 0) return 0;
-  return Math.min(count - 1, Math.max(0, Math.floor(index)));
-}
-function getReadableContentUnit(book, index) {
-  return getReadableContentUnits(book)[clampReadableContentUnitIndex(book, index)];
 }
 async function getReadableContent(book, unitIndex, options = {}) {
   const unit = getReadableContentUnit(book, unitIndex);

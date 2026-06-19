@@ -415,6 +415,7 @@ describe('BrowserRenderer', () => {
                 columns: 1,
                 pageHeight: 120,
                 columnHeight: 88,
+                pagePaddingInline: 0,
                 pagePaddingBlock: 16,
                 totalHeight: 120,
                 pageCount: 1,
@@ -1132,7 +1133,7 @@ describe('BrowserRenderer', () => {
         reader.destroy()
     })
 
-    it('caps fixed PDF page width with maxColumnWidth in wide viewports', async () => {
+    it('fits fixed PDF pages to the available viewport height', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '1000')
         container.setAttribute('data-height', '640')
@@ -1151,11 +1152,11 @@ describe('BrowserRenderer', () => {
         const frame = container.querySelector('[data-rebook-fixed-page="true"]') as HTMLElement | null
         const canvas = container.querySelector('[data-rebook-fixed-canvas="true"]') as HTMLCanvasElement | null
 
-        expect(frame?.style.width).toBe('360px')
-        expect(parseFloat(frame?.style.height ?? '')).toBeCloseTo(172.8)
-        expect(canvas?.style.width).toBe('360px')
+        expect(parseFloat(frame?.style.width ?? '')).toBeCloseTo(116.6666666667)
+        expect(parseFloat(frame?.style.height ?? '')).toBeCloseTo(56)
+        expect(parseFloat(canvas?.style.width ?? '')).toBeCloseTo(116.6666666667)
         expect(canvas?.style.transform ?? '').toBe('')
-        expect(canvas?.width).toBe(360)
+        expect(canvas?.width).toBe(117)
 
         reader.destroy()
     })
@@ -1329,17 +1330,17 @@ describe('BrowserRenderer', () => {
         const rows = Array.from(container.querySelectorAll('[data-block-type="paragraph"]')) as HTMLElement[]
         const lefts = new Set(rows.map(row => row.style.left))
         expect(lefts.size).toBeGreaterThan(1)
-        expect(rows.some(row => row.style.left === '368px')).toBe(true)
+        expect(rows.some(row => row.style.left === '344px')).toBe(true)
         const layer = rows[0].closest('[data-rebook-reflowable-content-layer="true"]') as HTMLElement
         const frame = layer.parentElement as HTMLElement
         const contentHost = frame.parentElement as HTMLElement
-        expect(contentHost.style.left).toBe('56px')
-        expect(frame.style.width).toBe('688px')
+        expect(contentHost.style.left).toBe('80px')
+        expect(frame.style.width).toBe('640px')
 
         renderer.setSpread(1)
         const singleColumnRows = Array.from(container.querySelectorAll('[data-block-type="paragraph"]')) as HTMLElement[]
         const singleColumnLefts = new Set(singleColumnRows.map(row => row.style.left))
-        expect(singleColumnLefts).toEqual(new Set(['0px']))
+        expect(singleColumnLefts).toEqual(new Set(['24px']))
         const singleColumnLayer = singleColumnRows[0].closest('[data-rebook-reflowable-content-layer="true"]') as HTMLElement
         const singleColumnFrame = singleColumnLayer.parentElement as HTMLElement
         const singleColumnContentHost = singleColumnFrame.parentElement as HTMLElement
@@ -1673,7 +1674,7 @@ describe('BrowserRenderer', () => {
         await renderer.goTo(0)
 
         const pre = container.querySelector('pre[data-block-type="pre"]') as HTMLElement
-        expect(pre.style.width).toBe('260px')
+        expect(pre.style.width).toBe('212px')
         expect(pre.style.overflow).toBe('auto')
         expect(pre.style.whiteSpace).toBe('pre-wrap')
         expect(pre.style.overflowWrap).toBe('anywhere')

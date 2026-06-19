@@ -3,6 +3,7 @@ import type { FixedDocument, FixedPageInfo } from '../../src/core/fixed-document
 import {
     createFixedPageContentRenderContext,
     resolveFixedPageFit,
+    resolveFixedSpreadFit,
 } from '../../src/core/fixed-page-model'
 
 describe('fixed page model', () => {
@@ -19,7 +20,7 @@ describe('fixed page model', () => {
         expect(fit).toMatchObject({
             margin: 32,
             availableInlineSize: 336,
-            targetInlineSize: 336,
+            availableBlockSize: 576,
             scale: 0.56,
             viewport: {
                 pageIndex: 0,
@@ -29,6 +30,7 @@ describe('fixed page model', () => {
                 pixelHeight: 896,
             },
         })
+        expect(fit.targetInlineSize).toBeCloseTo(336)
         expect(fit.viewport.cssWidth).toBeCloseTo(336)
         expect(fit.viewport.cssHeight).toBeCloseTo(448)
     })
@@ -47,7 +49,8 @@ describe('fixed page model', () => {
 
         expect(fit.margin).toBe(40)
         expect(fit.availableInlineSize).toBe(920)
-        expect(fit.targetInlineSize).toBe(300)
+        expect(fit.availableBlockSize).toBe(620)
+        expect(fit.targetInlineSize).toBe(350)
         expect(fit.scale).toBe(1.75)
         expect(fit.viewport.cssWidth).toBe(350)
     })
@@ -56,16 +59,54 @@ describe('fixed page model', () => {
         const page = createPage({ width: 612, height: 792 })
         const fit = resolveFixedPageFit(page, {
             inlineSize: 1400,
-            blockSize: 900,
+            blockSize: 1200,
         }, {
             margin: '32px',
             maxColumnWidth: '720px',
         })
 
         expect(fit.availableInlineSize).toBe(1336)
+        expect(fit.availableBlockSize).toBe(1136)
         expect(fit.targetInlineSize).toBe(720)
         expect(fit.scale).toBeCloseTo(720 / 612)
         expect(fit.viewport.cssWidth).toBeCloseTo(720)
+    })
+
+    it('fits fixed pages to the available block viewport when height is tighter', () => {
+        const page = createPage({ width: 600, height: 1200 })
+        const fit = resolveFixedPageFit(page, {
+            inlineSize: 1000,
+            blockSize: 700,
+        }, {
+            margin: '50px',
+            maxColumnWidth: '960px',
+        })
+
+        expect(fit.availableInlineSize).toBe(900)
+        expect(fit.availableBlockSize).toBe(600)
+        expect(fit.scale).toBe(0.5)
+        expect(fit.targetInlineSize).toBe(300)
+        expect(fit.viewport.cssHeight).toBe(600)
+    })
+
+    it('fits fixed spreads to the available block viewport', () => {
+        const pages = [
+            createPage({ index: 0, width: 600, height: 1200 }),
+            createPage({ index: 1, width: 600, height: 1200 }),
+        ]
+        const fit = resolveFixedSpreadFit(pages, {
+            inlineSize: 1800,
+            blockSize: 700,
+        }, {
+            margin: '50px',
+            maxColumnWidth: '960px',
+        })
+
+        expect(fit.availableInlineSize).toBe(1700)
+        expect(fit.availableBlockSize).toBe(600)
+        expect(fit.scale).toBe(0.5)
+        expect(fit.targetInlineSize).toBe(600)
+        expect(fit.spreadHeight * fit.scale).toBe(600)
     })
 
     it('normalizes invalid fit options defensively', () => {
@@ -82,6 +123,7 @@ describe('fixed page model', () => {
 
         expect(fit.margin).toBe(12)
         expect(fit.availableInlineSize).toBe(1)
+        expect(fit.availableBlockSize).toBe(1)
         expect(fit.targetInlineSize).toBe(1)
         expect(fit.scale).toBe(0.002)
         expect(fit.viewport.devicePixelRatio).toBe(1)

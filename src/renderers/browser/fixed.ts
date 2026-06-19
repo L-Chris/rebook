@@ -67,7 +67,7 @@ export interface BrowserFixedRendererConfig extends RendererConfig {
 
 const DEFAULT_MARGIN = 32
 const DEFAULT_TEXT_COLOR = '#111111'
-const DEFAULT_GAP = 32
+const DEFAULT_PAGE_GAP = 0
 const DEFAULT_MIN_COLUMN_WIDTH = 320
 
 export class BrowserFixedRenderer implements BrowserContentEngine {
@@ -315,10 +315,9 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     private getRequestedColumnCount(): number {
         return getFixedVisiblePageCount(this.layoutMode, this.maxColumnCount, this.getViewportMetrics(), {
             margin: this.styles.margin,
-            gap: this.styles.gap,
             minColumnWidth: this.styles.minColumnWidth,
             defaultMargin: DEFAULT_MARGIN,
-            defaultGap: DEFAULT_GAP,
+            defaultGap: DEFAULT_PAGE_GAP,
             defaultMinColumnWidth: DEFAULT_MIN_COLUMN_WIDTH,
         })
     }
@@ -326,11 +325,10 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     private resolveSpreadFit(pages: readonly FixedPageInfo[]): FixedSpreadFit {
         return resolveFixedSpreadFit(pages, this.getViewportMetrics(), {
             margin: this.styles.margin,
-            gap: this.styles.gap,
             maxInlineSize: this.styles.maxInlineSize,
             maxColumnWidth: this.styles.maxColumnWidth,
             defaultMargin: DEFAULT_MARGIN,
-            defaultGap: DEFAULT_GAP,
+            defaultGap: DEFAULT_PAGE_GAP,
             devicePixelRatio: this.getDevicePixelRatio(),
         })
     }

@@ -10,6 +10,7 @@ import type { BookPosition } from './location'
 import type { FixedPageVisualAppearance } from './fixed-document'
 import type { ReaderThemeInput } from './theme'
 import type { PageSurface } from './page-surface'
+import type { ReflowablePageFitMode } from './reflowable-page-model'
 
 /**
  * Style options for the renderer.
@@ -39,11 +40,15 @@ export interface RendererStyles {
     pageShadow?: string
     /** Visual appearance applied by fixed-page renderers that support direct theming. */
     fixedPageVisualAppearance?: FixedPageVisualAppearance
+    /** Inline padding inside each page/column in paginated reflowable layouts. */
+    pagePaddingInline?: string | number
+    /** Reflowable page sizing strategy. auto uses paper-like pages only on larger viewports. */
+    reflowablePageFit?: ReflowablePageFitMode
     /** Selection background color for renderers that support it. */
     selectionBackground?: string
     /** Selection text color for renderers that support it. */
     selectionColor?: string
-    /** Column gap (for paginated mode) */
+    /** Legacy paginated spacing value. Reflowable renderers use half of it as pagePaddingInline when pagePaddingInline is omitted. */
     gap?: string | number
     /** Maximum column width (for paginated mode) */
     maxInlineSize?: string | number

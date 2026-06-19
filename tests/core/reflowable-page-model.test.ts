@@ -9,6 +9,8 @@ import {
     getReflowableSourceHeightForPages,
     getReflowableSourceViewport,
     getReflowableVisibleLineWindow,
+    getReflowableColumnInlinePadding,
+    resolveReflowablePageGeometry,
     type ReflowableColumnLayout,
 } from '../../src/core/reflowable-page-model'
 
@@ -82,6 +84,79 @@ describe('reflowable page model', () => {
         expect(getReflowableSourceHeightForPages('paginated', layout, metrics, 2)).toBe(400)
         expect(getReflowableSourceHeightForPages('scrolled', layout, metrics, 2)).toBe(240)
     })
+
+    it('keeps viewport fitting on narrow auto viewports', () => {
+        const geometry = resolveReflowablePageGeometry({
+            layoutMode: 'paginated',
+            maxColumnCount: 2,
+            availableInlineSize: 390,
+            availableBlockSize: 800,
+            gap: 0,
+            minColumnWidth: 360,
+            maxColumnWidth: 960,
+            pagePaddingInline: 24,
+            pagePaddingBlock: 32,
+            pageFit: 'auto',
+        })
+
+        expect(geometry.pageFit).toBe('viewport')
+        expect(geometry.columns).toBe(1)
+        expect(geometry.columnWidth).toBe(390)
+        expect(geometry.inlineSize).toBe(342)
+        expect(geometry.pagePaddingBlockStart).toBe(32)
+        expect(geometry.pageHeight).toBe(800)
+        expect(geometry.pageFrameHeight).toBe(800)
+        expect(geometry.pageFrameTop).toBe(0)
+    })
+
+    it('fits larger auto viewports to paper-like page proportions', () => {
+        const geometry = resolveReflowablePageGeometry({
+            layoutMode: 'paginated',
+            maxColumnCount: 2,
+            availableInlineSize: 1128,
+            availableBlockSize: 800,
+            gap: 0,
+            minColumnWidth: 360,
+            maxColumnWidth: 960,
+            pagePaddingInline: 24,
+            pagePaddingBlock: 32,
+            pageFit: 'auto',
+        })
+
+        expect(geometry.pageFit).toBe('paper')
+        expect(geometry.columns).toBe(2)
+        expect(geometry.columnWidth).toBeCloseTo(518.7, 1)
+        expect(geometry.inlineSize).toBeCloseTo(385.5, 1)
+        expect(geometry.pageHeight).toBe(800)
+        expect(geometry.pageFrameHeight).toBeCloseTo(736, 1)
+        expect(geometry.pageFrameTop).toBeCloseTo(32, 1)
+        expect(geometry.pagePaddingInlineStart).toBeLessThan(geometry.pagePaddingInlineEnd)
+        expect(geometry.pagePaddingBlockStart).toBeGreaterThan(80)
+        expect(geometry.pagePaddingBlockEnd).toBeGreaterThan(100)
+
+        expect(getReflowableColumnInlinePadding({
+            ...createLayout(),
+            columns: geometry.columns,
+            columnWidth: geometry.columnWidth,
+            pagePaddingInline: geometry.pagePaddingInline,
+            pagePaddingInlineStart: geometry.pagePaddingInlineStart,
+            pagePaddingInlineEnd: geometry.pagePaddingInlineEnd,
+        }, 0)).toEqual({
+            start: geometry.pagePaddingInlineStart,
+            end: geometry.pagePaddingInlineEnd,
+        })
+        expect(getReflowableColumnInlinePadding({
+            ...createLayout(),
+            columns: geometry.columns,
+            columnWidth: geometry.columnWidth,
+            pagePaddingInline: geometry.pagePaddingInline,
+            pagePaddingInlineStart: geometry.pagePaddingInlineStart,
+            pagePaddingInlineEnd: geometry.pagePaddingInlineEnd,
+        }, 1)).toEqual({
+            start: geometry.pagePaddingInlineEnd,
+            end: geometry.pagePaddingInlineStart,
+        })
+    })
 })
 
 function createLayout(overrides: Partial<ReflowableColumnLayout> = {}): ReflowableColumnLayout {
@@ -92,6 +167,7 @@ function createLayout(overrides: Partial<ReflowableColumnLayout> = {}): Reflowab
         columns: 1,
         pageHeight: 120,
         columnHeight: 88,
+        pagePaddingInline: 0,
         pagePaddingBlock: 16,
         totalHeight: 120,
         pageCount: 1,

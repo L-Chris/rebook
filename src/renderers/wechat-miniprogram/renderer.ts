@@ -17,11 +17,11 @@ import {
     getLineHeightMultiplier,
     getLinePageIndex,
     getPagePaddingBlock,
+    getPagePaddingInline,
     getPluginPrefetchPageCount,
     getReadablePageCount,
     parseCSSPixels,
 } from '../../core/renderer-utils'
-import { getSpreadVisibleItemCount } from '../../core/spread-layout'
 import {
     getVisibleLines,
     installPretextMeasurementPolyfill,
@@ -37,6 +37,14 @@ import {
     type TextTable,
     type CanvasProviderLike,
 } from '../../core/pretext'
+import {
+    getReflowableBlockPaddingEnd,
+    getReflowableBlockPaddingStart,
+    getReflowableColumnIndexForLeft,
+    getReflowableColumnInlinePadding,
+    resolveReflowablePageGeometry,
+    type ReflowableColumnLayout,
+} from '../../core/reflowable-page-model'
 
 interface RendererEventMap {
     load: LoadEvent
@@ -142,17 +150,7 @@ export interface WechatMiniProgramTextFragment {
     }
 }
 
-interface ColumnLayout {
-    margin: number
-    gap: number
-    columnWidth: number
-    columns: number
-    pageHeight: number
-    columnHeight: number
-    pagePaddingBlock: number
-    totalHeight: number
-    pageCount: number
-}
+type ColumnLayout = ReflowableColumnLayout
 
 interface TOCPosition {
     index: number
@@ -162,7 +160,10 @@ interface TOCPosition {
 }
 
 const DEFAULT_MARGIN = 32
-const DEFAULT_GAP = 48
+const DEFAULT_COLUMN_GAP = 0
+const DEFAULT_PAGE_PADDING_INLINE = 24
+const DEFAULT_MIN_COLUMN_WIDTH = 360
+const DEFAULT_MAX_COLUMN_WIDTH = 960
 
 export class WechatMiniProgramRenderer implements Renderer {
     private width: number
@@ -190,12 +191,20 @@ export class WechatMiniProgramRenderer implements Renderer {
     private readonly marks = new ReaderMarkStore()
     private columnLayout: ColumnLayout = {
         margin: DEFAULT_MARGIN,
-        gap: DEFAULT_GAP,
+        gap: DEFAULT_COLUMN_GAP,
         columnWidth: 0,
         columns: 1,
         pageHeight: 0,
+        pageFrameHeight: 0,
+        pageFrameTop: 0,
         columnHeight: 0,
+        pagePaddingInline: DEFAULT_PAGE_PADDING_INLINE,
+        pagePaddingInlineStart: DEFAULT_PAGE_PADDING_INLINE,
+        pagePaddingInlineEnd: DEFAULT_PAGE_PADDING_INLINE,
         pagePaddingBlock: 0,
+        pagePaddingBlockStart: 0,
+        pagePaddingBlockEnd: 0,
+        pageFit: 'viewport',
         totalHeight: 0,
         pageCount: 1,
     }
@@ -489,22 +498,32 @@ export class WechatMiniProgramRenderer implements Renderer {
             return
         }
         const margin = parseCSSPixels(this.styles.margin, DEFAULT_MARGIN)
-        const gap = parseCSSPixels(this.styles.gap, DEFAULT_GAP)
-        const minColumnWidth = parseCSSPixels(this.styles.minColumnWidth, 320)
-        const maxColumnWidth = parseCSSPixels(this.styles.maxColumnWidth ?? this.styles.maxInlineSize, 720)
+        const gap = DEFAULT_COLUMN_GAP
+        const pagePaddingInline = getPagePaddingInline(this.styles.pagePaddingInline, this.styles.gap, DEFAULT_PAGE_PADDING_INLINE)
+        const minColumnWidth = parseCSSPixels(this.styles.minColumnWidth, DEFAULT_MIN_COLUMN_WIDTH)
+        const maxColumnWidth = parseCSSPixels(this.styles.maxColumnWidth ?? this.styles.maxInlineSize, DEFAULT_MAX_COLUMN_WIDTH)
         const availableWidth = Math.max(1, this.width - margin * 2)
-        const columns = getSpreadVisibleItemCount(this.layoutMode, this.maxColumnCount, {
-            inlineSize: availableWidth,
-        }, {
+        const geometry = resolveReflowablePageGeometry({
+            layoutMode: this.layoutMode,
+            maxColumnCount: this.maxColumnCount,
+            availableInlineSize: availableWidth,
+            availableBlockSize: Math.max(1, this.height),
             gap,
             minColumnWidth,
+            maxColumnWidth,
+            pagePaddingInline,
+            pagePaddingBlock: getPagePaddingBlock(this.layoutMode, this.height, margin),
+            pageFit: this.styles.reflowablePageFit,
+            usePaperPadding: this.styles.pagePaddingInline == null && this.styles.gap == null,
         })
-        const rawWidth = columns > 1 ? (availableWidth - gap * (columns - 1)) / columns : availableWidth
-        const inlineSize = Math.max(1, Math.min(maxColumnWidth, rawWidth))
-        const pageHeight = Math.max(1, this.height)
-        const pagePaddingBlock = getPagePaddingBlock(this.layoutMode, pageHeight, margin)
+        const columns = geometry.columns
+        const pageInlineSize = geometry.columnWidth
+        const inlineSize = geometry.inlineSize
+        const pageHeight = geometry.pageHeight
+        const pagePaddingBlockStart = geometry.pagePaddingBlockStart
+        const pagePaddingBlockEnd = geometry.pagePaddingBlockEnd
         const columnHeight = this.layoutMode === 'paginated'
-            ? Math.max(this.getLineHeightPixels(), pageHeight - pagePaddingBlock * 2)
+            ? Math.max(this.getLineHeightPixels(), pageHeight - pagePaddingBlockStart - pagePaddingBlockEnd)
             : Number.POSITIVE_INFINITY
 
         this.lines = layoutText(this.prepared, {
@@ -520,16 +539,24 @@ export class WechatMiniProgramRenderer implements Renderer {
             : 1
         const totalHeight = this.layoutMode === 'paginated'
             ? pageCount * pageHeight
-            : contentHeight + pagePaddingBlock * 2
+            : contentHeight + pagePaddingBlockStart + pagePaddingBlockEnd
 
         this.columnLayout = {
             margin,
             gap,
-            columnWidth: inlineSize,
+            columnWidth: pageInlineSize,
             columns,
             pageHeight,
+            pageFrameHeight: geometry.pageFrameHeight,
+            pageFrameTop: geometry.pageFrameTop,
             columnHeight,
-            pagePaddingBlock,
+            pagePaddingInline: geometry.pagePaddingInline,
+            pagePaddingInlineStart: geometry.pagePaddingInlineStart,
+            pagePaddingInlineEnd: geometry.pagePaddingInlineEnd,
+            pagePaddingBlock: geometry.pagePaddingBlock,
+            pagePaddingBlockStart,
+            pagePaddingBlockEnd,
+            pageFit: geometry.pageFit,
             totalHeight,
             pageCount,
         }
@@ -541,12 +568,20 @@ export class WechatMiniProgramRenderer implements Renderer {
     private createEmptyLayout(): ColumnLayout {
         return {
             margin: parseCSSPixels(this.styles.margin, DEFAULT_MARGIN),
-            gap: parseCSSPixels(this.styles.gap, DEFAULT_GAP),
+            gap: DEFAULT_COLUMN_GAP,
             columnWidth: Math.max(1, this.width - parseCSSPixels(this.styles.margin, DEFAULT_MARGIN) * 2),
             columns: 1,
             pageHeight: this.height,
+            pageFrameHeight: this.height,
+            pageFrameTop: 0,
             columnHeight: this.height,
+            pagePaddingInline: getPagePaddingInline(this.styles.pagePaddingInline, this.styles.gap, DEFAULT_PAGE_PADDING_INLINE),
+            pagePaddingInlineStart: getPagePaddingInline(this.styles.pagePaddingInline, this.styles.gap, DEFAULT_PAGE_PADDING_INLINE),
+            pagePaddingInlineEnd: getPagePaddingInline(this.styles.pagePaddingInline, this.styles.gap, DEFAULT_PAGE_PADDING_INLINE),
             pagePaddingBlock: 0,
+            pagePaddingBlockStart: 0,
+            pagePaddingBlockEnd: 0,
+            pageFit: 'viewport',
             totalHeight: this.height,
             pageCount: 1,
         }
@@ -585,8 +620,10 @@ export class WechatMiniProgramRenderer implements Renderer {
 
     private getLineStyle(line: LineRange, position: { top: number; left: number }): Record<string, string | number> {
         const inlineOffset = line.inlineOffset ?? 0
-        const left = position.left + inlineOffset
-        const width = Math.max(1, line.kind === 'image' ? line.width : this.columnLayout.columnWidth - inlineOffset)
+        const padding = this.getColumnContentPadding(position)
+        const left = position.left + padding.start + inlineOffset
+        const contentWidth = this.getColumnContentWidth(position)
+        const width = Math.max(1, line.kind === 'image' ? line.width : contentWidth - inlineOffset)
         return {
             position: 'absolute',
             top: `${position.top}px`,
@@ -597,6 +634,25 @@ export class WechatMiniProgramRenderer implements Renderer {
             textAlign: getTextAlign(line.block?.style?.textAlign),
             color: this.styles.color ?? 'inherit',
         }
+    }
+
+    private getColumnContentWidth(): number
+    private getColumnContentWidth(position: { left: number }): number
+    private getColumnContentWidth(position?: { left: number }): number {
+        return position
+            ? this.getColumnContentWidthForPadding(this.getColumnContentPadding(position))
+            : this.getColumnContentWidthForPadding(getReflowableColumnInlinePadding(this.columnLayout, 0))
+    }
+
+    private getColumnContentPadding(position: { left: number }): { start: number; end: number } {
+        return getReflowableColumnInlinePadding(
+            this.columnLayout,
+            getReflowableColumnIndexForLeft(this.columnLayout, position.left),
+        )
+    }
+
+    private getColumnContentWidthForPadding(padding: { start: number; end: number }): number {
+        return Math.max(1, this.columnLayout.columnWidth - padding.start - padding.end)
     }
 
     private createTextFragment(fragment: LineSegmentRange, index: number): WechatMiniProgramTextFragment {
@@ -802,28 +858,33 @@ export class WechatMiniProgramRenderer implements Renderer {
             const pageSourceHeight = Math.max(1, this.columnLayout.columnHeight * this.columnLayout.columns)
             return Math.floor(safeSourceTop / pageSourceHeight) * this.columnLayout.pageHeight
         }
-        return safeSourceTop + this.columnLayout.pagePaddingBlock
+        return safeSourceTop + getReflowableBlockPaddingStart(this.columnLayout)
     }
 
     private getRenderedLinePosition(line: LineRange): { top: number; left: number } {
-        const { columns, pageHeight, columnHeight, columnWidth, gap, pagePaddingBlock } = this.columnLayout
-        if (this.layoutMode !== 'paginated') return { top: line.top + pagePaddingBlock, left: 0 }
+        const { columns, pageHeight, columnHeight, columnWidth, gap } = this.columnLayout
+        const pagePaddingBlockStart = getReflowableBlockPaddingStart(this.columnLayout)
+        if (this.layoutMode !== 'paginated') return { top: line.top + pagePaddingBlockStart, left: 0 }
         const sourceColumn = Math.floor(line.top / columnHeight)
         const row = Math.floor(sourceColumn / columns)
         const column = sourceColumn % columns
         return {
-            top: (row - this.pageIndex) * pageHeight + pagePaddingBlock + (line.top % columnHeight),
+            top: (row - this.pageIndex) * pageHeight + pagePaddingBlockStart + (line.top % columnHeight),
             left: column * (columnWidth + gap),
         }
     }
 
     private getSourceScrollTop(): number {
-        if (this.layoutMode !== 'paginated') return Math.max(0, this.scrollTop - this.columnLayout.pagePaddingBlock)
+        if (this.layoutMode !== 'paginated') return Math.max(0, this.scrollTop - getReflowableBlockPaddingStart(this.columnLayout))
         return this.pageIndex * this.columnLayout.columnHeight * this.columnLayout.columns
     }
 
     private getSourceViewportHeight(): number {
-        if (this.layoutMode !== 'paginated') return this.height + this.columnLayout.pagePaddingBlock * 2
+        if (this.layoutMode !== 'paginated') {
+            return this.height
+                + getReflowableBlockPaddingStart(this.columnLayout)
+                + getReflowableBlockPaddingEnd(this.columnLayout)
+        }
         return this.columnLayout.columnHeight * this.columnLayout.columns
     }
 

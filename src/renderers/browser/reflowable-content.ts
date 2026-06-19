@@ -3,6 +3,8 @@ import type { LayoutMode, RendererStyles } from '../../core/renderer'
 import { parseCSSPixels } from '../../core/renderer-utils'
 import { createReflowableTextProvider } from '../../core/reflowable-text-provider'
 import {
+    getReflowableColumnIndexForLeft,
+    getReflowableColumnInlinePadding,
     getRenderedReflowableLinePosition,
     type ReflowableColumnLayout,
 } from '../../core/reflowable-page-model'
@@ -114,11 +116,13 @@ export class BrowserReflowableContentRenderer implements ContentRenderer<Browser
 
         const lineEl = document.createElement('div')
         const inlineOffset = line.inlineOffset ?? 0
+        const contentLeft = getColumnContentLeft(position, context)
+        const contentWidth = getColumnContentWidth(context, position)
         lineEl.style.cssText = `
             position: absolute;
             top: ${position.top}px;
-            left: ${position.left + inlineOffset}px;
-            width: ${Math.max(1, context.layout.columnWidth - inlineOffset)}px;
+            left: ${contentLeft + inlineOffset}px;
+            width: ${Math.max(1, contentWidth - inlineOffset)}px;
             height: ${line.height}px;
             line-height: ${line.height}px;
             white-space: pre;
@@ -170,7 +174,8 @@ function createImageLine(
     context: BrowserReflowableContentRenderContext,
 ): HTMLElement {
     const image = line.image!
-    const imageLeft = getImageLeft(image, position.left, line.width, context.layout.columnWidth)
+    const contentLeft = getColumnContentLeft(position, context)
+    const imageLeft = getImageLeft(image, contentLeft, line.width, getColumnContentWidth(context, position))
     const wrapper = document.createElement('figure')
     wrapper.style.cssText = `
         position: absolute;
@@ -210,15 +215,17 @@ function createPreBlock(
 ): HTMLElement {
     const block = line.block!
     const preStyle = block.style ?? {}
-    const fontSize = preStyle.fontSize ?? context.layout.columnWidth * 0.04
+    const contentWidth = getColumnContentWidth(context, position)
+    const fontSize = preStyle.fontSize ?? contentWidth * 0.04
     const inlineOffset = line.inlineOffset ?? 0
-    const preWidth = Math.max(1, context.layout.columnWidth - inlineOffset)
+    const preWidth = Math.max(1, contentWidth - inlineOffset)
+    const contentLeft = getColumnContentLeft(position, context)
 
     const wrapper = document.createElement('pre')
     wrapper.style.cssText = `
         position: absolute;
         top: ${position.top}px;
-        left: ${position.left + inlineOffset}px;
+        left: ${contentLeft + inlineOffset}px;
         width: ${preWidth}px;
         height: ${line.height}px;
         margin: 0;
@@ -252,11 +259,12 @@ function createSeparatorLine(
     context: BrowserReflowableContentRenderContext,
 ): HTMLElement {
     const wrapper = document.createElement('div')
+    const contentLeft = getColumnContentLeft(position, context)
     wrapper.style.cssText = `
         position: absolute;
         top: ${position.top}px;
-        left: ${position.left}px;
-        width: ${context.layout.columnWidth}px;
+        left: ${contentLeft}px;
+        width: ${getColumnContentWidth(context, position)}px;
         height: ${line.height}px;
         display: flex;
         align-items: center;
@@ -286,11 +294,12 @@ function createTableLine(
     const fontSize = line.block?.style?.fontSize ?? parseCSSPixels(context.styles.fontSize, 16)
     const lineHeight = getCSSLineHeight(line.block?.style?.lineHeight, fontSize, context.lineHeightPixels)
     const wrapper = document.createElement('div')
+    const contentLeft = getColumnContentLeft(position, context)
     wrapper.style.cssText = `
         position: absolute;
         top: ${position.top}px;
-        left: ${position.left}px;
-        width: ${context.layout.columnWidth}px;
+        left: ${contentLeft}px;
+        width: ${getColumnContentWidth(context, position)}px;
         height: ${line.height}px;
         overflow: hidden;
         font-family: ${context.styles.fontFamily ?? 'system-ui, -apple-system, Georgia, serif'};
@@ -355,6 +364,27 @@ function getImageLeft(image: TextImage, columnLeft: number, imageWidth: number, 
     if (image.style?.align === 'start') return columnLeft
     if (image.style?.align === 'end') return columnLeft + columnWidth - imageWidth
     return columnLeft + (columnWidth - imageWidth) / 2
+}
+
+function getColumnContentLeft(position: { left: number }, context: BrowserReflowableContentRenderContext): number {
+    return position.left + getColumnContentPadding(position, context).start
+}
+
+function getColumnContentWidth(context: BrowserReflowableContentRenderContext, position?: { left: number }): number {
+    const padding = position
+        ? getColumnContentPadding(position, context)
+        : getReflowableColumnInlinePadding(context.layout, 0)
+    return Math.max(1, context.layout.columnWidth - padding.start - padding.end)
+}
+
+function getColumnContentPadding(
+    position: { left: number },
+    context: BrowserReflowableContentRenderContext,
+): { start: number; end: number } {
+    return getReflowableColumnInlinePadding(
+        context.layout,
+        getReflowableColumnIndexForLeft(context.layout, position.left),
+    )
 }
 
 function getTableGridTemplate(table: TextTable): string {

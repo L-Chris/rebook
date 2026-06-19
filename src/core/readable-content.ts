@@ -1,5 +1,5 @@
-import type { Book, Section, TextBlock, TextBlockType, TextSegment } from './types'
-import { createSectionIndexLookup, findTOCItemForSection, flattenTOC, resolveTOCSectionIndex } from './toc'
+import type { Book, Section, TextBlock, TextBlockType, TextSegment, TOCItem } from './types'
+import { createSectionIndexLookup, flattenTOC, resolveTOCSectionIndex, type SectionIndexLookup } from './toc'
 
 export type ReadableContentUnitKind = 'section' | 'page'
 export type ReadableContentBlockType = TextBlockType | 'page'
@@ -47,24 +47,87 @@ export interface ReadableContentOptions {
     includeBlocks?: boolean
 }
 
+interface ReadableContentIndex {
+    readonly sections: readonly Section[]
+    readonly toc: readonly TOCItem[] | undefined
+    readonly units: ReadableContentUnit[]
+    readonly sectionLookup: SectionIndexLookup
+}
+
+const readableContentIndexCache = new WeakMap<Book, ReadableContentIndex>()
+
 export function getReadableContentUnits(book: Book): ReadableContentUnit[] {
+    return getReadableContentIndex(book).units
+}
+
+export function getReadableContentIndex(book: Book): ReadableContentIndex {
+    const cached = readableContentIndexCache.get(book)
+    if (cached && cached.sections === book.sections && cached.toc === book.toc) return cached
+
+    const sectionLookup = createSectionIndexLookup(book)
+    const units = book.sections.length > 0
+        ? createSectionReadableContentUnits(book, sectionLookup)
+        : createFixedReadableContentUnits(book)
+    const next: ReadableContentIndex = {
+        sections: book.sections,
+        toc: book.toc,
+        units,
+        sectionLookup,
+    }
+    readableContentIndexCache.set(book, next)
+    return next
+}
+
+export function getReadableContentUnitCount(book: Book): number {
+    if (book.sections.length > 0) return book.sections.length
+    return book.fixedDocument?.pageCount ?? 0
+}
+
+export function clampReadableContentUnitIndex(book: Book, index: number): number {
+    const count = getReadableContentUnitCount(book)
+    if (count <= 0) return 0
+    return Math.min(count - 1, Math.max(0, Math.floor(index)))
+}
+
+export function getReadableContentUnit(book: Book, index: number): ReadableContentUnit | undefined {
+    return getReadableContentIndex(book).units[clampReadableContentUnitIndex(book, index)]
+}
+
+export function resolveReadableContentUnitIndex(book: Book, href: string): number | undefined {
     if (book.sections.length > 0) {
-        return book.sections.map((section, sectionIndex): ReadableContentUnit => {
-            const tocItem = findTOCItemForSection(book, sectionIndex, section)
-            return {
-                index: sectionIndex,
-                id: section.id,
-                kind: 'section',
-                title: tocItem?.label,
-                href: tocItem?.href,
-                sectionIndex,
-                size: section.size,
-                linear: section.linear,
-                format: section.format,
-            }
-        })
+        const sectionIndex = resolveTOCSectionIndex(book, href, getReadableContentIndex(book).sectionLookup)
+        return sectionIndex >= 0 ? sectionIndex : undefined
     }
 
+    const pageIndex = resolveFixedPageIndex(book, href)
+    return typeof pageIndex === 'number' ? pageIndex : undefined
+}
+
+function createSectionReadableContentUnits(book: Book, sectionLookup: SectionIndexLookup): ReadableContentUnit[] {
+    const tocBySection = new Map<number, TOCItem>()
+    for (const item of flattenTOC(book.toc)) {
+        const sectionIndex = resolveTOCSectionIndex(book, item.href, sectionLookup)
+        if (sectionIndex < 0 || tocBySection.has(sectionIndex)) continue
+        tocBySection.set(sectionIndex, item)
+    }
+
+    return book.sections.map((section, sectionIndex): ReadableContentUnit => {
+        const tocItem = tocBySection.get(sectionIndex)
+        return {
+            index: sectionIndex,
+            id: section.id,
+            kind: 'section',
+            title: tocItem?.label,
+            href: tocItem?.href,
+            sectionIndex,
+            size: section.size,
+            linear: section.linear,
+            format: section.format,
+        }
+    })
+}
+
+function createFixedReadableContentUnits(book: Book): ReadableContentUnit[] {
     const fixedDocument = book.fixedDocument
     if (!fixedDocument) return []
 
@@ -83,31 +146,6 @@ export function getReadableContentUnits(book: Book): ReadableContentUnit[] {
             format: fixedDocument.format,
         }
     })
-}
-
-export function getReadableContentUnitCount(book: Book): number {
-    if (book.sections.length > 0) return book.sections.length
-    return book.fixedDocument?.pageCount ?? 0
-}
-
-export function clampReadableContentUnitIndex(book: Book, index: number): number {
-    const count = getReadableContentUnitCount(book)
-    if (count <= 0) return 0
-    return Math.min(count - 1, Math.max(0, Math.floor(index)))
-}
-
-export function getReadableContentUnit(book: Book, index: number): ReadableContentUnit | undefined {
-    return getReadableContentUnits(book)[clampReadableContentUnitIndex(book, index)]
-}
-
-export function resolveReadableContentUnitIndex(book: Book, href: string): number | undefined {
-    if (book.sections.length > 0) {
-        const sectionIndex = resolveTOCSectionIndex(book, href, createSectionIndexLookup(book))
-        return sectionIndex >= 0 ? sectionIndex : undefined
-    }
-
-    const pageIndex = resolveFixedPageIndex(book, href)
-    return typeof pageIndex === 'number' ? pageIndex : undefined
 }
 
 export async function getReadableContent(

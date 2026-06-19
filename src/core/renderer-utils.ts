@@ -62,6 +62,15 @@ export function getPagePaddingBlock(mode: LayoutMode, pageHeight: number, margin
     return Math.min(preferred, Math.max(12, pageHeight * 0.14))
 }
 
+export function getPagePaddingInline(
+    value: RendererStyles['pagePaddingInline'],
+    legacyGap: RendererStyles['gap'],
+    fallback: number,
+): number {
+    const legacyGapPadding = parseCSSPixels(legacyGap, fallback * 2) / 2
+    return Math.max(0, parseCSSPixels(value, legacyGapPadding))
+}
+
 export function getAnchorIds(value: unknown): string[] {
     if (typeof value !== 'string') {
         const id = getElementLikeId(value)

@@ -15,11 +15,11 @@ import {
     getAnchorIds,
     getLineHeightMultiplier,
     getPagePaddingBlock,
+    getPagePaddingInline,
     getPluginPrefetchPageCount,
     getReadablePageCount,
     parseCSSPixels,
 } from '../../core/renderer-utils'
-import { getSpreadVisibleItemCount } from '../../core/spread-layout'
 import {
     clampReflowablePageIndex,
     findReadableReflowablePage,
@@ -32,6 +32,7 @@ import {
     getReflowableSourceScrollTop,
     getReflowableSourceViewport,
     getReflowableSourceViewportHeight,
+    resolveReflowablePageGeometry,
     type ReflowableColumnLayout,
     type ReflowableViewportMetrics,
 } from '../../core/reflowable-page-model'
@@ -73,7 +74,10 @@ export interface BrowserRendererConfig extends RendererConfig {
 
 const RESIZE_DEBOUNCE_MS = 100
 const DEFAULT_MARGIN = 32
-const DEFAULT_GAP = 48
+const DEFAULT_COLUMN_GAP = 0
+const DEFAULT_PAGE_PADDING_INLINE = 24
+const DEFAULT_MIN_COLUMN_WIDTH = 360
+const DEFAULT_MAX_COLUMN_WIDTH = 960
 
 interface TOCPosition {
     index: number
@@ -105,12 +109,20 @@ export class BrowserRenderer implements BrowserContentEngine {
     private maxColumnCount: number
     private columnLayout: ReflowableColumnLayout = {
         margin: DEFAULT_MARGIN,
-        gap: DEFAULT_GAP,
+        gap: DEFAULT_COLUMN_GAP,
         columnWidth: 0,
         columns: 1,
         pageHeight: 0,
+        pageFrameHeight: 0,
+        pageFrameTop: 0,
         columnHeight: 0,
+        pagePaddingInline: DEFAULT_PAGE_PADDING_INLINE,
+        pagePaddingInlineStart: DEFAULT_PAGE_PADDING_INLINE,
+        pagePaddingInlineEnd: DEFAULT_PAGE_PADDING_INLINE,
         pagePaddingBlock: 0,
+        pagePaddingBlockStart: 0,
+        pagePaddingBlockEnd: 0,
+        pageFit: 'viewport',
         totalHeight: 0,
         pageCount: 1,
     }
@@ -447,19 +459,33 @@ export class BrowserRenderer implements BrowserContentEngine {
     private relayout(): void {
         if (!this.prepared) return
         const margin = parseCSSPixels(this.styles.margin, DEFAULT_MARGIN)
-        const gap = parseCSSPixels(this.styles.gap, DEFAULT_GAP)
-        const minColumnWidth = parseCSSPixels(this.styles.minColumnWidth, 320)
-        const maxColumnWidth = parseCSSPixels(this.styles.maxColumnWidth ?? this.styles.maxInlineSize, 720)
+        const gap = DEFAULT_COLUMN_GAP
+        const pagePaddingInline = getPagePaddingInline(this.styles.pagePaddingInline, this.styles.gap, DEFAULT_PAGE_PADDING_INLINE)
+        const minColumnWidth = parseCSSPixels(this.styles.minColumnWidth, DEFAULT_MIN_COLUMN_WIDTH)
+        const maxColumnWidth = parseCSSPixels(this.styles.maxColumnWidth ?? this.styles.maxInlineSize, DEFAULT_MAX_COLUMN_WIDTH)
         const availableWidth = Math.max(1, this.scroller.clientWidth - margin * 2)
-        const columns = this.getColumnCount(availableWidth, minColumnWidth, gap)
-        const rawWidth = columns > 1
-            ? (availableWidth - gap * (columns - 1)) / columns
-            : availableWidth
-        const inlineSize = Math.max(minColumnWidth, Math.min(maxColumnWidth, rawWidth))
-        const pageHeight = Math.max(1, this.scroller.clientHeight)
-        const pagePaddingBlock = this.getPagePaddingBlock(pageHeight, margin)
+        const availableHeight = Math.max(1, this.scroller.clientHeight)
+        const geometry = resolveReflowablePageGeometry({
+            layoutMode: this.layoutMode,
+            maxColumnCount: this.maxColumnCount,
+            availableInlineSize: availableWidth,
+            availableBlockSize: availableHeight,
+            gap,
+            minColumnWidth,
+            maxColumnWidth,
+            pagePaddingInline,
+            pagePaddingBlock: this.getPagePaddingBlock(availableHeight, margin),
+            pageFit: this.styles.reflowablePageFit,
+            usePaperPadding: this.styles.pagePaddingInline == null && this.styles.gap == null,
+        })
+        const columns = geometry.columns
+        const pageInlineSize = geometry.columnWidth
+        const inlineSize = geometry.inlineSize
+        const pageHeight = geometry.pageHeight
+        const pagePaddingBlockStart = geometry.pagePaddingBlockStart
+        const pagePaddingBlockEnd = geometry.pagePaddingBlockEnd
         const columnHeight = this.layoutMode === 'paginated'
-            ? Math.max(this.getLineHeightPixels(), pageHeight - pagePaddingBlock * 2)
+            ? Math.max(this.getLineHeightPixels(), pageHeight - pagePaddingBlockStart - pagePaddingBlockEnd)
             : Number.POSITIVE_INFINITY
         this.lines = layoutText(this.prepared, {
             inlineSize,
@@ -475,21 +501,29 @@ export class BrowserRenderer implements BrowserContentEngine {
             ? pageCount * pageHeight
             : this.layoutMode === 'paginated'
                 ? pageCount * pageHeight
-                : contentHeight + pagePaddingBlock * 2
+                : contentHeight + pagePaddingBlockStart + pagePaddingBlockEnd
 
         this.columnLayout = {
             margin,
             gap,
-            columnWidth: inlineSize,
+            columnWidth: pageInlineSize,
             columns,
             pageHeight,
+            pageFrameHeight: geometry.pageFrameHeight,
+            pageFrameTop: geometry.pageFrameTop,
             columnHeight,
-            pagePaddingBlock,
+            pagePaddingInline: geometry.pagePaddingInline,
+            pagePaddingInlineStart: geometry.pagePaddingInlineStart,
+            pagePaddingInlineEnd: geometry.pagePaddingInlineEnd,
+            pagePaddingBlock: geometry.pagePaddingBlock,
+            pagePaddingBlockStart,
+            pagePaddingBlockEnd,
+            pageFit: geometry.pageFit,
             totalHeight,
             pageCount,
         }
         this.pageIndex = this.findReadablePage(Math.min(this.pageIndex, pageCount - 1), 0) ?? 0
-        const contentWidth = inlineSize * columns + gap * (columns - 1)
+        const contentWidth = pageInlineSize * columns + gap * (columns - 1)
         const contentLeft = Math.max(0, (this.scroller.clientWidth - contentWidth) / 2)
         this.host.setScrollExtentHeight(totalHeight)
         this.content.style.marginInline = '0'
@@ -780,15 +814,6 @@ export class BrowserRenderer implements BrowserContentEngine {
             lineHeight: getLineHeightMultiplier(this.styles.lineHeight, parseCSSPixels(this.styles.fontSize, 16)),
             color: this.styles.color,
         }
-    }
-
-    private getColumnCount(availableWidth: number, minColumnWidth: number, gap: number): number {
-        return getSpreadVisibleItemCount(this.layoutMode, this.maxColumnCount, {
-            inlineSize: availableWidth,
-        }, {
-            gap,
-            minColumnWidth,
-        })
     }
 
     private getSourceScrollTop(): number {

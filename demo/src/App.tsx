@@ -2591,8 +2591,8 @@ function getReaderStyles(config: DemoConfig) {
     fontSize: config.fontSize,
     hyphenate: config.hyphenate,
     lineHeight: 1.72,
-    minColumnWidth: '320px',
-    maxColumnWidth: '720px',
+    minColumnWidth: '360px',
+    maxColumnWidth: '960px',
     margin: '36px',
   }
 }

@@ -2,6 +2,9 @@ import type { LineRange, VisibleLineWindow } from './pretext'
 import { getVisibleLines } from './pretext'
 import type { LayoutMode } from './renderer'
 import { getLinePageIndex } from './renderer-utils'
+import { getSpreadVisibleItemCount } from './spread-layout'
+
+export type ReflowablePageFitMode = 'auto' | 'paper' | 'viewport'
 
 export interface ReflowableColumnLayout {
     margin: number
@@ -9,10 +12,48 @@ export interface ReflowableColumnLayout {
     columnWidth: number
     columns: number
     pageHeight: number
+    pageFrameHeight?: number
+    pageFrameTop?: number
     columnHeight: number
+    pagePaddingInline: number
+    pagePaddingInlineStart?: number
+    pagePaddingInlineEnd?: number
     pagePaddingBlock: number
+    pagePaddingBlockStart?: number
+    pagePaddingBlockEnd?: number
+    pageFit?: Exclude<ReflowablePageFitMode, 'auto'>
     totalHeight: number
     pageCount: number
+}
+
+export interface ReflowablePageGeometryOptions {
+    readonly layoutMode: LayoutMode
+    readonly maxColumnCount: number
+    readonly availableInlineSize: number
+    readonly availableBlockSize: number
+    readonly gap: number
+    readonly minColumnWidth: number
+    readonly maxColumnWidth: number
+    readonly pagePaddingInline: number
+    readonly pagePaddingBlock: number
+    readonly pageFit?: ReflowablePageFitMode
+    readonly usePaperPadding?: boolean
+}
+
+export interface ReflowablePageGeometry {
+    readonly columns: number
+    readonly columnWidth: number
+    readonly inlineSize: number
+    readonly pageHeight: number
+    readonly pageFrameHeight: number
+    readonly pageFrameTop: number
+    readonly pagePaddingInline: number
+    readonly pagePaddingInlineStart: number
+    readonly pagePaddingInlineEnd: number
+    readonly pagePaddingBlock: number
+    readonly pagePaddingBlockStart: number
+    readonly pagePaddingBlockEnd: number
+    readonly pageFit: Exclude<ReflowablePageFitMode, 'auto'>
 }
 
 export interface ReflowableViewportMetrics {
@@ -26,13 +67,106 @@ export interface ReflowableSourceViewport {
     readonly sourceViewportHeight: number
 }
 
+const PAPER_PAGE_RATIO = 148 / 210
+const PAPER_SINGLE_INLINE_FRACTION = 0.94
+const PAPER_SPREAD_INLINE_FRACTION = 0.96
+const PAPER_BLOCK_FRACTION = 0.92
+const PAPER_AUTO_MIN_INLINE_SIZE = 640
+const PAPER_AUTO_MIN_BLOCK_SIZE = 520
+const PAPER_PADDING_TOP_RATIO = 15 / 148
+const PAPER_PADDING_BOTTOM_RATIO = 20 / 148
+const PAPER_PADDING_OUTER_RATIO = 16 / 148
+const PAPER_PADDING_INNER_RATIO = 22 / 148
+
+export function resolveReflowablePageGeometry(options: ReflowablePageGeometryOptions): ReflowablePageGeometry {
+    const gap = Math.max(0, options.gap)
+    const availableInlineSize = Math.max(1, options.availableInlineSize)
+    const availableBlockSize = Math.max(1, options.availableBlockSize)
+    const minColumnWidth = Math.max(1, options.minColumnWidth)
+    const maxColumnWidth = Math.max(1, options.maxColumnWidth)
+    const columns = getSpreadVisibleItemCount(options.layoutMode, options.maxColumnCount, {
+        inlineSize: availableInlineSize,
+    }, {
+        gap,
+        minColumnWidth,
+    })
+    const pageFit = shouldUsePaperPageFit(
+        options.pageFit ?? 'auto',
+        options.layoutMode,
+        availableInlineSize,
+        availableBlockSize,
+    ) ? 'paper' : 'viewport'
+
+    if (pageFit === 'paper') {
+        return resolvePaperPageGeometry({
+            columns,
+            availableInlineSize,
+            availableBlockSize,
+            gap,
+            maxColumnWidth,
+            pagePaddingInline: options.pagePaddingInline,
+            pagePaddingBlock: options.pagePaddingBlock,
+            usePaperPadding: options.usePaperPadding !== false,
+        })
+    }
+
+    const rawColumnWidth = columns > 1
+        ? (availableInlineSize - gap * (columns - 1)) / columns
+        : availableInlineSize
+    const columnWidth = Math.max(1, Math.min(maxColumnWidth, rawColumnWidth))
+    const pagePaddingInline = Math.max(0, options.pagePaddingInline)
+    const pagePaddingBlock = Math.max(0, options.pagePaddingBlock)
+    return {
+        columns,
+        columnWidth,
+        inlineSize: Math.max(1, columnWidth - pagePaddingInline * 2),
+        pageHeight: availableBlockSize,
+        pageFrameHeight: availableBlockSize,
+        pageFrameTop: 0,
+        pagePaddingInline,
+        pagePaddingInlineStart: pagePaddingInline,
+        pagePaddingInlineEnd: pagePaddingInline,
+        pagePaddingBlock,
+        pagePaddingBlockStart: pagePaddingBlock,
+        pagePaddingBlockEnd: pagePaddingBlock,
+        pageFit,
+    }
+}
+
+export function getReflowableColumnInlinePadding(
+    layout: ReflowableColumnLayout,
+    columnIndex: number,
+): { start: number; end: number } {
+    const start = layout.pagePaddingInlineStart ?? layout.pagePaddingInline
+    const end = layout.pagePaddingInlineEnd ?? layout.pagePaddingInline
+    if (layout.columns > 1 && columnIndex % 2 === 1) {
+        return { start: end, end: start }
+    }
+    return { start, end }
+}
+
+export function getReflowableColumnIndexForLeft(layout: ReflowableColumnLayout, left: number): number {
+    const step = Math.max(1, layout.columnWidth + layout.gap)
+    const column = Math.round(Math.max(0, left) / step)
+    return Math.max(0, Math.min(Math.max(1, layout.columns) - 1, column))
+}
+
+export function getReflowableBlockPaddingStart(layout: ReflowableColumnLayout): number {
+    return layout.pagePaddingBlockStart ?? layout.pagePaddingBlock
+}
+
+export function getReflowableBlockPaddingEnd(layout: ReflowableColumnLayout): number {
+    return layout.pagePaddingBlockEnd ?? layout.pagePaddingBlock
+}
+
 export function getRenderedReflowableLinePosition(
     line: LineRange,
     layout: ReflowableColumnLayout,
     layoutMode: LayoutMode,
 ): { top: number; left: number } {
-    const { columns, pageHeight, columnHeight, columnWidth, gap, pagePaddingBlock } = layout
-    if (layoutMode !== 'paginated') return { top: line.top + pagePaddingBlock, left: 0 }
+    const { columns, pageHeight, columnHeight, columnWidth, gap } = layout
+    const pagePaddingBlockStart = getReflowableBlockPaddingStart(layout)
+    if (layoutMode !== 'paginated') return { top: line.top + pagePaddingBlockStart, left: 0 }
 
     const safeColumnHeight = Math.max(1, columnHeight)
     const safeColumns = Math.max(1, columns)
@@ -40,7 +174,7 @@ export function getRenderedReflowableLinePosition(
     const row = Math.floor(sourceColumn / safeColumns)
     const column = sourceColumn % safeColumns
     return {
-        top: row * pageHeight + pagePaddingBlock + (Math.max(0, line.top) % safeColumnHeight),
+        top: row * pageHeight + pagePaddingBlockStart + (Math.max(0, line.top) % safeColumnHeight),
         left: column * (columnWidth + gap),
     }
 }
@@ -64,7 +198,7 @@ export function getReflowableSourceScrollTop(
     pageIndex: number,
 ): number {
     if (layoutMode !== 'paginated') {
-        return Math.max(0, metrics.scrollTop - layout.pagePaddingBlock)
+        return Math.max(0, metrics.scrollTop - getReflowableBlockPaddingStart(layout))
     }
     return clampReflowablePageIndex(pageIndex, layout) * layout.columnHeight * Math.max(1, layout.columns)
 }
@@ -75,7 +209,9 @@ export function getReflowableSourceViewportHeight(
     metrics: ReflowableViewportMetrics,
 ): number {
     if (layoutMode !== 'paginated') {
-        return metrics.clientHeight + layout.pagePaddingBlock * 2
+        return metrics.clientHeight
+            + getReflowableBlockPaddingStart(layout)
+            + getReflowableBlockPaddingEnd(layout)
     }
     return layout.columnHeight * Math.max(1, layout.columns)
 }
@@ -106,7 +242,7 @@ export function getReflowableScrollTopForSourceTop(
         const pageSourceHeight = Math.max(1, layout.columnHeight * Math.max(1, layout.columns))
         return Math.floor(safeSourceTop / pageSourceHeight) * layout.pageHeight
     }
-    return safeSourceTop + layout.pagePaddingBlock
+    return safeSourceTop + getReflowableBlockPaddingStart(layout)
 }
 
 export function getReflowableScrollTopForFraction(
@@ -224,4 +360,73 @@ export function getReflowableVisibleLineWindow(
 
 function clampFraction(fraction: number): number {
     return Number.isFinite(fraction) ? Math.max(0, Math.min(1, fraction)) : 0
+}
+
+function shouldUsePaperPageFit(
+    fit: ReflowablePageFitMode,
+    layoutMode: LayoutMode,
+    availableInlineSize: number,
+    availableBlockSize: number,
+): boolean {
+    if (layoutMode !== 'paginated') return false
+    if (fit === 'paper') return true
+    if (fit === 'viewport') return false
+    return availableInlineSize >= PAPER_AUTO_MIN_INLINE_SIZE
+        && availableBlockSize >= PAPER_AUTO_MIN_BLOCK_SIZE
+}
+
+function resolvePaperPageGeometry(options: {
+    readonly columns: number
+    readonly availableInlineSize: number
+    readonly availableBlockSize: number
+    readonly gap: number
+    readonly maxColumnWidth: number
+    readonly pagePaddingInline: number
+    readonly pagePaddingBlock: number
+    readonly usePaperPadding: boolean
+}): ReflowablePageGeometry {
+    const columns = Math.max(1, options.columns)
+    const pageAreaRatio = PAPER_PAGE_RATIO * columns
+    const maxSpreadWidth = options.maxColumnWidth * columns + options.gap * (columns - 1)
+    const inlineFraction = columns > 1 ? PAPER_SPREAD_INLINE_FRACTION : PAPER_SINGLE_INLINE_FRACTION
+    const spreadWidth = Math.max(1, Math.min(
+        maxSpreadWidth,
+        options.availableInlineSize * inlineFraction,
+        options.availableBlockSize * PAPER_BLOCK_FRACTION * pageAreaRatio + options.gap * (columns - 1),
+    ))
+    const columnWidth = Math.max(1, (spreadWidth - options.gap * (columns - 1)) / columns)
+    const pageFrameHeight = Math.min(options.availableBlockSize * PAPER_BLOCK_FRACTION, columnWidth / PAPER_PAGE_RATIO)
+    const pageFrameTop = Math.max(0, (options.availableBlockSize - pageFrameHeight) / 2)
+    const defaultInlinePadding = Math.max(0, options.pagePaddingInline)
+    const outerPadding = options.usePaperPadding
+        ? columnWidth * PAPER_PADDING_OUTER_RATIO
+        : defaultInlinePadding
+    const innerPadding = options.usePaperPadding
+        ? columnWidth * PAPER_PADDING_INNER_RATIO
+        : defaultInlinePadding
+    const singlePagePadding = (outerPadding + innerPadding) / 2
+    const pagePaddingInlineStart = columns > 1 ? outerPadding : singlePagePadding
+    const pagePaddingInlineEnd = columns > 1 ? innerPadding : singlePagePadding
+    const pagePaddingBlockStart = options.usePaperPadding
+        ? pageFrameTop + columnWidth * PAPER_PADDING_TOP_RATIO
+        : Math.max(0, options.pagePaddingBlock)
+    const pagePaddingBlockEnd = options.usePaperPadding
+        ? pageFrameTop + columnWidth * PAPER_PADDING_BOTTOM_RATIO
+        : Math.max(0, options.pagePaddingBlock)
+    const pagePaddingInline = (pagePaddingInlineStart + pagePaddingInlineEnd) / 2
+    return {
+        columns,
+        columnWidth,
+        inlineSize: Math.max(1, columnWidth - pagePaddingInlineStart - pagePaddingInlineEnd),
+        pageHeight: options.availableBlockSize,
+        pageFrameHeight,
+        pageFrameTop,
+        pagePaddingInline,
+        pagePaddingInlineStart,
+        pagePaddingInlineEnd,
+        pagePaddingBlock: pagePaddingBlockStart,
+        pagePaddingBlockStart,
+        pagePaddingBlockEnd,
+        pageFit: 'paper',
+    }
 }
