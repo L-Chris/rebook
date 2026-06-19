@@ -87,6 +87,15 @@ export type {
     LayoutMode,
     RendererFactory,
 } from './core/renderer'
+export {
+    BUILT_IN_READER_THEMES,
+    mergeRendererStyles,
+    resolveReaderTheme,
+    resolveRendererStyles,
+    type BuiltInReaderThemeName,
+    type ReaderTheme,
+    type ReaderThemeInput,
+} from './core/theme'
 
 export {
     ReaderSession,
@@ -175,6 +184,7 @@ export {
     type FixedDocumentFormat,
     type FixedPageInfo,
     type FixedPageImage,
+    type FixedPageImageAppearance,
     type FixedPageRenderIntent,
     type FixedPageRenderer,
     type FixedPageRenderOptions,
@@ -184,6 +194,9 @@ export {
     type FixedPageTextLayer,
     type FixedPageTextRun,
     type FixedPageTransform,
+    type FixedPageVisualAppearance,
+    type FixedPageVisualColorMapping,
+    type FixedPageVisualColorStrategy,
     type FixedPageViewport,
     type FixedPageViewportOptions,
 } from './core/fixed-document'
@@ -402,6 +415,11 @@ export type {
     AIChatSearchOptions,
     AIChatContent,
     AIChatContentOptions,
+    AIChatDocumentEdit,
+    AIChatDocumentEditEvent,
+    AIChatDocumentEditResult,
+    AIChatDocumentEditsController,
+    AIChatDocumentRewriteInput,
     AIChatTOCItem,
     AIChatToolContext,
 } from './plugins/ai-chat'

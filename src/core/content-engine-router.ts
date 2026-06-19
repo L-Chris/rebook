@@ -18,6 +18,7 @@ import type {
     RendererStyles,
 } from './renderer'
 import { ReaderMarkStore, RendererEventDispatcher } from './renderer-state'
+import type { ReaderThemeInput } from './theme'
 import type { Book } from './types'
 
 export type ContentEngine = Renderer
@@ -89,6 +90,11 @@ export class ContentEngineRouter<TEngine extends ContentEngine = ContentEngine> 
     setStyles(styles: RendererStyles): void {
         this.styles = styles
         this.active?.setStyles(styles)
+    }
+
+    setTheme(theme: ReaderThemeInput): void {
+        this.styles = { ...(this.styles ?? {}), theme }
+        this.active?.setTheme(theme)
     }
 
     setLayout(mode: LayoutMode): void {

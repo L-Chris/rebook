@@ -20,6 +20,7 @@ import {
 import type { FixedPageInfo } from '../../core/fixed-document'
 import type { Book, LinkEvent, LoadEvent, RelocateEvent } from '../../core/types'
 import type { EventListener, LayoutMode, ReaderMark, RendererConfig, RendererStyles } from '../../core/renderer'
+import { mergeRendererStyles, resolveRendererStyles, type ReaderThemeInput } from '../../core/theme'
 import { UnsupportedFormatError } from '../../core/errors'
 import { RendererEventDispatcher } from '../../core/renderer-state'
 import { getNextSpreadIndex, getPreviousSpreadIndex, getSpreadItems } from '../../core/spread-layout'
@@ -89,7 +90,7 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     private cancelPrewarmTask: (() => void) | null = null
 
     constructor(config: BrowserFixedRendererConfig) {
-        this.styles = config.styles ?? {}
+        this.styles = resolveRendererStyles(config.styles ?? {})
         this.layoutMode = config.layout ?? 'paginated'
         this.maxColumnCount = config.maxColumnCount ?? 1
         this.beforeNavigate = config.beforeNavigate
@@ -159,9 +160,13 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     }
 
     setStyles(styles: RendererStyles): void {
-        this.styles = { ...this.styles, ...styles }
+        this.styles = mergeRendererStyles(this.styles, styles)
         this.host.applyStyles(this.styles)
         void this.renderCurrentPage('styles', 'next')
+    }
+
+    setTheme(theme: ReaderThemeInput): void {
+        this.setStyles({ theme })
     }
 
     setLayout(mode: LayoutMode): void {

@@ -1,4 +1,5 @@
 import { PdfPageDisplayList, PdfPageText, PdfRuntime, PdfTextRun } from '../types'
+import type { FixedPageVisualAppearance } from '../../core/fixed-document'
 
 export interface PdfRenderableDocument {
   getPageDisplayList(pageIndex: number): PdfPageDisplayList | Promise<PdfPageDisplayList>
@@ -12,6 +13,7 @@ export interface PdfRenderContext {
 export interface PdfRenderPageOptions {
   pageIndex: number
   scale?: number
+  visualAppearance?: FixedPageVisualAppearance
 }
 
 export interface PdfPageRenderResult {

@@ -69,6 +69,38 @@ export interface FixedPageImage {
 
 export type FixedPageRenderIntent = 'display' | 'print' | 'thumbnail'
 
+export type FixedPageVisualColorStrategy = 'preserve' | 'force' | 'map-neutral'
+
+export interface FixedPageVisualColorMapping {
+    /**
+     * preserve: use source colors.
+     * force: replace all colors with color/foreground.
+     * map-neutral: replace near-neutral source colors while preserving saturated colors.
+     */
+    readonly strategy?: FixedPageVisualColorStrategy
+    readonly color?: string
+    readonly foreground?: string
+    readonly background?: string
+    /** Maximum RGB channel spread considered neutral, from 0 to 1. Defaults to 0.08. */
+    readonly neutralThreshold?: number
+}
+
+export interface FixedPageImageAppearance {
+    /** Preserve keeps raster images unchanged while text/vector layers can still be themed. */
+    readonly strategy?: 'preserve'
+}
+
+export interface FixedPageVisualAppearance {
+    /** Canvas/page background used before drawing page ops. */
+    readonly background?: string
+    /** Text paint mapping. */
+    readonly text?: FixedPageVisualColorMapping
+    /** Vector path and shading paint mapping. */
+    readonly vector?: FixedPageVisualColorMapping
+    /** Raster image treatment. Images are preserved by default. */
+    readonly image?: FixedPageImageAppearance
+}
+
 export interface FixedPageViewportOptions {
     readonly scale?: number
     readonly devicePixelRatio?: number
@@ -92,6 +124,7 @@ export interface FixedPageViewport {
 export interface FixedPageRenderOptions extends FixedPageViewportOptions {
     readonly intent?: FixedPageRenderIntent
     readonly textLayer?: boolean
+    readonly visualAppearance?: FixedPageVisualAppearance
 }
 
 export interface FixedPageRenderResult {

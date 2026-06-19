@@ -48,6 +48,9 @@
       "core/surface-pipeline": [
         "dist/core/surface-pipeline.d.ts"
       ],
+      "core/theme": [
+        "dist/core/theme.d.ts"
+      ],
       "renderers/browser": [
         "dist/renderers/browser/index.d.ts"
       ],
@@ -182,6 +185,10 @@
     "./core/surface-pipeline": {
       "types": "./dist/core/surface-pipeline.d.ts",
       "import": "./dist/core/surface-pipeline.js"
+    },
+    "./core/theme": {
+      "types": "./dist/core/theme.d.ts",
+      "import": "./dist/core/theme.js"
     },
     "./renderers/browser": {
       "types": "./dist/renderers/browser/index.d.ts",
@@ -336,5 +343,8 @@
     "zod": {
       "optional": true
     }
+  },
+  "dependencies": {
+    "jsonrepair": "^3.14.0"
   }
 }

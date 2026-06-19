@@ -7,6 +7,7 @@
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from '../../core/renderer'
+import { mergeRendererStyles, resolveRendererStyles, type ReaderThemeInput } from '../../core/theme'
 import { resolveReflowableLineMarks } from '../../core/mark-resolver'
 import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
 import { flattenTOC } from '../../core/toc'
@@ -205,7 +206,7 @@ export class WechatMiniProgramRenderer implements Renderer {
         }
         this.width = Math.max(1, config.width)
         this.height = Math.max(1, config.height)
-        this.styles = config.styles ?? {}
+        this.styles = resolveRendererStyles(config.styles ?? {})
         this.layoutMode = config.layout ?? 'paginated'
         this.maxColumnCount = config.maxColumnCount ?? 1
         this.overscan = config.overscan ?? 4
@@ -307,7 +308,7 @@ export class WechatMiniProgramRenderer implements Renderer {
 
     setStyles(styles: RendererStyles): void {
         const fraction = this.getSectionFraction()
-        this.styles = { ...this.styles, ...styles }
+        this.styles = mergeRendererStyles(this.styles, styles)
         if (this.currentIndex >= 0) {
             void this.loadSection(this.currentIndex).then(() => {
                 this.restoreSectionFraction(fraction)
@@ -316,6 +317,10 @@ export class WechatMiniProgramRenderer implements Renderer {
         } else {
             this.publishSnapshot()
         }
+    }
+
+    setTheme(theme: ReaderThemeInput): void {
+        this.setStyles({ theme })
     }
 
     setLayout(mode: LayoutMode): void {

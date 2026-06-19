@@ -9,7 +9,8 @@ import {
     type ToolSet,
     type UserContent,
 } from 'ai'
-import type { Book, BookMetadata, Contributor, LanguageMap, RebookPlugin, TOCItem } from '../core/types'
+import { jsonrepair } from 'jsonrepair'
+import type { Book, BookMetadata, Contributor, LanguageMap, RebookPlugin, TextBlock, TextSegment, TOCItem } from '../core/types'
 import { flattenTOC } from '../core/toc'
 import {
     clampReadableContentUnitIndex,
@@ -145,6 +146,7 @@ export interface AIChatController {
 
 export interface AIChatBook extends Book {
     aiChat: AIChatController
+    documentEdits: AIChatDocumentEditsController
 }
 
 export interface AIChatOptions {
@@ -155,18 +157,302 @@ export interface AIChatOptions {
     maxContentChars?: number | (() => number)
     maxContextChars?: number | (() => number)
     extraTools?: ToolSet | ((context: AIChatToolContext) => ToolSet)
+    onDocumentEdit?: (event: AIChatDocumentEditEvent) => void
 }
 
-const DEFAULT_MAX_TOOL_STEPS = 6
+export interface AIChatDocumentRewriteInput {
+    unitIndex?: number
+    rewrites: AIChatDocumentRewrite[]
+}
+
+export interface AIChatDocumentRewrite {
+    blockId: string
+    text: string
+}
+
+export interface AIChatDocumentEdit {
+    unitIndex: number
+    unitId: string | number
+    unitTitle?: string
+    blockId: string
+    blockType: string
+    previousText: string
+    text: string
+    updatedAt: number
+}
+
+export interface AIChatDocumentEditResult {
+    edits: AIChatDocumentEdit[]
+    version: number
+}
+
+export interface AIChatDocumentEditEvent {
+    type: 'rewrite' | 'clear'
+    unitIndexes: number[]
+    edits: AIChatDocumentEdit[]
+    version: number
+}
+
+export interface AIChatDocumentEditsController {
+    readonly version: number
+    apply(input: AIChatDocumentRewriteInput): Promise<AIChatDocumentEditResult>
+    clear(unitIndex?: number): AIChatDocumentEditResult
+    list(unitIndex?: number): AIChatDocumentEdit[]
+    subscribe(listener: (event: AIChatDocumentEditEvent) => void): () => void
+}
+
+const DEFAULT_MAX_TOOL_STEPS = 24
 const DEFAULT_MAX_SEARCH_RESULTS = 8
 const DEFAULT_MAX_CONTENT_CHARS = 6000
 const DEFAULT_MAX_CONTEXT_CHARS = 20000
+const DEFAULT_REWRITE_MAX_BLOCKS_PER_CALL = 5
 
 export function withAIChat(options: AIChatOptions): RebookPlugin {
-    return book => ({
-        ...book,
-        aiChat: createAIChatController(book, options),
+    return book => {
+        const editable = createAIChatEditableBook(book, options)
+        return {
+            ...editable,
+            aiChat: createAIChatController(editable, options),
+        }
+    }
+}
+
+function createAIChatEditableBook(book: Book, options: AIChatOptions): Book & { documentEdits: AIChatDocumentEditsController } {
+    const controller = createDocumentEditsController(book, options)
+    const wrappedSections = book.sections.map((section, sectionIndex) => {
+        if (section.format === 'image') return section
+        const originalGetBlocks = section.getBlocks?.bind(section)
+        const originalGetSegments = section.getSegments?.bind(section)
+        const originalLoadText = section.loadText?.bind(section)
+        const originalLoad = section.load.bind(section)
+        return {
+            ...section,
+            getBlocks: async () => controller.renderBlocks(sectionIndex, await loadOriginalTextBlocks(section, {
+                originalGetBlocks,
+                originalGetSegments,
+                originalLoadText,
+                originalLoad,
+            })),
+            loadText: async () => blocksToPlainText(await controller.renderBlocks(sectionIndex, await loadOriginalTextBlocks(section, {
+                originalGetBlocks,
+                originalGetSegments,
+                originalLoadText,
+                originalLoad,
+            }))),
+        }
     })
+    return {
+        ...book,
+        sections: wrappedSections,
+        documentEdits: controller.publicController,
+    }
+}
+
+function createDocumentEditsController(book: Book, options: AIChatOptions) {
+    const editsByUnit = new Map<number, Map<string, AIChatDocumentEdit>>()
+    const listeners = new Set<(event: AIChatDocumentEditEvent) => void>()
+    let version = 0
+
+    const list = (unitIndex?: number): AIChatDocumentEdit[] => {
+        if (typeof unitIndex === 'number') return [...(editsByUnit.get(unitIndex)?.values() ?? [])]
+        return [...editsByUnit.values()].flatMap(edits => [...edits.values()])
+    }
+
+    const emit = (event: Omit<AIChatDocumentEditEvent, 'version'>) => {
+        version += 1
+        const payload: AIChatDocumentEditEvent = { ...event, version }
+        options.onDocumentEdit?.(payload)
+        for (const listener of listeners) listener(payload)
+    }
+
+    const publicController: AIChatDocumentEditsController = {
+        get version() {
+            return version
+        },
+        async apply(input) {
+            const unitIndex = clampReadableContentUnitIndex(book, input.unitIndex ?? 0)
+            const unit = getReadableContentUnit(book, unitIndex)
+            if (!unit || unit.kind !== 'section') {
+                throw new Error('Document rewrite currently supports reflowable section units only.')
+            }
+            const rewrites = normalizeDocumentRewriteItems((input as { rewrites?: unknown }).rewrites)
+            if (!rewrites.length) {
+                return { edits: [], version }
+            }
+
+            const section = book.sections[unit.sectionIndex ?? unit.index]
+            if (!section) throw new Error(`Section ${unitIndex} does not exist.`)
+            const blocks = await loadOriginalTextBlocks(section)
+            const blockById = new Map(blocks.map(block => [block.id, block]))
+            const unitEdits = editsByUnit.get(unitIndex) ?? new Map<string, AIChatDocumentEdit>()
+            const applied: AIChatDocumentEdit[] = []
+
+            for (const rewrite of rewrites) {
+                const block = blockById.get(rewrite.blockId)
+                const text = normalizeRewriteText(rewrite.text)
+                if (!block || !text || !isEditableTextBlock(block)) continue
+                const edit: AIChatDocumentEdit = {
+                    unitIndex,
+                    unitId: unit.id,
+                    unitTitle: unit.title,
+                    blockId: block.id,
+                    blockType: block.type,
+                    previousText: blockToPlainText(block),
+                    text,
+                    updatedAt: Date.now(),
+                }
+                unitEdits.set(block.id, edit)
+                applied.push(edit)
+            }
+
+            if (applied.length) {
+                editsByUnit.set(unitIndex, unitEdits)
+                emit({
+                    type: 'rewrite',
+                    unitIndexes: [unitIndex],
+                    edits: applied,
+                })
+            }
+
+            return { edits: applied, version }
+        },
+        clear(unitIndex) {
+            const removed = typeof unitIndex === 'number'
+                ? [...(editsByUnit.get(unitIndex)?.values() ?? [])]
+                : list()
+            if (typeof unitIndex === 'number') editsByUnit.delete(unitIndex)
+            else editsByUnit.clear()
+            if (removed.length) {
+                emit({
+                    type: 'clear',
+                    unitIndexes: [...new Set(removed.map(edit => edit.unitIndex))],
+                    edits: removed,
+                })
+            }
+            return { edits: removed, version }
+        },
+        list,
+        subscribe(listener) {
+            listeners.add(listener)
+            return () => listeners.delete(listener)
+        },
+    }
+
+    return {
+        publicController,
+        renderBlocks(sectionIndex: number, blocks: TextBlock[]) {
+            const edits = editsByUnit.get(sectionIndex)
+            if (!edits?.size) return blocks
+            return blocks.map(block => {
+                const edit = edits.get(block.id)
+                return edit ? rewriteTextBlock(block, edit.text) : block
+            })
+        },
+    }
+}
+
+async function loadOriginalTextBlocks(section: {
+    id: string | number
+    getBlocks?: () => Promise<TextBlock[]> | TextBlock[]
+    getSegments?: () => Promise<TextSegment[]> | TextSegment[]
+    loadText?: () => Promise<string> | string
+    load: () => Promise<string> | string
+}, overrides: {
+    originalGetBlocks?: () => Promise<TextBlock[]> | TextBlock[]
+    originalGetSegments?: () => Promise<TextSegment[]> | TextSegment[]
+    originalLoadText?: () => Promise<string> | string
+    originalLoad?: () => Promise<string> | string
+} = {}): Promise<TextBlock[]> {
+    const getBlocks = overrides.originalGetBlocks ?? section.getBlocks?.bind(section)
+    if (getBlocks) return await getBlocks()
+    const getSegments = overrides.originalGetSegments ?? section.getSegments?.bind(section)
+    if (getSegments) {
+        return [{
+            id: `${section.id}-body`,
+            type: 'container',
+            segments: await getSegments(),
+        }]
+    }
+    const loadText = overrides.originalLoadText ?? section.loadText?.bind(section)
+    const load = overrides.originalLoad ?? section.load.bind(section)
+    const text = loadText ? await loadText() : await load()
+    return [{
+        id: `${section.id}-body`,
+        type: 'paragraph',
+        segments: [{ text }],
+    }]
+}
+
+function rewriteTextBlock(block: TextBlock, text: string): TextBlock {
+    const firstSegment = block.segments.find(segment => segment.text) ?? block.segments[0]
+    return {
+        ...block,
+        segments: [{
+            ...(firstSegment ?? {}),
+            text,
+            style: firstSegment?.style ?? block.style,
+            source: firstSegment?.source ?? {
+                nodeType: block.type,
+                attrs: block.attrs,
+            },
+        }],
+    }
+}
+
+function isEditableTextBlock(block: TextBlock): boolean {
+    return !block.image && !block.table && block.type !== 'image' && block.type !== 'table' && block.segments.some(segment => segment.text.trim())
+}
+
+function blockToPlainText(block: TextBlock): string {
+    return block.segments.map(segment => segment.text).join('').replace(/\s+/g, ' ').trim()
+}
+
+function blocksToPlainText(blocks: readonly TextBlock[]): string {
+    return blocks.map(blockToPlainText).filter(Boolean).join('\n')
+}
+
+function normalizeRewriteText(text: string): string {
+    return text.replace(/\s+/g, ' ').trim()
+}
+
+function normalizeDocumentRewriteItems(value: unknown): AIChatDocumentRewrite[] {
+    const parsed = parseDocumentRewriteItems(value)
+    if (!Array.isArray(parsed)) {
+        throw new Error('rewriteBlocks.rewrites must be an array of { blockId, text } items.')
+    }
+    return parsed
+        .map(normalizeDocumentRewriteItem)
+        .filter((item): item is AIChatDocumentRewrite => item !== null)
+}
+
+function parseDocumentRewriteItems(value: unknown): unknown {
+    if (Array.isArray(value)) return value
+    if (typeof value !== 'string') return value
+    const trimmed = value.trim()
+    if (!trimmed) return []
+    try {
+        return normalizeParsedDocumentRewriteItems(JSON.parse(jsonrepair(trimmed)) as unknown)
+    } catch {
+        throw new Error('rewriteBlocks.rewrites was passed as a string, but it is not valid JSON.')
+    }
+}
+
+function normalizeParsedDocumentRewriteItems(parsed: unknown): unknown {
+    if (Array.isArray(parsed)) return parsed
+    if (isRecord(parsed) && Array.isArray(parsed.rewrites)) return parsed.rewrites
+    return parsed
+}
+
+function normalizeDocumentRewriteItem(value: unknown): AIChatDocumentRewrite | null {
+    if (!isRecord(value)) return null
+    const blockId = typeof value.blockId === 'string' ? value.blockId.trim() : ''
+    const text = typeof value.text === 'string' ? value.text : value.text == null ? '' : String(value.text)
+    if (!blockId || !text.trim()) return null
+    return { blockId, text }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null
 }
 
 export function createAIChatController(book: Book, options: AIChatOptions): AIChatController {
@@ -235,6 +521,7 @@ export function createAIChatController(book: Book, options: AIChatOptions): AICh
 }
 
 export function createAIChatTools(book: Book, options: AIChatOptions, context: AIChatToolContext = {}): ToolSet {
+    const documentEdits = (book as Partial<AIChatBook>).documentEdits
     const builtInTools: ToolSet = {
         getBookMetadata: tool({
             description: '获取当前电子书的基础元数据、章节数量和目录数量。',
@@ -326,12 +613,98 @@ export function createAIChatTools(book: Book, options: AIChatOptions, context: A
                 maxChars: maxChars ?? readNumberOption(options.maxContextChars, DEFAULT_MAX_CONTEXT_CHARS),
             }),
         }),
+        rewriteBlocks: tool({
+            description: `非持久改写当前渲染文本。用于用户明确要求把某章/某段改得更通俗、精简、改写风格或替换正文时。必须先用 getContent 或 getCurrentContext 获取 blockId，再按 blockId 提交改写文本。rewrites 必须是 JSON 数组，不要把数组序列化成字符串。为降低模型生成耗时，建议每次约 ${DEFAULT_REWRITE_MAX_BLOCKS_PER_CALL} 个 block；但工具会直接应用收到的全部 rewrites，不需要为超出的 block 重新生成。`,
+            inputSchema: jsonSchema<AIChatDocumentRewriteInput>({
+                type: 'object',
+                properties: {
+                    unitIndex: { type: 'number', description: '要改写的内容单元索引；不填则使用当前内容单元。' },
+                    rewrites: {
+                        type: 'array',
+                        description: `按 blockId 替换文本。必须是数组，例如 [{"blockId":"paragraph-1","text":"..."}]，不要传字符串。不要修改 image/table block。建议每次约 ${DEFAULT_REWRITE_MAX_BLOCKS_PER_CALL} 项；如果已经生成更多项，也可以一次提交，工具会全部应用。`,
+                        items: {
+                            type: 'object',
+                            properties: {
+                                blockId: { type: 'string', description: 'getContent/getCurrentContext 返回的 blockId。' },
+                                text: { type: 'string', description: '新的完整文本，保留原意但按用户要求改写。' },
+                            },
+                            required: ['blockId', 'text'],
+                            additionalProperties: false,
+                        },
+                    },
+                },
+                required: ['rewrites'],
+                additionalProperties: false,
+            }),
+            execute: async ({ unitIndex, rewrites }) => {
+                if (!documentEdits) throw new Error('Document edits are not enabled.')
+                const result = await documentEdits.apply({
+                    unitIndex: typeof unitIndex === 'number' ? unitIndex : context.currentUnitIndex ?? 0,
+                    rewrites,
+                })
+                return compactDocumentEditToolResult(result)
+            },
+        }),
+        clearRewrites: tool({
+            description: '清除 AI 对当前渲染文本做过的非持久改写。用户要求恢复原文、撤销改写、清空改写时使用。',
+            inputSchema: jsonSchema<{ unitIndex?: number }>({
+                type: 'object',
+                properties: {
+                    unitIndex: { type: 'number', description: '要清除的内容单元索引；不填则清除全部改写。' },
+                },
+                additionalProperties: false,
+            }),
+            execute: async ({ unitIndex }) => {
+                if (!documentEdits) throw new Error('Document edits are not enabled.')
+                return compactDocumentEditToolResult(documentEdits.clear(unitIndex))
+            },
+        }),
+        listRewrites: tool({
+            description: '列出当前已有的非持久文本改写。',
+            inputSchema: jsonSchema<{ unitIndex?: number }>({
+                type: 'object',
+                properties: {
+                    unitIndex: { type: 'number', description: '内容单元索引；不填则列出全部。' },
+                },
+                additionalProperties: false,
+            }),
+            execute: async ({ unitIndex }) => {
+                if (!documentEdits) throw new Error('Document edits are not enabled.')
+                return {
+                    version: documentEdits.version,
+                    edits: documentEdits.list(unitIndex).map(compactDocumentEdit),
+                }
+            },
+        }),
     }
 
     const extraTools = typeof options.extraTools === 'function'
         ? options.extraTools(context)
         : options.extraTools
+    if (!documentEdits) {
+        delete builtInTools.rewriteBlocks
+        delete builtInTools.clearRewrites
+        delete builtInTools.listRewrites
+    }
     return extraTools ? { ...builtInTools, ...extraTools } : builtInTools
+}
+
+function compactDocumentEditToolResult(result: AIChatDocumentEditResult) {
+    return {
+        version: result.version,
+        count: result.edits.length,
+        edits: result.edits.map(compactDocumentEdit),
+    }
+}
+
+function compactDocumentEdit(edit: AIChatDocumentEdit) {
+    return {
+        unitIndex: edit.unitIndex,
+        unitTitle: edit.unitTitle,
+        blockId: edit.blockId,
+        blockType: edit.blockType,
+        chars: edit.text.length,
+    }
 }
 
 function createReadingContext(book: Book, options: Pick<AIChatAskOptions, 'current' | 'currentUnitIndex'>): AIChatReadingContext {
@@ -570,6 +943,15 @@ function buildSystemPrompt(book: Book, options: AIChatOptions, current?: AIChatR
         '- 回答必须优先基于当前电子书内容。',
         '- 涉及事实、情节、术语解释、章节总结、人物关系或章节定位时，先使用工具搜索或读取正文。',
         '- 不要编造书中没有的信息；信息不足时说明缺少上下文，并给出可继续搜索的关键词。',
+        '',
+        '# 文档改写规则',
+        '- 当用户明确要求“改写正文”“把本章/这段换成更通俗的话”“精简/润色/重写书中内容”时，应先读取相关内容单元，获取 blockId，然后调用 rewriteBlocks 修改实际渲染文本。',
+        '- rewriteBlocks 是非持久改写，只影响当前阅读器渲染和后续工具读取结果，不会写回原始电子书文件。',
+        '- 改写必须按 blockId 精确替换；不要编造 blockId，不要修改 image/table block。',
+        '- 调用 rewriteBlocks 时，rewrites 参数必须是数组对象，不要把数组 JSON.stringify 后作为字符串传入。',
+        `- 为降低生成延迟，长章节建议按约 ${DEFAULT_REWRITE_MAX_BLOCKS_PER_CALL} 个 block 一组连续调用 rewriteBlocks；如果你已经一次生成了更多 rewrites，可以直接一次提交，工具会应用全部已生成内容，不要为了“多出的 block”重新生成。`,
+        '- 改写时保留原文核心信息、术语和逻辑，只按用户要求调整表达方式。改写完成后简要说明已修改哪些内容即可，不要把整章改写结果完整贴到回答里。',
+        '- 当用户要求恢复原文、撤销改写或清空改写时，调用 clearRewrites。',
         '',
         '# 当前阅读位置规则',
         '- 用户说“本章”“当前章节”“当前页”“这里”“这一段”时，默认指当前阅读位置。',

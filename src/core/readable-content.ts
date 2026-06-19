@@ -168,8 +168,8 @@ export async function getReadableContentBlocks(book: Book, unitOrIndex: Readable
 
     if (unit.kind === 'section') {
         const section = book.sections[unit.sectionIndex ?? unit.index]
-        if (!section?.getBlocks) return []
-        return (await section.getBlocks())
+        if (!section) return []
+        return (await getSectionReadableBlocks(section))
             .map(block => ({
                 id: block.id,
                 type: block.type,
@@ -183,6 +183,23 @@ export async function getReadableContentBlocks(book: Book, unitOrIndex: Readable
     return text ? [{
         type: 'page',
         text,
+    }] : []
+}
+
+async function getSectionReadableBlocks(section: Section): Promise<TextBlock[]> {
+    if (section.getBlocks) return section.getBlocks()
+    if (section.getSegments) {
+        return [{
+            id: `${section.id}-body`,
+            type: 'container',
+            segments: await section.getSegments(),
+        }]
+    }
+    const text = await getSectionReadableText(section)
+    return text ? [{
+        id: `${section.id}-body`,
+        type: 'paragraph',
+        segments: [{ text }],
     }] : []
 }
 

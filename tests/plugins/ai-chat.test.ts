@@ -12,6 +12,10 @@ const makeBook = (): Book => {
         [
             { id: 'one-title', type: 'chapter', segments: [{ text: 'One: The Basics' }] },
             { id: 'one-body', type: 'paragraph', segments: [{ text: 'Systems thinking starts with stocks, flows, and feedback loops.' }] },
+            { id: 'one-extra-1', type: 'paragraph', segments: [{ text: 'Stocks accumulate over time.' }] },
+            { id: 'one-extra-2', type: 'paragraph', segments: [{ text: 'Flows change stocks.' }] },
+            { id: 'one-extra-3', type: 'paragraph', segments: [{ text: 'Boundaries shape what a system includes.' }] },
+            { id: 'one-extra-4', type: 'paragraph', segments: [{ text: 'Delays can make behavior surprising.' }] },
         ],
         [
             { id: 'two-title', type: 'chapter', segments: [{ text: 'Two: Examples' }] },
@@ -46,6 +50,7 @@ describe('withAIChat', () => {
         const enhanced = await withAIChat({ model })(makeBook()) as AIChatBook
 
         expect(enhanced.aiChat).toBeTruthy()
+        expect(enhanced.documentEdits).toBeTruthy()
         await expect(enhanced.aiChat.search('feedback')).resolves.toHaveLength(2)
         await expect(enhanced.aiChat.getContent(0)).resolves.toMatchObject({
             unitIndex: 0,
@@ -56,6 +61,148 @@ describe('withAIChat', () => {
             { label: 'One: The Basics', href: 'section-1.xhtml', depth: 0, unitIndex: 0, unitKind: 'section' },
             { label: 'Two: Examples', href: 'section-2.xhtml', depth: 0, unitIndex: 1, unitKind: 'section' },
         ])
+    })
+
+    it('applies non-persistent document rewrites to rendered content', async () => {
+        const events: unknown[] = []
+        const enhanced = await withAIChat({
+            model,
+            onDocumentEdit: event => events.push(event),
+        })(makeBook()) as AIChatBook
+
+        const tools = enhanced.aiChat.createTools({ currentUnitIndex: 0 })
+        expect(Object.keys(tools)).toEqual(expect.arrayContaining(['rewriteBlocks', 'clearRewrites', 'listRewrites']))
+
+        const rewrite = await tools.rewriteBlocks.execute?.({
+            rewrites: [{
+                blockId: 'one-body',
+                text: '系统思考可以先理解为：看清存量、流量和反馈回路怎样互相影响。',
+            }],
+        }, {
+            toolCallId: 'rewrite-1',
+            messages: [],
+            abortSignal: new AbortController().signal,
+        })
+        expect(rewrite.edits).toHaveLength(1)
+        expect(events).toHaveLength(1)
+
+        await expect(enhanced.aiChat.getContent(0, { includeBlocks: true })).resolves.toMatchObject({
+            text: expect.stringContaining('系统思考可以先理解为'),
+            blocks: expect.arrayContaining([
+                expect.objectContaining({
+                    blockId: 'one-body',
+                    text: '系统思考可以先理解为：看清存量、流量和反馈回路怎样互相影响。',
+                }),
+            ]),
+        })
+        await expect(enhanced.sections[0].getBlocks?.()).resolves.toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                id: 'one-body',
+                segments: [expect.objectContaining({ text: expect.stringContaining('系统思考可以先理解为') })],
+            }),
+        ]))
+
+        const clear = await tools.clearRewrites.execute?.({ unitIndex: 0 }, {
+            toolCallId: 'clear-1',
+            messages: [],
+            abortSignal: new AbortController().signal,
+        })
+        expect(clear.edits).toHaveLength(1)
+        await expect(enhanced.aiChat.getContent(0, { includeBlocks: true })).resolves.toMatchObject({
+            text: expect.stringContaining('Systems thinking starts'),
+        })
+    })
+
+    it('accepts stringified rewrite arrays from lenient tool callers', async () => {
+        const enhanced = await withAIChat({ model })(makeBook()) as AIChatBook
+        const tools = enhanced.aiChat.createTools({ currentUnitIndex: 0 })
+
+        const result = await tools.rewriteBlocks.execute?.({
+            unitIndex: 0,
+            rewrites: JSON.stringify([{
+                blockId: 'one-body',
+                text: '系统思考从存量、流量和反馈回路开始理解。',
+            }]),
+        } as any, {
+            toolCallId: 'rewrite-stringified',
+            messages: [],
+            abortSignal: new AbortController().signal,
+        })
+
+        expect(result).toMatchObject({
+            count: 1,
+            edits: [expect.objectContaining({ blockId: 'one-body' })],
+        })
+        await expect(enhanced.aiChat.getContent(0, { includeBlocks: true })).resolves.toMatchObject({
+            text: expect.stringContaining('系统思考从存量'),
+        })
+    })
+
+    it('repairs stringified rewrite arrays with unescaped quotes in text', async () => {
+        const enhanced = await withAIChat({ model })(makeBook()) as AIChatBook
+        const tools = enhanced.aiChat.createTools({ currentUnitIndex: 0 })
+
+        const result = await tools.rewriteBlocks.execute?.({
+            unitIndex: 0,
+            rewrites: '[{"blockId":"one-body","text":"1993年，本书作者多内拉（大家叫她"达娜"）写完了初稿。"},{"blockId":"one-extra-1","text":"市面上讲"系统思维"的书不少。"}]',
+        } as any, {
+            toolCallId: 'rewrite-loose-json',
+            messages: [],
+            abortSignal: new AbortController().signal,
+        })
+
+        expect(result).toMatchObject({
+            count: 2,
+            edits: expect.arrayContaining([
+                expect.objectContaining({ blockId: 'one-body' }),
+                expect.objectContaining({ blockId: 'one-extra-1' }),
+            ]),
+        })
+        await expect(enhanced.aiChat.getContent(0, { includeBlocks: true })).resolves.toMatchObject({
+            text: expect.stringContaining('大家叫她"达娜"'),
+            blocks: expect.arrayContaining([
+                expect.objectContaining({ blockId: 'one-extra-1', text: '市面上讲"系统思维"的书不少。' }),
+            ]),
+        })
+    })
+
+    it('applies oversized rewrite batches without requiring regeneration', async () => {
+        const enhanced = await withAIChat({ model })(makeBook()) as AIChatBook
+        const tools = enhanced.aiChat.createTools({ currentUnitIndex: 0 })
+
+        const result = await tools.rewriteBlocks.execute?.({
+            unitIndex: 0,
+            rewrites: [
+                { blockId: 'one-title', text: '标题' },
+                { blockId: 'one-body', text: '正文' },
+                { blockId: 'one-extra-1', text: '额外一' },
+                { blockId: 'one-extra-2', text: '额外二' },
+                { blockId: 'one-extra-3', text: '额外三' },
+                { blockId: 'one-extra-4', text: '额外四' },
+            ],
+        }, {
+            toolCallId: 'rewrite-too-large',
+            messages: [],
+            abortSignal: new AbortController().signal,
+        })
+
+        expect(result).toMatchObject({
+            count: 6,
+            edits: expect.arrayContaining([
+                expect.objectContaining({ blockId: 'one-title' }),
+                expect.objectContaining({ blockId: 'one-body' }),
+                expect.objectContaining({ blockId: 'one-extra-4' }),
+            ]),
+        })
+        expect(result).not.toHaveProperty('hasMore')
+        expect(result).not.toHaveProperty('skippedBlockIds')
+        await expect(enhanced.aiChat.getContent(0, { includeBlocks: true })).resolves.toMatchObject({
+            text: expect.stringContaining('标题'),
+            blocks: expect.arrayContaining([
+                expect.objectContaining({ blockId: 'one-body', text: '正文' }),
+                expect.objectContaining({ blockId: 'one-extra-4', text: '额外四' }),
+            ]),
+        })
     })
 
     it('reads and searches fixed-document page text through content units', async () => {

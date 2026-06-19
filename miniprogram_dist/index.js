@@ -20793,6 +20793,78 @@ class MOBIParser {
   }
 }
 const mobi = () => new MOBIParser();
+const BUILT_IN_READER_THEMES = {
+  normal: {
+    id: "normal",
+    label: "Normal",
+    color: "#111827",
+    background: "#ffffff",
+    pageBackground: "#ffffff",
+    pageShadow: "0 1px 4px rgba(0, 0, 0, 0.18)",
+    accentColor: "#2563eb",
+    selectionBackground: "rgba(37, 99, 235, 0.22)",
+    selectionColor: "#111827"
+  },
+  night: {
+    id: "night",
+    label: "Night",
+    color: "#e5e7eb",
+    background: "#0f172a",
+    pageBackground: "#111827",
+    pageShadow: "0 1px 8px rgba(0, 0, 0, 0.45)",
+    fixedPageVisualAppearance: {
+      background: "#111827",
+      text: {
+        strategy: "force",
+        color: "#e5e7eb"
+      },
+      vector: {
+        strategy: "map-neutral",
+        foreground: "#e5e7eb",
+        background: "#111827"
+      },
+      image: { strategy: "preserve" }
+    },
+    accentColor: "#60a5fa",
+    selectionBackground: "rgba(96, 165, 250, 0.32)",
+    selectionColor: "#f8fafc"
+  }
+};
+function resolveReaderTheme(theme) {
+  var _a2;
+  if (!theme) return null;
+  if (typeof theme === "string") return (_a2 = BUILT_IN_READER_THEMES[theme]) != null ? _a2 : null;
+  return theme;
+}
+function resolveRendererStyles(styles = {}) {
+  var _a2, _b2, _c, _d, _e, _f, _g;
+  const theme = resolveReaderTheme(styles.theme);
+  if (!theme) return styles;
+  return {
+    ...styles,
+    color: (_a2 = styles.color) != null ? _a2 : theme.color,
+    background: (_b2 = styles.background) != null ? _b2 : theme.background,
+    pageBackground: (_c = styles.pageBackground) != null ? _c : theme.pageBackground,
+    pageShadow: (_d = styles.pageShadow) != null ? _d : theme.pageShadow,
+    fixedPageVisualAppearance: (_e = styles.fixedPageVisualAppearance) != null ? _e : theme.fixedPageVisualAppearance,
+    selectionBackground: (_f = styles.selectionBackground) != null ? _f : theme.selectionBackground,
+    selectionColor: (_g = styles.selectionColor) != null ? _g : theme.selectionColor,
+    css: [theme.css, styles.css].filter(Boolean).join("\n") || void 0
+  };
+}
+function mergeRendererStyles(current, patch) {
+  const next = { ...current, ...patch };
+  if (patch.theme !== void 0) {
+    if (patch.color === void 0) delete next.color;
+    if (patch.background === void 0) delete next.background;
+    if (patch.pageBackground === void 0) delete next.pageBackground;
+    if (patch.pageShadow === void 0) delete next.pageShadow;
+    if (patch.fixedPageVisualAppearance === void 0) delete next.fixedPageVisualAppearance;
+    if (patch.selectionBackground === void 0) delete next.selectionBackground;
+    if (patch.selectionColor === void 0) delete next.selectionColor;
+  }
+  return resolveRendererStyles(next);
+}
 function isBookRange(value2) {
   return typeof value2 === "object" && value2 !== null && "start" in value2;
 }
@@ -21196,7 +21268,7 @@ class WechatMiniProgramRenderer {
     }
     this.width = Math.max(1, config.width);
     this.height = Math.max(1, config.height);
-    this.styles = (_a2 = config.styles) != null ? _a2 : {};
+    this.styles = resolveRendererStyles((_a2 = config.styles) != null ? _a2 : {});
     this.layoutMode = (_b2 = config.layout) != null ? _b2 : "paginated";
     this.maxColumnCount = (_c = config.maxColumnCount) != null ? _c : 1;
     this.overscan = (_d = config.overscan) != null ? _d : 4;
@@ -21289,7 +21361,7 @@ class WechatMiniProgramRenderer {
   }
   setStyles(styles) {
     const fraction = this.getSectionFraction();
-    this.styles = { ...this.styles, ...styles };
+    this.styles = mergeRendererStyles(this.styles, styles);
     if (this.currentIndex >= 0) {
       void this.loadSection(this.currentIndex).then(() => {
         this.restoreSectionFraction(fraction);
@@ -21298,6 +21370,9 @@ class WechatMiniProgramRenderer {
     } else {
       this.publishSnapshot();
     }
+  }
+  setTheme(theme) {
+    this.setStyles({ theme });
   }
   setLayout(mode) {
     if (this.layoutMode === mode) return;
@@ -21899,61 +21974,241 @@ async function applyRebookPlugins(book, plugins) {
   }
   return current;
 }
-async function searchBook(book, query, options = {}) {
+function getReadableContentUnits(book) {
+  var _a2;
+  if (book.sections.length > 0) {
+    return book.sections.map((section, sectionIndex) => {
+      const tocItem = findTOCItemForSection(book, sectionIndex, section);
+      return {
+        index: sectionIndex,
+        id: section.id,
+        kind: "section",
+        title: tocItem == null ? void 0 : tocItem.label,
+        href: tocItem == null ? void 0 : tocItem.href,
+        sectionIndex,
+        size: section.size,
+        linear: section.linear,
+        format: section.format
+      };
+    });
+  }
+  const fixedDocument = book.fixedDocument;
+  if (!fixedDocument) return [];
+  const pageTitles = getFixedPageTitles(book);
+  const pageList = (_a2 = book.pageList) != null ? _a2 : [];
+  return Array.from({ length: fixedDocument.pageCount }, (_, pageIndex) => {
+    var _a3, _b2, _c;
+    const pageItem = pageList[pageIndex];
+    const href = (_a3 = pageItem == null ? void 0 : pageItem.href) != null ? _a3 : `${fixedDocument.format}:page:${pageIndex}`;
+    return {
+      index: pageIndex,
+      id: href,
+      kind: "page",
+      title: (_c = (_b2 = pageTitles.get(pageIndex)) != null ? _b2 : pageItem == null ? void 0 : pageItem.label) != null ? _c : `Page ${pageIndex + 1}`,
+      href,
+      pageIndex,
+      format: fixedDocument.format
+    };
+  });
+}
+function getReadableContentUnitCount(book) {
   var _a2, _b2;
+  if (book.sections.length > 0) return book.sections.length;
+  return (_b2 = (_a2 = book.fixedDocument) == null ? void 0 : _a2.pageCount) != null ? _b2 : 0;
+}
+function clampReadableContentUnitIndex(book, index) {
+  const count = getReadableContentUnitCount(book);
+  if (count <= 0) return 0;
+  return Math.min(count - 1, Math.max(0, Math.floor(index)));
+}
+function getReadableContentUnit(book, index) {
+  return getReadableContentUnits(book)[clampReadableContentUnitIndex(book, index)];
+}
+async function getReadableContent(book, unitIndex, options = {}) {
+  const unit = getReadableContentUnit(book, unitIndex);
+  if (!unit) {
+    return {
+      unit: {
+        index: 0,
+        id: 0,
+        kind: "section"
+      },
+      text: "",
+      charCount: 0,
+      blocks: options.includeBlocks ? [] : void 0
+    };
+  }
+  if (options.includeBlocks) {
+    const blocks = await getReadableContentBlocks(book, unit);
+    const text2 = blocks.map((block) => block.text).filter(Boolean).join("\n");
+    return {
+      unit,
+      text: text2,
+      blocks,
+      charCount: text2.length
+    };
+  }
+  const text = await getReadableContentText(book, unit);
+  return {
+    unit,
+    text,
+    charCount: text.length
+  };
+}
+async function getReadableContentText(book, unitOrIndex) {
+  var _a2, _b2, _c, _d, _e, _f;
+  const unit = typeof unitOrIndex === "number" ? getReadableContentUnit(book, unitOrIndex) : unitOrIndex;
+  if (!unit) return "";
+  if (unit.kind === "section") {
+    const section = book.sections[(_a2 = unit.sectionIndex) != null ? _a2 : unit.index];
+    return section ? getSectionReadableText(section) : "";
+  }
+  const pageIndex = (_b2 = unit.pageIndex) != null ? _b2 : unit.index;
+  const layer2 = await ((_d = (_c = book.fixedDocument) == null ? void 0 : _c.getPageText) == null ? void 0 : _d.call(_c, pageIndex));
+  return normalizeReadableText((_f = (_e = layer2 == null ? void 0 : layer2.text) != null ? _e : layer2 == null ? void 0 : layer2.runs.map((run) => run.text).join("")) != null ? _f : "");
+}
+async function getReadableContentBlocks(book, unitOrIndex) {
+  var _a2;
+  const unit = typeof unitOrIndex === "number" ? getReadableContentUnit(book, unitOrIndex) : unitOrIndex;
+  if (!unit) return [];
+  if (unit.kind === "section") {
+    const section = book.sections[(_a2 = unit.sectionIndex) != null ? _a2 : unit.index];
+    if (!section) return [];
+    return (await getSectionReadableBlocks(section)).map((block) => ({
+      id: block.id,
+      type: block.type,
+      text: textBlockToReadableText(block),
+      sourceBlock: block
+    })).filter((block) => block.text);
+  }
+  const text = await getReadableContentText(book, unit);
+  return text ? [{
+    type: "page",
+    text
+  }] : [];
+}
+async function getSectionReadableBlocks(section) {
+  if (section.getBlocks) return section.getBlocks();
+  if (section.getSegments) {
+    return [{
+      id: `${section.id}-body`,
+      type: "container",
+      segments: await section.getSegments()
+    }];
+  }
+  const text = await getSectionReadableText(section);
+  return text ? [{
+    id: `${section.id}-body`,
+    type: "paragraph",
+    segments: [{ text }]
+  }] : [];
+}
+async function getSectionReadableText(section) {
+  if (section.getBlocks) return blocksToReadableText(await section.getBlocks());
+  if (section.getSegments) return segmentsToReadableText(await section.getSegments());
+  if (section.getDocument) {
+    const document2 = await section.getDocument();
+    if (document2) return normalizeReadableText(document2.getText());
+  }
+  if (section.loadText) return normalizeReadableText(await section.loadText());
+  if (section.format === "image") return "";
+  return htmlToReadableText(await section.load());
+}
+function getFixedPageTitles(book) {
+  var _a2;
+  const titles = /* @__PURE__ */ new Map();
+  for (const item of flattenTOC((_a2 = book.toc) != null ? _a2 : [])) {
+    const pageIndex = resolveFixedPageIndex(book, item.href);
+    if (typeof pageIndex === "number" && !titles.has(pageIndex)) {
+      titles.set(pageIndex, item.label);
+    }
+  }
+  return titles;
+}
+function resolveFixedPageIndex(book, href) {
+  var _a2, _b2, _c, _d, _e, _f, _g;
+  const pageCount = (_b2 = (_a2 = book.fixedDocument) == null ? void 0 : _a2.pageCount) != null ? _b2 : 0;
+  const resolved = (_c = book.resolveHref) == null ? void 0 : _c.call(book, href);
+  if (typeof (resolved == null ? void 0 : resolved.index) === "number" && resolved.index >= 0 && resolved.index < pageCount) {
+    return resolved.index;
+  }
+  const [id] = (_e = (_d = book.splitTOCHref) == null ? void 0 : _d.call(book, href)) != null ? _e : [href];
+  if (typeof id === "number" && id >= 0 && id < pageCount) return id;
+  const pageListIndex = (_g = (_f = book.pageList) == null ? void 0 : _f.findIndex((item) => item.href === href)) != null ? _g : -1;
+  if (pageListIndex >= 0) return pageListIndex;
+  return void 0;
+}
+function blocksToReadableText(blocks) {
+  return normalizeReadableText(blocks.map(textBlockToReadableText).filter(Boolean).join("\n"));
+}
+function textBlockToReadableText(block) {
+  var _a2, _b2, _c, _d, _e, _f;
+  if (block.type === "image") return normalizeReadableText((_d = (_c = (_a2 = block.image) == null ? void 0 : _a2.alt) != null ? _c : (_b2 = block.image) == null ? void 0 : _b2.title) != null ? _d : "");
+  if (block.type === "table") return normalizeReadableText((_f = (_e = block.table) == null ? void 0 : _e.rows.flatMap((row) => row.cells.map((cell) => cell.text)).join(" ")) != null ? _f : "");
+  return segmentsToReadableText(block.segments);
+}
+function segmentsToReadableText(segments) {
+  return normalizeReadableText(segments.filter((segment) => {
+    var _a2;
+    return ((_a2 = segment.source) == null ? void 0 : _a2.nodeType) !== "img";
+  }).map((segment) => segment.text).join(""));
+}
+function htmlToReadableText(html) {
+  return normalizeReadableText(html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
+}
+function normalizeReadableText(value2) {
+  return value2.replace(/\s+/g, " ").trim();
+}
+async function searchBook(book, query, options = {}) {
+  var _a2, _b2, _c;
   const normalizedQuery = options.caseSensitive ? query : query.toLocaleLowerCase();
   if (!normalizedQuery) return [];
   const maxResults = Math.max(0, Math.floor((_a2 = options.maxResults) != null ? _a2 : 100));
   if (maxResults === 0) return [];
-  const sections = await getSearchableSections(book, options);
+  const units2 = await getSearchableUnits(book, options);
   const results = [];
-  for (const item of sections) {
+  const matchIndexes = /* @__PURE__ */ new Map();
+  for (const item of units2) {
     const haystack = options.caseSensitive ? item.text : item.text.toLocaleLowerCase();
     let fromIndex = 0;
-    let matchIndex = 0;
     while (results.length < maxResults) {
       const index = haystack.indexOf(normalizedQuery, fromIndex);
       if (index < 0) break;
       const end = index + query.length;
       fromIndex = Math.max(index + 1, end);
       if (options.wholeWord && !isWholeWordMatch(item.text, index, end)) continue;
-      results.push(createSearchResult(item, query, index, end, matchIndex++, (_b2 = options.contextChars) != null ? _b2 : 48));
+      const matchIndex = (_b2 = matchIndexes.get(item.unit.index)) != null ? _b2 : 0;
+      matchIndexes.set(item.unit.index, matchIndex + 1);
+      results.push(createSearchResult(item, query, index, end, matchIndex, (_c = options.contextChars) != null ? _c : 48));
     }
     if (results.length >= maxResults) break;
   }
   return results;
 }
-async function searchChapters(book, query, options = {}) {
+async function searchContentUnits(book, query, options = {}) {
   const groups = [];
-  for (let sectionIndex = 0; sectionIndex < book.sections.length; sectionIndex++) {
+  const units2 = getReadableContentUnits(book);
+  for (const unit of units2) {
     const results = await searchBook(book, query, {
       ...options,
-      scope: "chapter",
-      chapterIndex: sectionIndex
+      scope: "unit",
+      unitIndex: unit.index
     });
     if (!results.length) continue;
-    const section = book.sections[sectionIndex];
     groups.push({
-      sectionIndex,
-      sectionId: section.id,
-      chapterLabel: getChapterLabel(book, sectionIndex, section),
+      unitIndex: unit.index,
+      unitId: unit.id,
+      unitKind: unit.kind,
+      unitTitle: unit.title,
+      sectionIndex: unit.sectionIndex,
+      pageIndex: unit.pageIndex,
       results
     });
   }
   return groups;
 }
-async function getSectionSearchText(section) {
-  if (section.getBlocks) return blocksToText(await section.getBlocks());
-  if (section.getSegments) return segmentsToText(await section.getSegments());
-  if (section.getDocument) {
-    const document2 = await section.getDocument();
-    if (document2) return normalizeSearchText(document2.getText());
-  }
-  if (section.loadText) return normalizeSearchText(await section.loadText());
-  if (section.format === "image") return "";
-  return htmlToText(await section.load());
-}
 function createSearchResult(item, query, start, end, matchIndex, contextChars) {
+  var _a2, _b2;
   const contextStart = Math.max(0, start - Math.max(0, contextChars));
   const contextEnd = Math.min(item.text.length, end + Math.max(0, contextChars));
   const before = item.text.slice(contextStart, start);
@@ -21961,9 +22216,14 @@ function createSearchResult(item, query, start, end, matchIndex, contextChars) {
   const after = item.text.slice(end, contextEnd);
   return {
     query,
-    sectionIndex: item.sectionIndex,
-    sectionId: item.section.id,
-    chapterLabel: item.chapterLabel,
+    unitIndex: item.unit.index,
+    unitId: item.unit.id,
+    unitKind: item.unit.kind,
+    unitTitle: item.unit.title,
+    sectionIndex: item.unit.sectionIndex,
+    pageIndex: item.unit.pageIndex,
+    blockId: (_a2 = item.block) == null ? void 0 : _a2.id,
+    blockType: (_b2 = item.block) == null ? void 0 : _b2.type,
     matchIndex,
     start,
     end,
@@ -21973,50 +22233,30 @@ function createSearchResult(item, query, start, end, matchIndex, contextChars) {
     excerpt: `${contextStart > 0 ? "..." : ""}${before}${match}${after}${contextEnd < item.text.length ? "..." : ""}`
   };
 }
-async function getSearchableSections(book, options) {
-  const indexes = getSectionIndexes(book, options);
-  return Promise.all(indexes.map(async (sectionIndex) => {
-    const section = book.sections[sectionIndex];
-    return {
-      sectionIndex,
-      section,
-      chapterLabel: getChapterLabel(book, sectionIndex, section),
-      text: await getSectionSearchText(section)
-    };
-  }));
-}
-function getSectionIndexes(book, options) {
+async function getSearchableUnits(book, options) {
   var _a2;
-  if (options.sectionIndexes) return uniqueValidIndexes(book, options.sectionIndexes);
-  if (options.scope === "chapter") return uniqueValidIndexes(book, [(_a2 = options.chapterIndex) != null ? _a2 : 0]);
-  return book.sections.map((_, index) => index);
+  const units2 = getSearchUnits(book, options);
+  const chunks = [];
+  for (const unit of units2) {
+    const content = await getReadableContent(book, unit.index, { includeBlocks: true });
+    if ((_a2 = content.blocks) == null ? void 0 : _a2.length) {
+      chunks.push(...content.blocks.map((block) => ({ unit, block, text: block.text })));
+      continue;
+    }
+    chunks.push({ unit, text: await getReadableContentText(book, unit) });
+  }
+  return chunks;
 }
-function uniqueValidIndexes(book, indexes) {
-  return [...new Set(indexes)].map((index) => Math.floor(index)).filter((index) => index >= 0 && index < book.sections.length);
+function getSearchUnits(book, options) {
+  var _a2;
+  const units2 = getReadableContentUnits(book);
+  if (options.unitIndexes) return uniqueValidUnits(units2, options.unitIndexes);
+  if (options.scope === "unit") return uniqueValidUnits(units2, [(_a2 = options.unitIndex) != null ? _a2 : 0]);
+  return units2;
 }
-function getChapterLabel(book, sectionIndex, section) {
-  const tocItem = findTOCItemForSection(book, sectionIndex, section);
-  return tocItem == null ? void 0 : tocItem.label;
-}
-function blocksToText(blocks) {
-  return normalizeSearchText(blocks.map((block) => {
-    var _a2, _b2, _c, _d, _e, _f;
-    if (block.type === "image") return (_d = (_c = (_a2 = block.image) == null ? void 0 : _a2.alt) != null ? _c : (_b2 = block.image) == null ? void 0 : _b2.title) != null ? _d : "";
-    if (block.type === "table") return (_f = (_e = block.table) == null ? void 0 : _e.rows.flatMap((row) => row.cells.map((cell) => cell.text)).join(" ")) != null ? _f : "";
-    return segmentsToText(block.segments);
-  }).filter(Boolean).join("\n"));
-}
-function segmentsToText(segments) {
-  return normalizeSearchText(segments.filter((segment) => {
-    var _a2;
-    return ((_a2 = segment.source) == null ? void 0 : _a2.nodeType) !== "img";
-  }).map((segment) => segment.text).join(""));
-}
-function htmlToText(html) {
-  return normalizeSearchText(html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
-}
-function normalizeSearchText(value2) {
-  return value2.replace(/\s+/g, " ").trim();
+function uniqueValidUnits(units2, indexes) {
+  const byIndex = new Map(units2.map((unit) => [unit.index, unit]));
+  return [...new Set(indexes)].map((index) => Math.floor(index)).map((index) => byIndex.get(index)).filter((unit) => Boolean(unit));
 }
 function isWholeWordMatch(text, start, end) {
   return !isWordCharacter(text[start - 1]) && !isWordCharacter(text[end]);
@@ -22085,11 +22325,11 @@ class ReaderSession {
     return searchBook(this.book, query, options);
   }
   /**
-   * Search the current book and group matches by chapter.
+   * Search the current book and group matches by readable content unit.
    */
-  async searchChapters(query, options = {}) {
+  async searchContentUnits(query, options = {}) {
     if (!this.book) return [];
-    return searchChapters(this.book, query, options);
+    return searchContentUnits(this.book, query, options);
   }
   /**
    * Get the current book's trial policy controller, if installed.
@@ -22303,6 +22543,12 @@ class ReaderSession {
    */
   setStyles(styles) {
     this.renderer.setStyles(styles);
+  }
+  /**
+   * Switch reader theme.
+   */
+  setTheme(theme) {
+    this.renderer.setTheme(theme);
   }
   /**
    * Set layout mode.

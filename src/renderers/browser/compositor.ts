@@ -1,4 +1,6 @@
 import type { PageCompositor, PageSurface, PageSurfaceLayer } from '../../core/page-surface'
+import type { RendererStyles } from '../../core/renderer'
+import { resolveRendererStyles } from '../../core/theme'
 
 export interface BrowserPageSurfaceLayer extends PageSurfaceLayer<HTMLElement> {}
 
@@ -27,14 +29,28 @@ const DEFAULT_PAGE_SHADOW = '0 1px 4px rgba(0, 0, 0, 0.18)'
 export class BrowserPageCompositor implements PageCompositor<BrowserPageSurface, undefined, BrowserPageComposeResult> {
     readonly id = 'browser-page-compositor'
     private readonly host: HTMLElement
-    private readonly pageBackground: string
-    private readonly pageShadow: string
+    private readonly defaultPageBackground: string
+    private readonly defaultPageShadow: string
+    private pageBackground: string
+    private pageShadow: string
     private currentSurface: BrowserPageSurface | null = null
+    private currentFrame: HTMLElement | null = null
 
     constructor(config: BrowserPageCompositorConfig) {
         this.host = config.host
-        this.pageBackground = config.pageBackground ?? DEFAULT_PAGE_BACKGROUND
-        this.pageShadow = config.pageShadow ?? DEFAULT_PAGE_SHADOW
+        this.defaultPageBackground = config.pageBackground ?? DEFAULT_PAGE_BACKGROUND
+        this.defaultPageShadow = config.pageShadow ?? DEFAULT_PAGE_SHADOW
+        this.pageBackground = this.defaultPageBackground
+        this.pageShadow = this.defaultPageShadow
+    }
+
+    applyStyles(styles: RendererStyles): void {
+        const resolved = resolveRendererStyles(styles)
+        this.pageBackground = resolved.pageBackground ?? this.defaultPageBackground
+        this.pageShadow = resolved.pageShadow ?? this.defaultPageShadow
+        if (this.currentSurface && this.currentFrame) {
+            this.applyFrameStyles(this.currentFrame, this.currentSurface)
+        }
     }
 
     compose(surface: BrowserPageSurface): BrowserPageComposeResult {
@@ -49,13 +65,12 @@ export class BrowserPageCompositor implements PageCompositor<BrowserPageSurface,
         if (surface.pageIndex !== undefined) {
             frame.dataset.pageIndex = String(surface.pageIndex)
         }
-        const pageLike = surface.kind === 'fixed-page' || surface.kind === 'image-page'
         frame.style.cssText = `
             position: relative;
             width: ${surface.width * surface.scale}px;
             height: ${surface.height * surface.scale}px;
-            background: ${pageLike ? this.pageBackground : 'transparent'};
-            box-shadow: ${pageLike ? this.pageShadow : 'none'};
+            background: transparent;
+            box-shadow: none;
             overflow: hidden;
             flex: 0 0 auto;
         `
@@ -68,17 +83,30 @@ export class BrowserPageCompositor implements PageCompositor<BrowserPageSurface,
 
         this.host.replaceChildren(frame)
         this.currentSurface = surface
+        this.currentFrame = frame
+        this.applyFrameStyles(frame, surface)
         return { frame, surface }
     }
 
     clear(): void {
         this.currentSurface?.destroy?.()
         this.currentSurface = null
+        this.currentFrame = null
         this.host.replaceChildren()
     }
 
     destroy(): void {
         this.clear()
+    }
+
+    private applyFrameStyles(frame: HTMLElement, surface: BrowserPageSurface): void {
+        const pageLike = surface.kind === 'fixed-page' || surface.kind === 'image-page'
+        frame.style.background = pageLike ? this.pageBackground : 'transparent'
+        frame.style.boxShadow = pageLike ? this.pageShadow : 'none'
+        for (const pageFrame of frame.querySelectorAll<HTMLElement>('[data-rebook-spread-page="true"]')) {
+            pageFrame.style.background = this.pageBackground
+            pageFrame.style.boxShadow = this.pageShadow
+        }
     }
 }
 

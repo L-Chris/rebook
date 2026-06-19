@@ -7,6 +7,8 @@
 
 import type { Book, RelocateEvent, LoadEvent } from './types'
 import type { BookPosition } from './location'
+import type { FixedPageVisualAppearance } from './fixed-document'
+import type { ReaderThemeInput } from './theme'
 import type { PageSurface } from './page-surface'
 
 /**
@@ -25,12 +27,22 @@ export interface RendererStyles {
     hyphenate?: boolean
     /** Custom CSS to inject */
     css?: string
-    /** Theme: light, dark, or custom */
-    theme?: 'light' | 'dark' | 'sepia'
+    /** Theme preset name or custom theme. */
+    theme?: ReaderThemeInput
     /** Text color */
     color?: string
     /** Background color */
     background?: string
+    /** Page-like surface background */
+    pageBackground?: string
+    /** Page-like surface shadow */
+    pageShadow?: string
+    /** Visual appearance applied by fixed-page renderers that support direct theming. */
+    fixedPageVisualAppearance?: FixedPageVisualAppearance
+    /** Selection background color for renderers that support it. */
+    selectionBackground?: string
+    /** Selection text color for renderers that support it. */
+    selectionColor?: string
     /** Column gap (for paginated mode) */
     gap?: string | number
     /** Maximum column width (for paginated mode) */
@@ -119,6 +131,11 @@ export interface Renderer {
      * Update rendering styles.
      */
     setStyles(styles: RendererStyles): void
+
+    /**
+     * Switch reader theme.
+     */
+    setTheme(theme: ReaderThemeInput): void
 
     /**
      * Set the layout mode.

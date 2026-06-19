@@ -11,6 +11,7 @@ import type { ParserInput, ParserOptions } from './parser'
 import type { BookRange, TextChunk, TextProvider, TextSearchResult } from './location'
 import type { PageSurface } from './page-surface'
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from './renderer'
+import type { ReaderThemeInput } from './theme'
 import type { TrialLimitController, TrialTOCAccessItem } from '../plugins/trial-limit'
 import { registry } from './parser'
 import { applyRebookPlugins } from './plugins'
@@ -378,6 +379,13 @@ export class ReaderSession {
      */
     setStyles(styles: RendererStyles): void {
         this.renderer.setStyles(styles)
+    }
+
+    /**
+     * Switch reader theme.
+     */
+    setTheme(theme: ReaderThemeInput): void {
+        this.renderer.setTheme(theme)
     }
 
     /**

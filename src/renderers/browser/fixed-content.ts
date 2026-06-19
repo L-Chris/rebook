@@ -167,6 +167,8 @@ export class BrowserFixedContentRenderer implements ContentRenderer<BrowserFixed
         layer.style.userSelect = 'text'
         renderTextLayer(layer, text, {
             color: visualRendered ? 'transparent' : styles.color ?? DEFAULT_TEXT_COLOR,
+            selectionBackground: styles.selectionBackground,
+            selectionColor: styles.selectionColor ?? styles.color ?? DEFAULT_TEXT_COLOR,
             fontFamily: styles.fontFamily,
             measureTextWidth: this.measureTextWidth,
             measureFontAscentRatio: this.measureFontAscentRatio,
@@ -215,6 +217,8 @@ interface BrowserFixedRenderedContent {
 
 interface TextLayerRenderOptions {
     color: string
+    selectionBackground?: string
+    selectionColor?: string
     fontFamily?: string | number
     measureTextWidth?: ReturnType<typeof createCanvasTextMeasurer>
     measureFontAscentRatio?: ReturnType<typeof createCanvasFontAscentRatioMeasurer>
@@ -222,6 +226,16 @@ interface TextLayerRenderOptions {
 
 function renderTextLayer(target: HTMLElement, layer: FixedPageTextLayer, options: TextLayerRenderOptions): void {
     target.replaceChildren()
+    target.style.setProperty('--rebook-fixed-selection-background', options.selectionBackground ?? 'rgba(37, 99, 235, 0.22)')
+    target.style.setProperty('--rebook-fixed-selection-color', options.selectionColor ?? DEFAULT_TEXT_COLOR)
+    const selectionStyle = document.createElement('style')
+    selectionStyle.textContent = `
+        [data-rebook-fixed-text-layer="true"] span::selection {
+            background: var(--rebook-fixed-selection-background);
+            color: var(--rebook-fixed-selection-color);
+        }
+    `
+    target.append(selectionStyle)
     for (const run of layer.runs) {
         const span = document.createElement('span')
         const matrix = run.transform

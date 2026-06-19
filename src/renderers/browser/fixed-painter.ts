@@ -80,6 +80,7 @@ export class BrowserFixedCanvasPainter implements BrowserFixedPainter {
                     devicePixelRatio: this.getDevicePixelRatio(),
                     intent: 'display',
                     textLayer: false,
+                    visualAppearance: context.styles.fixedPageVisualAppearance,
                 })
             } else {
                 const image = await context.document.getPageImage?.(context.page.index)
@@ -180,6 +181,7 @@ export class BrowserFixedWebGpuPainter implements BrowserFixedPainter {
 
     async prewarm(context: BrowserFixedVisualRenderContext): Promise<void> {
         if (!isPdfFixedDocument(context.document)) return
+        if (context.styles.fixedPageVisualAppearance) return
         try {
             await this.pdfRenderer.prewarmPage(context.document, context.page.index, {
                 scale: context.scale,
@@ -223,6 +225,21 @@ export class BrowserFixedWebGpuPainter implements BrowserFixedPainter {
         context: BrowserFixedVisualRenderContext,
         start: number,
     ): Promise<BrowserFixedPaintResult | null> {
+        if (context.styles.fixedPageVisualAppearance) {
+            const fallback = await this.canvasPainter.paint(context)
+            if (!fallback) return null
+            return {
+                ...fallback,
+                paint: {
+                    ...fallback.paint,
+                    fallbackFrom: this.backend,
+                    fallbackReason: 'fixed page visual appearance is rendered by the canvas painter',
+                    pageIndex: context.page.index,
+                    ms: now() - start,
+                },
+            }
+        }
+
         const canvas = document.createElement('canvas')
         canvas.dataset.rebookFixedWebgpu = 'true'
         canvas.dataset.rebookFixedWebgpuPdf = 'true'

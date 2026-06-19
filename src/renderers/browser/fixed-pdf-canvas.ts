@@ -49,7 +49,11 @@ export class BrowserFixedPdfCanvasRenderer implements FixedPageRenderer<HTMLCanv
         const result = await this.renderer.renderPage(
             { document },
             context,
-            { pageIndex, scale: viewport.scale * viewport.devicePixelRatio },
+            {
+                pageIndex,
+                scale: viewport.scale * viewport.devicePixelRatio,
+                visualAppearance: options.visualAppearance,
+            },
         )
 
         target.style.width = `${viewport.cssWidth}px`

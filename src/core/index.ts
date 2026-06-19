@@ -19,6 +19,15 @@ export {
     isBook,
 } from './exporter'
 export { type Renderer, type RendererConfig, type RendererStyles, type LayoutMode, type RendererFactory } from './renderer'
+export {
+    BUILT_IN_READER_THEMES,
+    mergeRendererStyles,
+    resolveReaderTheme,
+    resolveRendererStyles,
+    type BuiltInReaderThemeName,
+    type ReaderTheme,
+    type ReaderThemeInput,
+} from './theme'
 export { ReaderSession, type ReaderSessionConfig, type TOCViewItem, type TOCViewOptions } from './reader'
 export {
     getAnchorIds,
@@ -196,6 +205,7 @@ export {
     type FixedDocumentFormat,
     type FixedPageInfo,
     type FixedPageImage,
+    type FixedPageImageAppearance,
     type FixedPageRenderIntent,
     type FixedPageRenderer,
     type FixedPageRenderOptions,
@@ -205,6 +215,9 @@ export {
     type FixedPageTextLayer,
     type FixedPageTextRun,
     type FixedPageTransform,
+    type FixedPageVisualAppearance,
+    type FixedPageVisualColorMapping,
+    type FixedPageVisualColorStrategy,
     type FixedPageViewport,
     type FixedPageViewportOptions,
 } from './fixed-document'

@@ -1,4 +1,5 @@
 import type { LayoutMode, RendererStyles } from '../../core/renderer'
+import { resolveRendererStyles } from '../../core/theme'
 
 export type BrowserViewportHostKind = 'reflowable' | 'fixed'
 
@@ -42,8 +43,9 @@ export class BrowserViewportHost {
     }
 
     applyStyles(styles: RendererStyles): void {
-        this.scroller.style.color = styles.color ?? this.defaultColor
-        this.scroller.style.background = styles.background ?? 'transparent'
+        const resolved = resolveRendererStyles(styles)
+        this.scroller.style.color = resolved.color ?? this.defaultColor
+        this.scroller.style.background = resolved.background ?? 'transparent'
     }
 
     setOverflowForLayout(mode: LayoutMode): void {

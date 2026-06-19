@@ -6,6 +6,7 @@
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
 import type { LayoutMode, NavigationDirection, ReaderMark, RendererConfig, RendererStyles } from '../../core/renderer'
+import { mergeRendererStyles, resolveRendererStyles, type ReaderThemeInput } from '../../core/theme'
 import { debugRebook } from '../../core/debug'
 import { RendererEventDispatcher } from '../../core/renderer-state'
 import { flattenTOC } from '../../core/toc'
@@ -127,7 +128,7 @@ export class BrowserRenderer implements BrowserContentEngine {
     private beforeNavigate: RendererConfig['beforeNavigate']
 
     constructor(config: BrowserRendererConfig) {
-        this.styles = config.styles ?? {}
+        this.styles = resolveRendererStyles(config.styles ?? {})
         this.maxColumnCount = config.maxColumnCount ?? 2
         this.layoutMode = config.layout ?? 'paginated'
         this.beforeNavigate = config.beforeNavigate
@@ -296,11 +297,15 @@ export class BrowserRenderer implements BrowserContentEngine {
 
     setStyles(styles: RendererStyles): void {
         const fraction = this.getSectionFraction()
-        this.styles = { ...this.styles, ...styles }
+        this.styles = mergeRendererStyles(this.styles, styles)
         this.host.applyStyles(this.styles)
         if (this.currentIndex >= 0) {
             void this.loadSection(this.currentIndex, undefined, this.scrollTopForFraction(fraction))
         }
+    }
+
+    setTheme(theme: ReaderThemeInput): void {
+        this.setStyles({ theme })
     }
 
     setLayout(mode: LayoutMode): void {

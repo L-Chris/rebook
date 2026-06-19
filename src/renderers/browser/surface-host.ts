@@ -36,6 +36,7 @@ export class BrowserSurfaceHost {
             pageBackground: config.pageBackground,
             pageShadow: config.pageShadow,
         })
+        this.compositor.applyStyles(config.styles ?? {})
     }
 
     get scroller(): HTMLElement {
@@ -52,6 +53,7 @@ export class BrowserSurfaceHost {
 
     applyStyles(styles: RendererStyles): void {
         this.viewport.applyStyles(styles)
+        this.compositor.applyStyles(styles)
     }
 
     setOverflowForLayout(mode: LayoutMode): void {

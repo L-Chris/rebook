@@ -26,9 +26,12 @@ import {
   UnsupportedFormatError,
   createReader,
   getReadableContentUnit,
+  getReadableContentUnits,
   registerBuiltInParsers,
   registry,
+  resolveReadableContentUnitIndex,
   setRebookDebug,
+  type BuiltInReaderThemeName,
 } from '../../src/index.ts'
 import { withTrialLimit } from '../../src/plugins/trial-limit.ts'
 import { createBrowserTTSAudioPlayer, withTTS } from '../../src/plugins/tts.ts'
@@ -43,7 +46,7 @@ interface DemoConfig {
   spread: string
   fixedPainter: string
   fontSize: string
-  theme: 'light' | 'dark' | 'sepia'
+  theme: BuiltInReaderThemeName
   hyphenate: boolean
   debug: boolean
   trial: boolean
@@ -86,6 +89,7 @@ interface ChatMessage {
   content: string
   displayContent?: string
   attachments?: ChatAttachment[]
+  references?: ChatReference[]
   pending?: boolean
 }
 
@@ -95,6 +99,17 @@ interface ChatAttachment {
   mediaType: string
   data: string
   previewUrl: string
+}
+
+interface ChatReference {
+  id: string
+  kind: 'section' | 'paragraph'
+  label: string
+  description: string
+  href: string
+  unitIndex: number
+  blockId?: string
+  excerpt?: string
 }
 
 interface SearchItem {
@@ -111,9 +126,12 @@ interface SearchItem {
 const CONFIG_KEY = 'rebook-demo-config'
 const MAX_DEBUG_ENTRIES = 160
 const MAX_SEARCH_RESULTS = 80
+const MAX_CHAT_REFERENCE_OPTIONS = 120
+const MAX_CHAT_REFERENCE_SUGGESTIONS = 8
+const MAX_CHAT_REFERENCE_EXCERPT = 220
 
 interface ChatCommand {
-  name: '/summary' | '/search'
+  name: '/summary' | '/search' | '/rewrite' | '/extract'
   description: string
   insertText: string
   requiresArgs?: boolean
@@ -136,6 +154,23 @@ const CHAT_COMMANDS: ChatCommand[] = [
     missingArgsMessage: '请输入搜索关键词，例如 `/search feedback loops`。',
     buildPrompt: args => `请在本书中搜索与“${args}”相关的信息，优先使用搜索工具。请用中文回答，列出最相关的章节或段落，并简要解释上下文。`,
   },
+  {
+    name: '/rewrite',
+    description: '改写当前章节正文',
+    insertText: '/rewrite ',
+    buildPrompt: args => {
+      const extra = args
+        ? `\n额外改写要求：${args}`
+        : ''
+      return `请改写当前章节正文，默认改成更通俗易懂的中文。必须调用 rewriteBlocks 修改实际渲染文本，不要只在回答中贴改写结果。保留原文核心信息、术语和逻辑；不要修改图片或表格；完成后只简要说明已改写完成。${extra}`
+    },
+  },
+  {
+    name: '/extract',
+    description: '提取当前章节关键概念',
+    insertText: '/extract',
+    buildPrompt: () => '请提取当前章节的关键概念。要求：用中文回答；先列出概念清单，再分别解释每个概念的含义、它在本章中的作用，以及概念之间的关系；涉及本章具体内容时添加可点击引用。',
+  },
 ]
 
 const defaultConfig: DemoConfig = {
@@ -143,7 +178,7 @@ const defaultConfig: DemoConfig = {
   spread: '2',
   fixedPainter: 'canvas',
   fontSize: '16px',
-  theme: 'light',
+  theme: 'normal',
   hyphenate: true,
   debug: false,
   trial: false,
@@ -218,6 +253,8 @@ function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatInput, setChatInput] = useState('')
   const [chatAttachments, setChatAttachments] = useState<ChatAttachment[]>([])
+  const [chatReferences, setChatReferences] = useState<ChatReference[]>([])
+  const [chatReferenceOptions, setChatReferenceOptions] = useState<ChatReference[]>([])
   const [chatBusy, setChatBusy] = useState(false)
   const [chatPanelWidth, setChatPanelWidth] = useState(() => clampPanelWidth(config.chatPanelWidth))
   const [ttsStatus, setTTSStatus] = useState('TTS plugin disabled.')
@@ -314,6 +351,19 @@ function App() {
           model,
           maxContentChars: () => Number(configRef.current.chatMaxContentChars) || Number(defaultConfig.chatMaxContentChars),
           maxContextChars: () => Math.max(Number(configRef.current.chatMaxContentChars) || Number(defaultConfig.chatMaxContentChars), 20000),
+          onDocumentEdit: event => {
+            appendDebug('ai chat document edit', {
+              type: event.type,
+              unitIndexes: event.unitIndexes,
+              edits: event.edits.length,
+              version: event.version,
+            })
+            const reader = readerRef.current
+            const currentIndex = reader?.getLocation?.()?.index
+            if (reader && typeof currentIndex === 'number' && event.unitIndexes.includes(currentIndex)) {
+              void reader.refresh?.().catch((error: unknown) => appendDebug('ai chat document edit refresh failed', formatError(error)))
+            }
+          },
         }))
       }
     }
@@ -379,6 +429,29 @@ function App() {
   useEffect(() => {
     document.title = `${bookTitle} - rebook`
   }, [bookTitle])
+
+  useEffect(() => {
+    const reader = readerRef.current
+    const currentBook = bookRef.current
+    if (!reader || !currentBook) {
+      setChatReferenceOptions([])
+      return
+    }
+
+    let cancelled = false
+    void buildChatReferenceOptions(reader, currentBook)
+      .then(options => {
+        if (!cancelled) setChatReferenceOptions(options)
+      })
+      .catch(error => {
+        appendDebug('chat reference options failed', formatError(error))
+        if (!cancelled) setChatReferenceOptions([])
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [appendDebug, book, location])
 
   const openFileWithReader = async (file: File, targetReader = readerRef.current, options: { preserveFile?: boolean } = {}) => {
     if (!targetReader) return
@@ -471,14 +544,15 @@ function App() {
   const sendChatMessage = async () => {
     const rawContent = chatInput.trim()
     const commandResult = resolveChatCommand(rawContent)
-    const content = commandResult?.prompt ?? rawContent
+    const content = buildChatMessageContentWithReferences(commandResult?.prompt ?? rawContent, chatReferences)
     const attachments = chatAttachments
+    const references = chatReferences
     const aiChat = bookRef.current?.aiChat
-    if ((!rawContent && !attachments.length) || chatBusy) return
+    if ((!rawContent && !attachments.length && !references.length) || chatBusy) return
     if (commandResult?.error && !attachments.length) {
       const nextMessages: ChatMessage[] = [
         ...chatMessages.filter(message => !message.pending),
-        { role: 'user', content: rawContent, displayContent: rawContent },
+        { role: 'user', content: rawContent, displayContent: rawContent, references },
         { role: 'assistant', content: commandResult.error },
       ]
       setChatMessages(nextMessages)
@@ -498,13 +572,15 @@ function App() {
       {
         role: 'user',
         content: content || '请分析这些图片。',
-        displayContent: commandResult ? rawContent : undefined,
+        displayContent: commandResult || references.length ? rawContent : undefined,
         attachments,
+        references,
       },
     ]
     setChatMessages([...nextMessages, { role: 'assistant', content: '', pending: true }])
     setChatInput('')
     setChatAttachments([])
+    setChatReferences([])
     setChatBusy(true)
     try {
       const current = getCurrentChatContext(readerRef.current, bookRef.current)
@@ -561,6 +637,14 @@ function App() {
       if (attachment) URL.revokeObjectURL(attachment.previewUrl)
       return items.filter(item => item.id !== id)
     })
+  }
+
+  const addChatReference = (reference: ChatReference) => {
+    setChatReferences(items => items.some(item => item.id === reference.id) ? items : [...items, reference].slice(0, 8))
+  }
+
+  const removeChatReference = (id: string) => {
+    setChatReferences(items => items.filter(item => item.id !== id))
   }
 
   const openChatCitation = async (href: string) => {
@@ -661,6 +745,7 @@ function App() {
   return (
     <div
       className="reader-shell flex h-full min-h-0 flex-col"
+      data-reader-theme={config.theme}
       onDragOver={event => {
         event.preventDefault()
         setDragging(true)
@@ -737,6 +822,7 @@ function App() {
                 revokeChatAttachmentURLs(messages.flatMap(message => message.attachments ?? []))
                 return []
               })
+              setChatReferences([])
               setChatAttachments(items => {
                 revokeChatAttachmentURLs(items)
                 return []
@@ -774,10 +860,14 @@ function App() {
                 messages={chatMessages}
                 input={chatInput}
                 attachments={chatAttachments}
+                references={chatReferences}
+                referenceOptions={chatReferenceOptions}
                 busy={chatBusy}
                 setInput={setChatInput}
                 onAddImages={files => void addChatImages(files)}
                 onRemoveAttachment={removeChatAttachment}
+                onAddReference={addChatReference}
+                onRemoveReference={removeChatReference}
                 onSend={() => void sendChatMessage()}
                 onCitation={href => void openChatCitation(href)}
               />
@@ -1004,27 +1094,66 @@ function ChatPanel(props: {
   messages: ChatMessage[]
   input: string
   attachments: ChatAttachment[]
+  references: ChatReference[]
+  referenceOptions: ChatReference[]
   busy: boolean
   setInput(value: string): void
   onAddImages(files: FileList | File[]): void
   onRemoveAttachment(id: string): void
+  onAddReference(reference: ChatReference): void
+  onRemoveReference(id: string): void
   onSend(): void
   onCitation(href: string): void
 }) {
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
-  const commandSuggestions = useMemo(() => getChatCommandSuggestions(props.input), [props.input])
+  const [cursorIndex, setCursorIndex] = useState(props.input.length)
+  const referenceToken = useMemo(
+    () => getChatReferenceToken(props.input, cursorIndex, props.references),
+    [cursorIndex, props.input, props.references],
+  )
+  const referenceSuggestions = useMemo(
+    () => referenceToken ? getChatReferenceSuggestions(props.referenceOptions, props.references, referenceToken.query) : [],
+    [props.referenceOptions, props.references, referenceToken],
+  )
+  const commandSuggestions = useMemo(
+    () => referenceToken ? [] : getChatCommandSuggestions(props.input),
+    [props.input, referenceToken],
+  )
+  const activeSuggestionCount = referenceSuggestions.length || commandSuggestions.length
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
   const applyCommand = (command: ChatCommand) => {
     props.setInput(command.insertText)
-    requestAnimationFrame(() => inputRef.current?.focus())
+    requestAnimationFrame(() => {
+      inputRef.current?.focus()
+      const position = command.insertText.length
+      inputRef.current?.setSelectionRange(position, position)
+      setCursorIndex(position)
+    })
+  }
+  const applyReference = (reference: ChatReference) => {
+    props.onAddReference(reference)
+    const token = getChatReferenceToken(props.input, inputRef.current?.selectionStart ?? cursorIndex)
+    if (!token) {
+      requestAnimationFrame(() => inputRef.current?.focus())
+      return
+    }
+    const insertText = `@${reference.label} `
+    const nextInput = `${props.input.slice(0, token.start)}${insertText}${props.input.slice(token.end)}`
+    const nextCursor = token.start + insertText.length
+    props.setInput(nextInput)
+    requestAnimationFrame(() => {
+      inputRef.current?.focus()
+      inputRef.current?.setSelectionRange(nextCursor, nextCursor)
+      setCursorIndex(nextCursor)
+    })
   }
 
   useEffect(() => {
-    if (selectedCommandIndex >= commandSuggestions.length) {
+    if (selectedCommandIndex >= activeSuggestionCount) {
       setSelectedCommandIndex(0)
     }
-  }, [commandSuggestions.length, selectedCommandIndex])
+  }, [activeSuggestionCount, selectedCommandIndex])
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1063,6 +1192,9 @@ function ChatPanel(props: {
                   : message.displayContent ?? message.content}
               </p>
             )}
+            {message.references?.length ? (
+              <ChatReferenceChips references={message.references} />
+            ) : null}
           </div>
         )) : (
           <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">
@@ -1083,7 +1215,25 @@ function ChatPanel(props: {
           }}
         />
         <div className="chat-composer">
-          {commandSuggestions.length ? (
+          {referenceSuggestions.length ? (
+            <div className="chat-command-menu">
+              {referenceSuggestions.map((reference, index) => (
+                <button
+                  key={reference.id}
+                  type="button"
+                  className={`chat-command-option ${index === selectedCommandIndex ? 'is-active' : ''}`}
+                  onMouseDown={event => {
+                    event.preventDefault()
+                    applyReference(reference)
+                  }}
+                >
+                  <span className="chat-reference-kind">{reference.kind === 'section' ? '章节' : '段落'}</span>
+                  <span className="chat-command-name">{reference.label}</span>
+                  <span className="chat-command-description">{reference.description}</span>
+                </button>
+              ))}
+            </div>
+          ) : commandSuggestions.length ? (
             <div className="chat-command-menu">
               {commandSuggestions.map((command, index) => (
                 <button
@@ -1100,6 +1250,9 @@ function ChatPanel(props: {
                 </button>
               ))}
             </div>
+          ) : null}
+          {props.references.length ? (
+            <ChatReferenceChips references={props.references} onRemove={props.onRemoveReference} />
           ) : null}
           {props.attachments.length ? (
             <div className="chat-composer-attachments">
@@ -1128,28 +1281,42 @@ function ChatPanel(props: {
               value={props.input}
               rows={1}
               placeholder="Ask about this book"
-              onChange={event => props.setInput(event.target.value)}
+              onChange={event => {
+                props.setInput(event.target.value)
+                setCursorIndex(event.currentTarget.selectionStart ?? event.currentTarget.value.length)
+              }}
+              onClick={event => setCursorIndex(event.currentTarget.selectionStart ?? props.input.length)}
+              onKeyUp={event => setCursorIndex(event.currentTarget.selectionStart ?? props.input.length)}
               onKeyDown={event => {
-                if (commandSuggestions.length) {
+                if (referenceSuggestions.length || commandSuggestions.length) {
                   if (event.key === 'ArrowDown') {
                     event.preventDefault()
-                    setSelectedCommandIndex(index => (index + 1) % commandSuggestions.length)
+                    setSelectedCommandIndex(index => (index + 1) % activeSuggestionCount)
                     return
                   }
                   if (event.key === 'ArrowUp') {
                     event.preventDefault()
-                    setSelectedCommandIndex(index => (index - 1 + commandSuggestions.length) % commandSuggestions.length)
+                    setSelectedCommandIndex(index => (index - 1 + activeSuggestionCount) % activeSuggestionCount)
                     return
                   }
                   if (event.key === 'Tab') {
                     event.preventDefault()
-                    applyCommand(commandSuggestions[selectedCommandIndex])
+                    const selectedReference = referenceSuggestions[Math.min(selectedCommandIndex, referenceSuggestions.length - 1)]
+                    const selectedCommand = commandSuggestions[Math.min(selectedCommandIndex, commandSuggestions.length - 1)]
+                    if (selectedReference) applyReference(selectedReference)
+                    else if (selectedCommand) applyCommand(selectedCommand)
                     return
                   }
                   if (event.key === 'Enter' && !event.shiftKey) {
-                    const selected = commandSuggestions[selectedCommandIndex]
+                    if (referenceSuggestions.length) {
+                      event.preventDefault()
+                      const selectedReference = referenceSuggestions[Math.min(selectedCommandIndex, referenceSuggestions.length - 1)]
+                      if (selectedReference) applyReference(selectedReference)
+                      return
+                    }
+                    const selected = commandSuggestions[Math.min(selectedCommandIndex, commandSuggestions.length - 1)]
                     const token = getChatCommandToken(props.input)
-                    if (selected.name !== token || selected.requiresArgs) {
+                    if (selected && (selected.name !== token || selected.requiresArgs)) {
                       event.preventDefault()
                       applyCommand(selected)
                       return
@@ -1165,7 +1332,7 @@ function ChatPanel(props: {
             <button
               className="chat-composer-send"
               type="button"
-              disabled={props.busy || (!props.input.trim() && !props.attachments.length)}
+              disabled={props.busy || (!props.input.trim() && !props.attachments.length && !props.references.length)}
               onClick={props.onSend}
               title="Send"
             >
@@ -1174,6 +1341,24 @@ function ChatPanel(props: {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function ChatReferenceChips({ references, onRemove }: { references: ChatReference[]; onRemove?(id: string): void }) {
+  return (
+    <div className="chat-reference-chips">
+      {references.map(reference => (
+        <span key={reference.id} className="chat-reference-chip" title={reference.excerpt || reference.description}>
+          <span className="chat-reference-chip-kind">{reference.kind === 'section' ? '章节' : '段落'}</span>
+          <span className="chat-reference-chip-label">{reference.label}</span>
+          {onRemove ? (
+            <button type="button" onClick={() => onRemove(reference.id)} title="Remove reference">
+              <X className="h-3 w-3" />
+            </button>
+          ) : null}
+        </span>
+      ))}
     </div>
   )
 }
@@ -1215,6 +1400,10 @@ function ChatCitationLink({
   onCitation,
   ...props
 }: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string; label: string; onCitation(href: string): void }) {
+  const pointerHandledRef = useRef(false)
+  const openCitation = () => {
+    onCitation(href)
+  }
   return (
     <a
       {...props}
@@ -1222,9 +1411,19 @@ function ChatCitationLink({
       data-rebook-citation="true"
       title={label}
       aria-label={label}
+      onPointerDown={event => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
+        event.preventDefault()
+        pointerHandledRef.current = true
+        openCitation()
+        window.setTimeout(() => {
+          pointerHandledRef.current = false
+        }, 500)
+      }}
       onClick={event => {
         event.preventDefault()
-        onCitation(href)
+        if (pointerHandledRef.current) return
+        openCitation()
       }}
     >
       <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1431,16 +1630,26 @@ function ChatCodePreview({
       ? Number.parseFloat(bodyStyle.paddingTop || '0') + Number.parseFloat(bodyStyle.paddingBottom || '0')
       : 0
     const rootRect = previewRoot?.getBoundingClientRect()
+    const svgRect = previewRoot?.querySelector('svg')?.getBoundingClientRect()
     const height = Math.max(
       previewRoot?.scrollHeight ?? 0,
       previewRoot?.offsetHeight ?? 0,
       rootRect?.height ?? 0,
+      svgRect?.height ?? 0,
     ) + verticalPadding
     if (height > 0) {
-      const nextHeight = clampPreviewFrameHeight(height + 2)
+      const safetyPadding = body?.dataset.previewKind === 'svg' ? 24 : 2
+      const nextHeight = clampPreviewFrameHeight(height + safetyPadding)
       setFrameHeight(current => mode === 'grow' ? Math.max(current, nextHeight) : nextHeight)
     }
   }, [])
+
+  const scheduleFrameMeasure = useCallback((mode: 'fit' | 'grow') => {
+    requestAnimationFrame(() => {
+      measureFrameHeight(mode)
+      requestAnimationFrame(() => measureFrameHeight(mode))
+    })
+  }, [measureFrameHeight])
 
   useEffect(() => {
     setFrameHeight(360)
@@ -1489,10 +1698,10 @@ function ChatCodePreview({
       pendingPreviewWriteRef.current = null
       const wrote = writePreviewFrameContent(frameRef.current, framePreview)
       if (streaming) {
-        if (wrote) requestAnimationFrame(() => measureFrameHeight('grow'))
+        if (wrote) scheduleFrameMeasure('grow')
         return
       }
-      requestAnimationFrame(() => measureFrameHeight('fit'))
+      scheduleFrameMeasure('fit')
     }, streaming ? 120 : 0)
     return () => {
       if (pendingPreviewWriteRef.current != null) {
@@ -1500,7 +1709,7 @@ function ChatCodePreview({
         pendingPreviewWriteRef.current = null
       }
     }
-  }, [framePreview.html, framePreview.kind, measureFrameHeight, streaming, tab])
+  }, [framePreview.html, framePreview.kind, scheduleFrameMeasure, streaming, tab])
 
   useEffect(() => {
     if (tab !== 'preview') return
@@ -1515,7 +1724,7 @@ function ChatCodePreview({
       if (frameId != null) cancelAnimationFrame(frameId)
       frameId = requestAnimationFrame(() => {
         frameId = null
-        measureFrameHeight('fit')
+        scheduleFrameMeasure('fit')
       })
     })
     observer.observe(frame)
@@ -1523,7 +1732,7 @@ function ChatCodePreview({
       if (frameId != null) cancelAnimationFrame(frameId)
       observer.disconnect()
     }
-  }, [measureFrameHeight, tab])
+  }, [scheduleFrameMeasure, tab])
 
   const effectiveFrameHeight = collapsed ? Math.min(frameHeight, 260) : frameHeight
 
@@ -1570,7 +1779,7 @@ function ChatCodePreview({
           title={`${preview.label} preview`}
           onLoad={() => {
             writePreviewFrameContent(frameRef.current, framePreview)
-            requestAnimationFrame(() => measureFrameHeight(streaming ? 'grow' : 'fit'))
+            scheduleFrameMeasure(streaming ? 'grow' : 'fit')
           }}
         />
       ) : (
@@ -1581,7 +1790,7 @@ function ChatCodePreview({
 }
 
 function clampPreviewFrameHeight(height: number): number {
-  return Math.max(260, Math.min(1200, Math.ceil(height)))
+  return Math.max(260, Math.min(3600, Math.ceil(height)))
 }
 
 interface RenderableCodePreview {
@@ -1672,15 +1881,15 @@ const PREVIEW_SHELL_DOCUMENT = [
   '<style>',
   'html,body{margin:0;min-height:100%;overflow:hidden;background:#fff;color:#111827;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}',
   'body{box-sizing:border-box}',
-  'body[data-preview-kind="svg"]{display:grid;place-items:center;padding:16px}',
+  'body[data-preview-kind="svg"]{display:block;padding:16px}',
   'body[data-preview-kind="html"]{display:block;padding:0}',
   '#preview-root,#preview-buffer{width:100%;box-sizing:border-box}',
-  'body[data-preview-kind="svg"] #preview-root{display:grid;place-items:center}',
+  'body[data-preview-kind="svg"] #preview-root{display:block;text-align:center}',
   'body[data-preview-kind="html"] #preview-root{display:flow-root}',
   '#preview-buffer{position:absolute;left:-100000px;top:0;visibility:hidden;pointer-events:none;overflow:hidden}',
   '.preview-status{display:grid;min-height:220px;place-items:center;padding:24px;color:#64748b;font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-align:center}',
   '.preview-status.is-error{color:#b91c1c;white-space:pre-wrap}',
-  'svg{max-width:100%;height:auto}',
+  'svg{max-width:100%;height:auto;overflow:visible}',
   '</style></head><body data-preview-kind="html"><div id="preview-root"></div><div id="preview-buffer"></div></body></html>',
 ].join('')
 
@@ -1840,7 +2049,7 @@ function SettingsSectionForm({ section, config, setConfig }: { section: Settings
         <SelectField label="Spread" value={config.spread} onChange={value => update('spread', value)} options={[['2', 'Auto spread'], ['1', 'Single page']]} />
         <SelectField label="Fixed painter" value={config.fixedPainter} onChange={value => update('fixedPainter', value)} options={[['auto', 'Auto'], ['canvas', 'Canvas 2D'], ['webgpu', 'WebGPU']]} />
         <SelectField label="Font size" value={config.fontSize} onChange={value => update('fontSize', value)} options={[['14px', 'Small'], ['16px', 'Medium'], ['18px', 'Large'], ['20px', 'X-Large']]} />
-        <SelectField label="Theme" value={config.theme} onChange={value => update('theme', value as DemoConfig['theme'])} options={[['light', 'Light'], ['dark', 'Dark'], ['sepia', 'Sepia']]} />
+        <SelectField label="Theme" value={config.theme} onChange={value => update('theme', value as DemoConfig['theme'])} options={[['normal', 'Normal'], ['night', 'Night']]} />
         <CheckField label="Hyphenate" checked={config.hyphenate} onChange={value => update('hyphenate', value)} />
       </FormGrid>
     )
@@ -2021,6 +2230,230 @@ function resolveChatCommand(input: string): { prompt?: string; error?: string; i
   return { prompt: command.buildPrompt(args) }
 }
 
+interface ChatReferenceToken {
+  start: number
+  end: number
+  query: string
+}
+
+function getChatReferenceToken(
+  input: string,
+  cursorIndex: number,
+  selectedReferences: readonly ChatReference[] = [],
+): ChatReferenceToken | null {
+  const end = Math.max(0, Math.min(input.length, cursorIndex))
+  const beforeCursor = input.slice(0, end)
+  const start = beforeCursor.lastIndexOf('@')
+  if (start < 0) return null
+  const previous = input[start - 1]
+  if (previous && /[\w.@-]/.test(previous)) return null
+  const query = beforeCursor.slice(start + 1)
+  if (query.includes('\n') || /^\s/.test(query)) return null
+  const normalizedQuery = normalizeReferenceSearchText(query)
+  if (selectedReferences.some(reference => {
+    const label = normalizeReferenceSearchText(reference.label)
+    return normalizedQuery === label || normalizedQuery.startsWith(`${label} `)
+  })) {
+    return null
+  }
+  return { start, end, query }
+}
+
+function getChatReferenceSuggestions(
+  options: readonly ChatReference[],
+  selected: readonly ChatReference[],
+  query: string,
+): ChatReference[] {
+  const normalizedQuery = normalizeReferenceSearchText(query)
+  const selectedIds = new Set(selected.map(reference => reference.id))
+  if (normalizedQuery && selected.some(reference => normalizeReferenceSearchText(reference.label) === normalizedQuery)) {
+    return []
+  }
+
+  const scored = options
+    .filter(reference => !selectedIds.has(reference.id))
+    .map((reference, index) => {
+      const label = normalizeReferenceSearchText(reference.label)
+      const description = normalizeReferenceSearchText(reference.description)
+      const excerpt = normalizeReferenceSearchText(reference.excerpt ?? '')
+      const searchable = `${label} ${description} ${excerpt}`
+      const labelIndex = normalizedQuery ? label.indexOf(normalizedQuery) : 0
+      const searchIndex = normalizedQuery ? searchable.indexOf(normalizedQuery) : 0
+      if (normalizedQuery && searchIndex < 0) return null
+      return {
+        reference,
+        index,
+        score: (reference.kind === 'paragraph' ? 0 : 12)
+          + (labelIndex >= 0 ? labelIndex : 80)
+          + Math.min(searchIndex, 80),
+      }
+    })
+    .filter((item): item is { reference: ChatReference; index: number; score: number } => item !== null)
+
+  return scored
+    .sort((a, b) => a.score - b.score || a.index - b.index)
+    .slice(0, MAX_CHAT_REFERENCE_SUGGESTIONS)
+    .map(item => item.reference)
+}
+
+async function buildChatReferenceOptions(reader: any, book: any): Promise<ChatReference[]> {
+  const currentPageReferences = await buildCurrentPageReferenceOptions(reader, book)
+  const sectionReferences = buildSectionReferenceOptions(book)
+  return dedupeChatReferences([...currentPageReferences, ...sectionReferences]).slice(0, MAX_CHAT_REFERENCE_OPTIONS)
+}
+
+function buildSectionReferenceOptions(book: any): ChatReference[] {
+  const references: ChatReference[] = []
+  const units = getReadableContentUnits(book)
+  const tocItems = flattenTOCItems(book.toc ?? [])
+
+  for (const item of tocItems) {
+    const unitIndex = resolveReadableContentUnitIndex(book, item.href)
+    if (typeof unitIndex !== 'number') continue
+    const unit = getReadableContentUnit(book, unitIndex)
+    const blockId = getTOCHrefFragment(item.href)
+    references.push({
+      id: `section:${unitIndex}:${blockId ?? ''}:${item.label}`,
+      kind: 'section',
+      label: item.label,
+      description: unit?.title && unit.title !== item.label
+        ? `章节 ${unitIndex + 1} · ${unit.title}`
+        : `章节 ${unitIndex + 1}`,
+      href: createChatReferenceHref(unitIndex, blockId),
+      unitIndex,
+      blockId,
+      excerpt: unit?.title,
+    })
+  }
+
+  for (const unit of units) {
+    if (!unit.title) continue
+    references.push({
+      id: `section:${unit.index}:unit`,
+      kind: 'section',
+      label: unit.title,
+      description: unit.kind === 'page' ? `页面 ${unit.index + 1}` : `章节 ${unit.index + 1}`,
+      href: createChatReferenceHref(unit.index),
+      unitIndex: unit.index,
+      excerpt: unit.title,
+    })
+  }
+
+  return dedupeChatReferences(references)
+}
+
+async function buildCurrentPageReferenceOptions(reader: any, book: any): Promise<ChatReference[]> {
+  const loc = reader?.getLocation?.()
+  const unitIndex = typeof loc?.index === 'number' ? loc.index : 0
+  const unit = getReadableContentUnit(book, unitIndex)
+  const chunks = await reader?.getCurrentText?.()
+  if (!Array.isArray(chunks) || !chunks.length) return []
+
+  const groups = new Map<string, { blockId?: string; texts: string[]; order: number }>()
+  chunks.forEach((chunk: any, index: number) => {
+    const text = normalizeReferenceText(chunk?.text ?? '')
+    if (!text) return
+    const blockId = chunk?.location?.type === 'reflowable' ? chunk.location.blockId : undefined
+    const key = blockId ? `block:${blockId}` : `chunk:${index}`
+    const group = groups.get(key) ?? { blockId, texts: [], order: index }
+    group.texts.push(text)
+    groups.set(key, group)
+  })
+
+  return Array.from(groups.values())
+    .sort((a, b) => a.order - b.order)
+    .map((group): ChatReference | null => {
+      const excerpt = clipChatReferenceExcerpt(joinReferenceText(group.texts))
+      if (!excerpt || excerpt.length < 2) return null
+      const label = excerpt.length > 32 ? `${excerpt.slice(0, 32)}...` : excerpt
+      return {
+        id: `paragraph:${unitIndex}:${group.blockId ?? group.order}`,
+        kind: 'paragraph',
+        label,
+        description: unit?.title ? `当前页 · ${unit.title}` : `当前页 · ${unitIndex + 1}`,
+        href: createChatReferenceHref(unitIndex, group.blockId),
+        unitIndex,
+        blockId: group.blockId,
+        excerpt,
+      }
+    })
+    .filter((reference): reference is ChatReference => reference !== null)
+}
+
+function buildChatMessageContentWithReferences(content: string, references: readonly ChatReference[]): string {
+  if (!references.length) return content
+  const base = content.trim() || '请结合我引用的内容回答。'
+  const referenceText = references.map((reference, index) => [
+    `${index + 1}. ${reference.kind === 'section' ? '章节' : '段落'}：${reference.label}`,
+    `href: ${reference.href}`,
+    reference.description ? `位置: ${reference.description}` : '',
+    reference.excerpt ? `摘录: ${reference.excerpt}` : '',
+  ].filter(Boolean).join('\n')).join('\n\n')
+  return [
+    base,
+    '用户在输入框中引用了以下书籍位置。回答涉及这些引用内容时，请优先使用对应 href 作为出处链接：',
+    referenceText,
+  ].join('\n\n')
+}
+
+function dedupeChatReferences(references: readonly ChatReference[]): ChatReference[] {
+  const seen = new Set<string>()
+  const next: ChatReference[] = []
+  for (const reference of references) {
+    const key = `${reference.href}\n${normalizeReferenceSearchText(reference.label)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    next.push(reference)
+  }
+  return next
+}
+
+function createChatReferenceHref(unitIndex: number, blockId?: string): string {
+  return blockId ? `rebook://j/${unitIndex}/${encodeURIComponent(blockId)}` : `rebook://j/${unitIndex}`
+}
+
+function getTOCHrefFragment(href: string | undefined): string | undefined {
+  if (!href) return undefined
+  const index = href.indexOf('#')
+  if (index < 0 || index === href.length - 1) return undefined
+  try {
+    return decodeURIComponent(href.slice(index + 1))
+  } catch {
+    return href.slice(index + 1)
+  }
+}
+
+function normalizeReferenceSearchText(value: string): string {
+  return value.toLocaleLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+function normalizeReferenceText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function joinReferenceText(parts: readonly string[]): string {
+  let output = ''
+  for (const part of parts) {
+    if (!part) continue
+    if (!output) {
+      output = part
+      continue
+    }
+    output += shouldJoinReferenceTextWithSpace(output, part) ? ` ${part}` : part
+  }
+  return output
+}
+
+function shouldJoinReferenceTextWithSpace(left: string, right: string): boolean {
+  return /[A-Za-z0-9]$/.test(left) && /^[A-Za-z0-9]/.test(right)
+}
+
+function clipChatReferenceExcerpt(value: string): string {
+  return value.length > MAX_CHAT_REFERENCE_EXCERPT
+    ? `${value.slice(0, MAX_CHAT_REFERENCE_EXCERPT).trimEnd()}...`
+    : value
+}
+
 interface RebookJumpTarget {
   unitIndex: number
   blockId?: string
@@ -2153,13 +2586,8 @@ function splitLooseStrongText(value: string): MarkdownNode[] {
 }
 
 function getReaderStyles(config: DemoConfig) {
-  const theme = {
-    light: { color: '#111827', background: '#ffffff' },
-    dark: { color: '#e5e7eb', background: '#111827' },
-    sepia: { color: '#4b382c', background: '#f8eedc' },
-  }[config.theme]
   return {
-    ...theme,
+    theme: config.theme,
     fontSize: config.fontSize,
     hyphenate: config.hyphenate,
     lineHeight: 1.72,

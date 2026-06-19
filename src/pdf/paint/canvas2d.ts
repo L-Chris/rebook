@@ -1,5 +1,6 @@
 import { PdfBlendMode, PdfDisplayOp, PdfFontSource, PdfImageData, PdfMatrix, PdfPageDisplayList, PdfPathSegment, PdfShading, PdfShadingPattern, PdfTextRun } from '../types'
 import { PdfRenderContext, PdfRenderer, PdfRenderPageOptions, PdfPageRenderResult } from './types'
+import type { FixedPageVisualAppearance, FixedPageVisualColorMapping } from '../../core/fixed-document'
 
 export type PdfCanvas2DContext = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
 
@@ -29,7 +30,7 @@ export class Canvas2DRenderer implements PdfRenderer<PdfCanvas2DContext, Canvas2
     const height = Math.ceil(displayList.height * scale)
     resizeCanvas(target, width, height)
     await this.registerDisplayListFonts(displayList)
-    renderDisplayList(target, displayList, scale, this.rendererOptions, this.imageSurfaces)
+    renderDisplayList(target, displayList, scale, this.rendererOptions, this.imageSurfaces, options.visualAppearance)
     return {
       pageIndex: displayList.pageIndex,
       width,
@@ -59,11 +60,13 @@ const renderDisplayList = (
   scale: number,
   options: Canvas2DRendererOptions,
   imageSurfaces: WeakMap<PdfImageData, CanvasImageSource>,
+  appearance?: FixedPageVisualAppearance,
 ): void => {
   if (options.clear ?? true) context.clearRect(0, 0, displayList.width * scale, displayList.height * scale)
-  if (options.background) {
+  const background = appearance?.background ?? options.background
+  if (background) {
     context.save()
-    context.fillStyle = options.background
+    context.fillStyle = background
     context.fillRect(0, 0, displayList.width * scale, displayList.height * scale)
     context.restore()
   }
@@ -72,12 +75,12 @@ const renderDisplayList = (
   const state: CanvasRenderState = { strokeAlpha: 1, fillAlpha: 1, blendMode: 'normal', textWidthCache: new Map() }
   const stateStack: CanvasRenderState[] = []
   for (let index = 0; index < displayList.ops.length;) {
-    const consumed = renderTransformedTextBatch(context, displayList.ops, index, state)
+    const consumed = renderTransformedTextBatch(context, displayList.ops, index, state, appearance)
     if (consumed > 0) {
       index += consumed
       continue
     }
-    renderOp(context, displayList.ops[index], displayList.width, displayList.height, options, imageSurfaces, state, stateStack)
+    renderOp(context, displayList.ops[index], displayList.width, displayList.height, options, imageSurfaces, state, stateStack, appearance)
     index++
   }
   context.restore()
@@ -92,6 +95,7 @@ const renderOp = (
   imageSurfaces: WeakMap<PdfImageData, CanvasImageSource>,
   state: CanvasRenderState,
   stateStack: CanvasRenderState[],
+  appearance?: FixedPageVisualAppearance,
 ): void => {
   switch (op.type) {
     case 'save':
@@ -132,22 +136,22 @@ const renderOp = (
       context.globalCompositeOperation = canvasBlendMode(op.mode)
       break
     case 'strokeColor':
-      context.strokeStyle = cssColor(op.color)
+      context.strokeStyle = themedColor(op.color, appearance?.vector)
       break
     case 'fillColor':
-      context.fillStyle = cssColor(op.color)
+      context.fillStyle = themedColor(op.color, appearance?.vector)
       break
     case 'path':
       drawPath(context, op.segments)
-      if (op.paint === 'stroke') strokePath(context, state, op.stroke)
-      else if (op.paint === 'fill') fillPath(context, state, 'nonzero', op.fill)
-      else if (op.paint === 'fillEvenOdd') fillPath(context, state, 'evenodd', op.fill)
+      if (op.paint === 'stroke') strokePath(context, state, op.stroke, appearance)
+      else if (op.paint === 'fill') fillPath(context, state, 'nonzero', op.fill, appearance)
+      else if (op.paint === 'fillEvenOdd') fillPath(context, state, 'evenodd', op.fill, appearance)
       else if (op.paint === 'fillStroke') {
-        fillPath(context, state, 'nonzero', op.fill)
-        strokePath(context, state, op.stroke)
+        fillPath(context, state, 'nonzero', op.fill, appearance)
+        strokePath(context, state, op.stroke, appearance)
       } else if (op.paint === 'fillStrokeEvenOdd') {
-        fillPath(context, state, 'evenodd', op.fill)
-        strokePath(context, state, op.stroke)
+        fillPath(context, state, 'evenodd', op.fill, appearance)
+        strokePath(context, state, op.stroke, appearance)
       }
       break
     case 'clip':
@@ -155,7 +159,7 @@ const renderOp = (
       context.clip(op.rule)
       break
     case 'shading':
-      renderShading(context, op.shading, width, height, state)
+      renderShading(context, op.shading, width, height, state, appearance)
       break
     case 'image': {
       const bitmap = getImageSurface(op.image, options, imageSurfaces)
@@ -170,7 +174,7 @@ const renderOp = (
       context.save()
       context.translate(op.run.x, op.run.y)
       context.scale(1, -1)
-      applyTextStyle(context, op.run)
+      applyTextStyle(context, op.run, appearance)
       drawTextRun(context, op.run, state)
       context.restore()
       break
@@ -190,13 +194,13 @@ const fill = (context: PdfCanvas2DContext, state: CanvasRenderState, rule: Canva
 const stroke = (context: PdfCanvas2DContext, state: CanvasRenderState): void =>
   withAlpha(context, state.strokeAlpha, () => context.stroke())
 
-const fillPath = (context: PdfCanvas2DContext, state: CanvasRenderState, rule: CanvasFillRule, pattern?: PdfShadingPattern): void => {
+const fillPath = (context: PdfCanvas2DContext, state: CanvasRenderState, rule: CanvasFillRule, pattern?: PdfShadingPattern, appearance?: FixedPageVisualAppearance): void => {
   if (!pattern) {
     fill(context, state, rule)
     return
   }
   const previous = context.fillStyle
-  context.fillStyle = createShadingFillStyle(context, pattern.shading)
+  context.fillStyle = createShadingFillStyle(context, pattern.shading, appearance?.vector)
   try {
     fill(context, state, rule)
   } finally {
@@ -204,13 +208,13 @@ const fillPath = (context: PdfCanvas2DContext, state: CanvasRenderState, rule: C
   }
 }
 
-const strokePath = (context: PdfCanvas2DContext, state: CanvasRenderState, pattern?: PdfShadingPattern): void => {
+const strokePath = (context: PdfCanvas2DContext, state: CanvasRenderState, pattern?: PdfShadingPattern, appearance?: FixedPageVisualAppearance): void => {
   if (!pattern) {
     stroke(context, state)
     return
   }
   const previous = context.strokeStyle
-  context.strokeStyle = createShadingFillStyle(context, pattern.shading)
+  context.strokeStyle = createShadingFillStyle(context, pattern.shading, appearance?.vector)
   try {
     stroke(context, state)
   } finally {
@@ -218,8 +222,8 @@ const strokePath = (context: PdfCanvas2DContext, state: CanvasRenderState, patte
   }
 }
 
-const renderShading = (context: PdfCanvas2DContext, shading: PdfShading, width: number, height: number, state: CanvasRenderState): void => {
-  const gradient = createShadingFillStyle(context, shading)
+const renderShading = (context: PdfCanvas2DContext, shading: PdfShading, width: number, height: number, state: CanvasRenderState, appearance?: FixedPageVisualAppearance): void => {
+  const gradient = createShadingFillStyle(context, shading, appearance?.vector)
   const previous = context.fillStyle
   context.fillStyle = gradient
   try {
@@ -234,6 +238,7 @@ const renderTransformedTextBatch = (
   ops: PdfDisplayOp[],
   startIndex: number,
   state: CanvasRenderState,
+  appearance?: FixedPageVisualAppearance,
 ): number => {
   const first = transformedTextSequenceAt(ops, startIndex)
   if (!first) return 0
@@ -241,7 +246,7 @@ const renderTransformedTextBatch = (
   const previousFont = context.font
   const previousFillStyle = context.fillStyle
   const previousStrokeStyle = context.strokeStyle
-  applyTextStyle(context, first.run)
+  applyTextStyle(context, first.run, appearance)
 
   let consumed = 0
   for (let index = startIndex; index < ops.length;) {
@@ -306,10 +311,10 @@ interface FastTextSpan extends FastTextSequence {
   consumed: number
 }
 
-const applyTextStyle = (context: PdfCanvas2DContext, run: PdfTextRun): void => {
+const applyTextStyle = (context: PdfCanvas2DContext, run: PdfTextRun, appearance?: FixedPageVisualAppearance): void => {
   context.font = textFont(run)
-  if (paintsTextFill(run.renderingMode)) context.fillStyle = cssColor(run.fillColor ?? [0, 0, 0])
-  if (paintsTextStroke(run.renderingMode)) context.strokeStyle = cssColor(run.strokeColor ?? [0, 0, 0])
+  if (paintsTextFill(run.renderingMode)) context.fillStyle = themedColor(run.fillColor ?? [0, 0, 0], appearance?.text)
+  if (paintsTextStroke(run.renderingMode)) context.strokeStyle = themedColor(run.strokeColor ?? [0, 0, 0], appearance?.text)
 }
 
 const drawTextRun = (context: PdfCanvas2DContext, run: PdfTextRun, state: CanvasRenderState): void => {
@@ -446,7 +451,7 @@ const sameColor = (left?: readonly [number, number, number], right?: readonly [n
   return a[0] === b[0] && a[1] === b[1] && a[2] === b[2]
 }
 
-const createShadingFillStyle = (context: PdfCanvas2DContext, shading: PdfShading): CanvasGradient => {
+const createShadingFillStyle = (context: PdfCanvas2DContext, shading: PdfShading, appearance?: FixedPageVisualColorMapping): CanvasGradient => {
   const gradient = shading.type === 'axial'
     ? context.createLinearGradient(...shading.coords)
     : context.createRadialGradient(...shading.coords)
@@ -456,7 +461,7 @@ const createShadingFillStyle = (context: PdfCanvas2DContext, shading: PdfShading
       { offset: 0, color: shading.startColor },
       { offset: 1, color: shading.endColor },
     ]
-  for (const stop of stops) gradient.addColorStop(clamp01(stop.offset), cssColor(stop.color))
+  for (const stop of stops) gradient.addColorStop(clamp01(stop.offset), themedColor(stop.color, appearance))
   return gradient
 }
 
@@ -542,6 +547,28 @@ const cssColor = (color: readonly [number, number, number]): string => {
   const b = Math.round(clamp01(color[2]) * 255)
   return `rgb(${r} ${g} ${b})`
 }
+
+const themedColor = (source: readonly [number, number, number], appearance?: FixedPageVisualColorMapping): string => {
+  const strategy = appearance?.strategy ?? 'preserve'
+  if (strategy === 'preserve') return cssColor(source)
+  const forced = appearance?.color ?? appearance?.foreground
+  if (strategy === 'force') return forced ?? cssColor(source)
+  if (!appearance) return cssColor(source)
+  if (!isNeutralColor(source, appearance.neutralThreshold)) return cssColor(source)
+  const target = luminance(source) >= 0.62
+    ? appearance.background
+    : appearance.foreground ?? appearance.color
+  return target ?? cssColor(source)
+}
+
+const isNeutralColor = (color: readonly [number, number, number], threshold = 0.08): boolean => {
+  const max = Math.max(color[0], color[1], color[2])
+  const min = Math.min(color[0], color[1], color[2])
+  return max - min <= threshold
+}
+
+const luminance = (color: readonly [number, number, number]): number =>
+  clamp01(color[0]) * 0.2126 + clamp01(color[1]) * 0.7152 + clamp01(color[2]) * 0.0722
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value))
 
