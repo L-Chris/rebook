@@ -1,4 +1,4 @@
-import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type AnchorHTMLAttributes, type HTMLAttributes, type ReactElement, type ReactNode } from 'react'
+import { Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type AnchorHTMLAttributes, type HTMLAttributes, type ReactElement, type ReactNode } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -570,16 +570,16 @@ function App() {
       setStatus('Trial limit reached.')
       return
     }
-    const unitTarget = citation.unitId ?? citation.unitIndex
-    await readerRef.current.goTo(citation.blockId && citation.unitKind === 'section' ? `${unitTarget}#${citation.blockId}` : citation.unitIndex)
+    const section = bookRef.current?.sections[citation.unitIndex]
+    await readerRef.current.goTo(citation.blockId && section ? `${citation.unitIndex}#${citation.blockId}` : citation.unitIndex)
     readerRef.current.clearMarks?.('citation')
-    if (citation.blockId && citation.unitKind === 'section' && typeof citation.sectionIndex === 'number') {
+    if (citation.blockId && section) {
       readerRef.current.setMark?.({
         id: 'ai-chat-citation',
         kind: 'citation',
         location: {
           type: 'reflowable',
-          sectionIndex: citation.sectionIndex,
+          sectionIndex: citation.unitIndex,
           blockId: citation.blockId,
         },
       })
@@ -1051,24 +1051,11 @@ function ChatPanel(props: {
               </div>
             ) : null}
             {message.role === 'assistant' && message.content ? (
-              <div className="chat-markdown">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkLooseStrong]}
-                  urlTransform={transformChatMarkdownUrl}
-                  components={{
-                    a: ({ node: _node, href, children, ...linkProps }) => (
-                      <ChatMarkdownLink href={href} onCitation={props.onCitation} {...linkProps}>
-                        {children}
-                      </ChatMarkdownLink>
-                    ),
-                    pre: ({ node: _node, children, ...preProps }) => (
-                      <ChatMarkdownPre {...preProps}>{children}</ChatMarkdownPre>
-                    ),
-                  }}
-                >
-                  {message.content}
-                </ReactMarkdown>
-              </div>
+              <ChatMarkdownContent
+                content={message.content}
+                streaming={message.pending === true}
+                onCitation={props.onCitation}
+              />
             ) : (
               <p className="whitespace-pre-wrap">
                 {message.role === 'assistant' && message.pending && !message.content
@@ -1213,22 +1200,7 @@ function ChatMarkdownLink({
 }: AnchorHTMLAttributes<HTMLAnchorElement> & { onCitation(href: string): void }) {
   if (href && isRebookJumpHref(href)) {
     const label = flattenReactText(children) || 'Open citation'
-    return (
-      <a
-        {...props}
-        href={href}
-        data-rebook-citation="true"
-        title={label}
-        aria-label={label}
-        onClick={event => {
-          event.preventDefault()
-          onCitation(href)
-        }}
-      >
-        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-        <span className="sr-only">{label}</span>
-      </a>
-    )
+    return <ChatCitationLink {...props} href={href} label={label} onCitation={onCitation} />
   }
   return (
     <a {...props} href={href} target="_blank" rel="noreferrer">
@@ -1237,47 +1209,321 @@ function ChatMarkdownLink({
   )
 }
 
-function ChatMarkdownPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
+function ChatCitationLink({
+  href,
+  label,
+  onCitation,
+  ...props
+}: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string; label: string; onCitation(href: string): void }) {
+  return (
+    <a
+      {...props}
+      href={href}
+      data-rebook-citation="true"
+      title={label}
+      aria-label={label}
+      onClick={event => {
+        event.preventDefault()
+        onCitation(href)
+      }}
+    >
+      <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+      <span className="sr-only">{label}</span>
+    </a>
+  )
+}
+
+function ChatMarkdownContent({
+  content,
+  streaming,
+  onCitation,
+}: {
+  content: string
+  streaming: boolean
+  onCitation(href: string): void
+}) {
+  const parts = useMemo(() => splitRenderableMarkdownPreviews(content), [content])
+  return (
+    <div className="chat-markdown">
+      {parts.map(part => {
+        if (part.type === 'preview') {
+          return (
+            <ChatCodePreview
+              key={`preview-${part.ordinal}`}
+              preview={part.preview}
+              preProps={{}}
+              streaming={streaming}
+            />
+          )
+        }
+        const citationDraft = extractStreamingCitationDraft(part.markdown, streaming)
+        const markdown = citationDraft?.markdown ?? part.markdown
+        return (
+          <Fragment key={part.key}>
+            {markdown ? (
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkLooseStrong]}
+                urlTransform={transformChatMarkdownUrl}
+                components={{
+                  a: ({ node: _node, href, children, ...linkProps }) => (
+                    <ChatMarkdownLink href={href} onCitation={onCitation} {...linkProps}>
+                      {children}
+                    </ChatMarkdownLink>
+                  ),
+                  pre: ({ node: _node, children, ...preProps }) => (
+                    <ChatMarkdownPre streaming={streaming} {...preProps}>{children}</ChatMarkdownPre>
+                  ),
+                }}
+              >
+                {markdown}
+              </ReactMarkdown>
+            ) : null}
+            {citationDraft ? (
+              <ChatCitationLink
+                href={citationDraft.href}
+                label={citationDraft.label}
+                onCitation={onCitation}
+              />
+            ) : null}
+          </Fragment>
+        )
+      })}
+    </div>
+  )
+}
+
+type ChatMarkdownPart =
+  | { type: 'markdown'; key: string; markdown: string }
+  | { type: 'preview'; ordinal: number; preview: RenderableCodePreview }
+
+function splitRenderableMarkdownPreviews(markdown: string): ChatMarkdownPart[] {
+  const parts: ChatMarkdownPart[] = []
+  const fencePattern = /(^|\n)(```|~~~)([^\n]*)\n/g
+  let cursor = 0
+  let previewOrdinal = 0
+
+  while (true) {
+    const match = fencePattern.exec(markdown)
+    if (!match) break
+
+    const fenceStart = match.index + match[1].length
+    const fence = match[2]
+    const info = match[3] ?? ''
+    const codeStart = fencePattern.lastIndex
+    const closePattern = new RegExp(`\\n${escapeRegExp(fence)}[ \\t]*(?=\\n|$)`, 'g')
+    closePattern.lastIndex = codeStart
+    const close = closePattern.exec(markdown)
+    const codeEnd = close ? close.index : markdown.length
+    const code = markdown.slice(codeStart, codeEnd)
+    const preview = getRenderableCodePreviewFromCode(info, code)
+
+    if (!preview) {
+      fencePattern.lastIndex = codeStart
+      continue
+    }
+
+    appendMarkdownPart(parts, markdown.slice(cursor, fenceStart), `markdown-${parts.length}`)
+    parts.push({
+      type: 'preview',
+      ordinal: previewOrdinal++,
+      preview,
+    })
+    cursor = close ? close.index + close[0].length : markdown.length
+    fencePattern.lastIndex = cursor
+  }
+
+  appendMarkdownPart(parts, markdown.slice(cursor), `markdown-${parts.length}`)
+  return parts
+}
+
+function appendMarkdownPart(parts: ChatMarkdownPart[], markdown: string, key: string): void {
+  if (!markdown) return
+  parts.push({ type: 'markdown', key, markdown })
+}
+
+function extractStreamingCitationDraft(markdown: string, streaming: boolean): { markdown: string; href: string; label: string } | null {
+  if (!streaming) return null
+  const match = /\[([^\]\n]{0,80})\]\((rebook:\/\/j\/[^)\s]*)$/.exec(markdown)
+  if (!match) return null
+  const href = match[2]
+  if (!parseRebookJumpHref(href)) return null
+  return {
+    markdown: markdown.slice(0, match.index),
+    href,
+    label: match[1] || '出处',
+  }
+}
+
+function ChatMarkdownPre({ children, streaming, ...props }: HTMLAttributes<HTMLPreElement> & { streaming?: boolean }) {
   const preview = getRenderableCodePreview(children)
   if (!preview) return <pre {...props}>{children}</pre>
-  return <ChatCodePreview preview={preview} preProps={props} />
+  return <ChatCodePreview preview={preview} preProps={props} streaming={streaming === true} />
 }
 
 function ChatCodePreview({
   preview,
   preProps,
+  streaming,
 }: {
   preview: RenderableCodePreview
   preProps: HTMLAttributes<HTMLPreElement>
+  streaming: boolean
 }) {
   const [tab, setTab] = useState<'preview' | 'code'>('preview')
   const [collapsed, setCollapsed] = useState(false)
   const [frameHeight, setFrameHeight] = useState(360)
+  const [mermaidResult, setMermaidResult] = useState<MermaidPreviewResult | null>(null)
   const frameRef = useRef<HTMLIFrameElement | null>(null)
-  const measureFrameHeight = useCallback(() => {
+  const pendingPreviewWriteRef = useRef<number | null>(null)
+  const lastFrameWidthRef = useRef(0)
+  const mermaidAttemptedCodeRef = useRef('')
+  const mermaidInFlightRef = useRef(false)
+  const mermaidLatestCodeRef = useRef('')
+  const mermaidRenderSessionRef = useRef(0)
+  const mermaidRenderTimerRef = useRef<number | null>(null)
+  const mermaidStreamingRef = useRef(streaming)
+  const framePreview = getPreviewFrameContent(preview, mermaidResult, streaming)
+  mermaidStreamingRef.current = streaming
+
+  const scheduleMermaidRender = (delay: number) => {
+    if (mermaidRenderTimerRef.current != null || mermaidInFlightRef.current) return
+    mermaidRenderTimerRef.current = window.setTimeout(() => {
+      mermaidRenderTimerRef.current = null
+      void runMermaidRender()
+    }, delay)
+  }
+
+  const runMermaidRender = async () => {
+    if (mermaidInFlightRef.current) return
+    const session = mermaidRenderSessionRef.current
+    const code = mermaidLatestCodeRef.current
+    if (!code || code === mermaidAttemptedCodeRef.current) return
+
+    mermaidAttemptedCodeRef.current = code
+    mermaidInFlightRef.current = true
+    try {
+      const svg = await renderMermaidDiagram(code)
+      if (session === mermaidRenderSessionRef.current) {
+        setMermaidResult({ code, svg })
+      }
+    } catch (error) {
+      if (session === mermaidRenderSessionRef.current) {
+        setMermaidResult(current => mermaidStreamingRef.current && current?.svg ? current : {
+          code,
+          error: mermaidStreamingRef.current ? undefined : formatError(error),
+        })
+      }
+    } finally {
+      mermaidInFlightRef.current = false
+      if (session === mermaidRenderSessionRef.current && mermaidLatestCodeRef.current !== mermaidAttemptedCodeRef.current) {
+        scheduleMermaidRender(mermaidStreamingRef.current ? 120 : 0)
+      }
+    }
+  }
+
+  const measureFrameHeight = useCallback((mode: 'fit' | 'grow' = 'fit') => {
     const doc = frameRef.current?.contentDocument
     if (!doc) return
     const body = doc.body
-    const root = doc.documentElement
+    const previewRoot = doc.getElementById('preview-root')
+    const bodyStyle = body ? doc.defaultView?.getComputedStyle(body) : null
+    const verticalPadding = bodyStyle
+      ? Number.parseFloat(bodyStyle.paddingTop || '0') + Number.parseFloat(bodyStyle.paddingBottom || '0')
+      : 0
+    const rootRect = previewRoot?.getBoundingClientRect()
     const height = Math.max(
-      root?.scrollHeight ?? 0,
-      root?.offsetHeight ?? 0,
-      body?.scrollHeight ?? 0,
-      body?.offsetHeight ?? 0,
-    )
-    if (height > 0) setFrameHeight(clampPreviewFrameHeight(height + 2))
+      previewRoot?.scrollHeight ?? 0,
+      previewRoot?.offsetHeight ?? 0,
+      rootRect?.height ?? 0,
+    ) + verticalPadding
+    if (height > 0) {
+      const nextHeight = clampPreviewFrameHeight(height + 2)
+      setFrameHeight(current => mode === 'grow' ? Math.max(current, nextHeight) : nextHeight)
+    }
   }, [])
 
   useEffect(() => {
     setFrameHeight(360)
     setCollapsed(false)
-  }, [preview.srcDoc])
+  }, [preview.kind])
+
+  useEffect(() => {
+    if (preview.kind !== 'mermaid') {
+      mermaidAttemptedCodeRef.current = ''
+      mermaidLatestCodeRef.current = ''
+      mermaidRenderSessionRef.current += 1
+      if (mermaidRenderTimerRef.current != null) {
+        window.clearTimeout(mermaidRenderTimerRef.current)
+        mermaidRenderTimerRef.current = null
+      }
+      setMermaidResult(null)
+    }
+  }, [preview.kind])
+
+  useEffect(() => {
+    const code = getMermaidRenderCode(preview.code, streaming)
+    if (preview.kind !== 'mermaid') return
+    if (!code) {
+      if (!streaming) setMermaidResult(null)
+      return
+    }
+
+    mermaidLatestCodeRef.current = code
+    scheduleMermaidRender(streaming ? 80 : 0)
+  }, [preview.code, preview.kind, streaming])
+
+  useEffect(() => {
+    return () => {
+      mermaidRenderSessionRef.current += 1
+      if (mermaidRenderTimerRef.current != null) {
+        window.clearTimeout(mermaidRenderTimerRef.current)
+        mermaidRenderTimerRef.current = null
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (tab !== 'preview') return
-    const frame = requestAnimationFrame(measureFrameHeight)
-    return () => cancelAnimationFrame(frame)
-  }, [measureFrameHeight, tab, preview.srcDoc])
+    if (pendingPreviewWriteRef.current != null) window.clearTimeout(pendingPreviewWriteRef.current)
+    pendingPreviewWriteRef.current = window.setTimeout(() => {
+      pendingPreviewWriteRef.current = null
+      const wrote = writePreviewFrameContent(frameRef.current, framePreview)
+      if (streaming) {
+        if (wrote) requestAnimationFrame(() => measureFrameHeight('grow'))
+        return
+      }
+      requestAnimationFrame(() => measureFrameHeight('fit'))
+    }, streaming ? 120 : 0)
+    return () => {
+      if (pendingPreviewWriteRef.current != null) {
+        window.clearTimeout(pendingPreviewWriteRef.current)
+        pendingPreviewWriteRef.current = null
+      }
+    }
+  }, [framePreview.html, framePreview.kind, measureFrameHeight, streaming, tab])
+
+  useEffect(() => {
+    if (tab !== 'preview') return
+    const frame = frameRef.current
+    if (!frame || typeof ResizeObserver === 'undefined') return
+    let frameId: number | null = null
+    lastFrameWidthRef.current = frame.getBoundingClientRect().width
+    const observer = new ResizeObserver(entries => {
+      const width = entries[0]?.contentRect.width ?? frame.getBoundingClientRect().width
+      if (Math.abs(width - lastFrameWidthRef.current) < 1) return
+      lastFrameWidthRef.current = width
+      if (frameId != null) cancelAnimationFrame(frameId)
+      frameId = requestAnimationFrame(() => {
+        frameId = null
+        measureFrameHeight('fit')
+      })
+    })
+    observer.observe(frame)
+    return () => {
+      if (frameId != null) cancelAnimationFrame(frameId)
+      observer.disconnect()
+    }
+  }, [measureFrameHeight, tab])
 
   const effectiveFrameHeight = collapsed ? Math.min(frameHeight, 260) : frameHeight
 
@@ -1319,10 +1565,13 @@ function ChatCodePreview({
           ref={frameRef}
           className="chat-code-preview-frame"
           sandbox="allow-same-origin"
-          srcDoc={preview.srcDoc}
+          srcDoc={PREVIEW_SHELL_DOCUMENT}
           style={{ height: effectiveFrameHeight }}
           title={`${preview.label} preview`}
-          onLoad={measureFrameHeight}
+          onLoad={() => {
+            writePreviewFrameContent(frameRef.current, framePreview)
+            requestAnimationFrame(() => measureFrameHeight(streaming ? 'grow' : 'fit'))
+          }}
         />
       ) : (
         <pre {...preProps}><code className={preview.className}>{preview.code}</code></pre>
@@ -1337,9 +1586,24 @@ function clampPreviewFrameHeight(height: number): number {
 
 interface RenderableCodePreview {
   label: string
-  srcDoc: string
+  kind: RenderableCodePreviewKind
+  html: string
   code: string
   className?: string
+}
+
+type RenderableCodePreviewKind = PreviewFrameKind | 'mermaid'
+type PreviewFrameKind = 'svg' | 'html'
+
+interface PreviewFrameContent {
+  kind: PreviewFrameKind
+  html: string
+}
+
+interface MermaidPreviewResult {
+  code: string
+  svg?: string
+  error?: string
 }
 
 function getRenderableCodePreview(children: ReactNode): RenderableCodePreview | null {
@@ -1347,27 +1611,52 @@ function getRenderableCodePreview(children: ReactNode): RenderableCodePreview | 
   if (!isValidElement(child)) return null
   const element = child as ReactElement<{ className?: string; children?: ReactNode }>
   const className = element.props.className ?? ''
-  const language = /\blanguage-(html|svg)\b/i.exec(className)?.[1]?.toLowerCase()
+  const language = normalizeCodeLanguage(/\blanguage-([^\s]+)\b/i.exec(className)?.[1])
   const code = flattenReactText(element.props.children).trim()
-  if (!code) return null
+  return getRenderableCodePreviewFromCode(language, code, className)
+}
 
-  if (language === 'svg' || looksLikeSVG(code)) {
+function getRenderableCodePreviewFromCode(language: string | undefined, rawCode: string, className?: string): RenderableCodePreview | null {
+  const normalizedLanguage = normalizeCodeLanguage(language)
+  const code = rawCode.trim()
+  if (!code) return null
+  if (normalizedLanguage === 'mermaid' || normalizedLanguage === 'mmd') {
+    const mermaidCode = rawCode.trimStart()
+    return {
+      label: 'Mermaid',
+      kind: 'mermaid',
+      html: mermaidCode,
+      code: mermaidCode,
+      className,
+    }
+  }
+  if (normalizedLanguage === 'svg' || looksLikeSVG(code)) {
     return {
       label: 'SVG',
-      srcDoc: createSVGPreviewDocument(code),
+      kind: 'svg',
+      html: code,
       code,
       className,
     }
   }
-  if (language === 'html' || looksLikeHTML(code)) {
+  if (normalizedLanguage === 'html' || looksLikeHTML(code)) {
     return {
       label: 'HTML',
-      srcDoc: createHTMLPreviewDocument(code),
+      kind: 'html',
+      html: code,
       code,
       className,
     }
   }
   return null
+}
+
+function normalizeCodeLanguage(value: string | undefined): string | undefined {
+  return value?.trim().split(/\s+/, 1)[0]?.replace(/^language-/i, '').toLowerCase()
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function looksLikeSVG(value: string): boolean {
@@ -1378,12 +1667,105 @@ function looksLikeHTML(value: string): boolean {
   return /^\s*(?:<!doctype\s+html|<html[\s>]|<body[\s>]|<(?:div|main|section|article|style|canvas|table|form|button|h[1-6]|p|ul|ol|svg)[\s>])/i.test(value)
 }
 
-function createSVGPreviewDocument(svg: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;min-height:100%;background:#fff}body{display:grid;place-items:center;padding:16px;box-sizing:border-box}svg{max-width:100%;height:auto}</style></head><body>${svg}</body></html>`
+const PREVIEW_SHELL_DOCUMENT = [
+  '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">',
+  '<style>',
+  'html,body{margin:0;min-height:100%;overflow:hidden;background:#fff;color:#111827;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}',
+  'body{box-sizing:border-box}',
+  'body[data-preview-kind="svg"]{display:grid;place-items:center;padding:16px}',
+  'body[data-preview-kind="html"]{display:block;padding:0}',
+  '#preview-root,#preview-buffer{width:100%;box-sizing:border-box}',
+  'body[data-preview-kind="svg"] #preview-root{display:grid;place-items:center}',
+  'body[data-preview-kind="html"] #preview-root{display:flow-root}',
+  '#preview-buffer{position:absolute;left:-100000px;top:0;visibility:hidden;pointer-events:none;overflow:hidden}',
+  '.preview-status{display:grid;min-height:220px;place-items:center;padding:24px;color:#64748b;font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-align:center}',
+  '.preview-status.is-error{color:#b91c1c;white-space:pre-wrap}',
+  'svg{max-width:100%;height:auto}',
+  '</style></head><body data-preview-kind="html"><div id="preview-root"></div><div id="preview-buffer"></div></body></html>',
+].join('')
+
+const previewFrameContentCache = new WeakMap<HTMLIFrameElement, string>()
+
+function getPreviewFrameContent(preview: RenderableCodePreview, mermaidResult: MermaidPreviewResult | null, streaming: boolean): PreviewFrameContent {
+  if (preview.kind !== 'mermaid') return { kind: preview.kind, html: preview.html }
+  if (mermaidResult?.svg) return { kind: 'svg', html: mermaidResult.svg }
+  if (mermaidResult?.error && !streaming) {
+    return {
+      kind: 'html',
+      html: `<div class="preview-status is-error">Mermaid render failed:\n${escapeHTML(mermaidResult.error)}</div>`,
+    }
+  }
+  return {
+    kind: 'html',
+    html: '<div class="preview-status">Rendering Mermaid diagram...</div>',
+  }
 }
 
-function createHTMLPreviewDocument(html: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;min-height:100%;background:#fff;color:#111827;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}</style></head><body>${html}</body></html>`
+function writePreviewFrameContent(frame: HTMLIFrameElement | null, preview: PreviewFrameContent): boolean {
+  const doc = frame?.contentDocument
+  const root = doc?.getElementById('preview-root')
+  const buffer = doc?.getElementById('preview-buffer')
+  const cacheKey = `${preview.kind}\n${preview.html}`
+  if (!frame || !doc || !root || !buffer || previewFrameContentCache.get(frame) === cacheKey) return false
+  doc.body.dataset.previewKind = preview.kind
+  buffer.innerHTML = getPreviewParseHTML(preview)
+  if (!hasRenderablePreviewContent(buffer, preview.kind)) return false
+  root.replaceChildren(...Array.from(buffer.childNodes).map(node => node.cloneNode(true)))
+  buffer.replaceChildren()
+  previewFrameContentCache.set(frame, cacheKey)
+  return true
+}
+
+function getPreviewParseHTML(preview: PreviewFrameContent): string {
+  if (preview.kind !== 'svg' || /<\/svg\s*>/i.test(preview.html)) return preview.html
+  return `${preview.html}\n</svg>`
+}
+
+function hasRenderablePreviewContent(root: HTMLElement, kind: PreviewFrameKind): boolean {
+  if (kind === 'svg') return Boolean(root.querySelector('svg'))
+  return root.childNodes.length > 0
+}
+
+let mermaidModulePromise: Promise<typeof import('mermaid')> | null = null
+let mermaidRenderCounter = 0
+
+async function getMermaidModule(): Promise<typeof import('mermaid')> {
+  if (!mermaidModulePromise) {
+    mermaidModulePromise = import('mermaid').then(module => {
+      module.default.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: 'default',
+      })
+      return module
+    })
+  }
+  return mermaidModulePromise
+}
+
+async function renderMermaidDiagram(code: string): Promise<string> {
+  const { default: mermaid } = await getMermaidModule()
+  const id = `rebook-mermaid-${++mermaidRenderCounter}`
+  const result = await mermaid.render(id, code)
+  return result.svg
+}
+
+function getMermaidRenderCode(code: string, streaming: boolean): string {
+  const value = code.trimStart()
+  if (!streaming) return value.trim()
+  if (/\r?\n\s*$/.test(value)) return value.trim()
+  const trimmed = value.trimEnd()
+  const lines = trimmed.split(/\r?\n/)
+  if (lines.length <= 1) return trimmed.trim()
+  return lines.slice(0, -1).join('\n').trim()
+}
+
+function escapeHTML(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
 }
 
 function flattenReactText(value: unknown): string {
@@ -1641,15 +2023,11 @@ function resolveChatCommand(input: string): { prompt?: string; error?: string; i
 
 interface RebookJumpTarget {
   unitIndex: number
-  unitId?: string
-  unitKind?: string
-  sectionIndex?: number
-  pageIndex?: number
   blockId?: string
 }
 
 function isRebookJumpHref(href: string): boolean {
-  return href.startsWith('rebook://jump')
+  return href.startsWith('rebook://j/')
 }
 
 function transformChatMarkdownUrl(value: string): string {
@@ -1660,21 +2038,14 @@ function transformChatMarkdownUrl(value: string): string {
 function parseRebookJumpHref(href: string): RebookJumpTarget | null {
   try {
     const url = new URL(href)
-    if (url.protocol !== 'rebook:' || url.hostname !== 'jump') return null
-    const rawUnitIndex = url.searchParams.get('unitIndex') ?? url.searchParams.get('sectionIndex') ?? url.searchParams.get('pageIndex')
+    if (url.protocol !== 'rebook:' || url.hostname !== 'j') return null
+    const [rawUnitIndex, ...rawBlockParts] = url.pathname.split('/').filter(Boolean)
     const unitIndex = Number(rawUnitIndex)
     if (!Number.isInteger(unitIndex) || unitIndex < 0) return null
-    const sectionIndexParam = url.searchParams.get('sectionIndex')
-    const pageIndexParam = url.searchParams.get('pageIndex')
-    const sectionIndex = sectionIndexParam == null ? undefined : Number(sectionIndexParam)
-    const pageIndex = pageIndexParam == null ? undefined : Number(pageIndexParam)
+    const rawBlockId = rawBlockParts.join('/')
     return {
       unitIndex,
-      unitId: url.searchParams.get('unitId') || url.searchParams.get('sectionId') || undefined,
-      unitKind: url.searchParams.get('unitKind') || (sectionIndexParam != null ? 'section' : pageIndexParam != null ? 'page' : undefined),
-      sectionIndex: Number.isInteger(sectionIndex) ? sectionIndex : undefined,
-      pageIndex: Number.isInteger(pageIndex) ? pageIndex : undefined,
-      blockId: url.searchParams.get('blockId') || undefined,
+      blockId: rawBlockId ? decodeURIComponent(rawBlockId) : undefined,
     }
   } catch {
     return null
@@ -1900,7 +2271,8 @@ function formatMs(value: number) {
 
 function clampPanelWidth(value: string | number) {
   const number = typeof value === 'number' ? value : Number(value)
-  return Math.max(320, Math.min(760, Number.isFinite(number) ? number : 420))
+  const viewportMax = typeof window === 'undefined' ? 1120 : Math.max(420, window.innerWidth - 160)
+  return Math.max(320, Math.min(1120, viewportMax, Number.isFinite(number) ? number : 420))
 }
 
 function panelButtonClass(active: boolean) {

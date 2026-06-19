@@ -265,7 +265,7 @@ export function createAIChatTools(book: Book, options: AIChatOptions, context: A
             execute: async ({ maxItems }) => getTOCItems(book, maxItems ?? 80),
         }),
         searchBook: tool({
-            description: '在全书或当前内容单元中搜索关键词，返回带上下文和 citation.href 的匹配片段；回答中引用这些片段时应复制 citation.href 生成 Markdown 链接。',
+            description: '在全书或当前内容单元中搜索关键词，返回带上下文和 citation.href 的匹配片段；只要回答使用这些原文片段，就必须复制 citation.href 生成 Markdown 引用链接。',
             inputSchema: jsonSchema<{ query: string; scope?: SearchScope; unitIndex?: number; maxResults?: number }>({
                 type: 'object',
                 properties: {
@@ -292,7 +292,7 @@ export function createAIChatTools(book: Book, options: AIChatOptions, context: A
             },
         }),
         getContent: tool({
-            description: '获取指定内容单元正文和 block 级 citation.href。适合回答需要引用当前章节/当前页内容、总结并给出可点击出处的问题。',
+            description: '获取指定内容单元正文和 block 级 citation.href。只要回答使用该正文内容、总结该内容或解释其中观点，就必须在对应结论后添加可点击引用。',
             inputSchema: jsonSchema<{ unitIndex?: number; maxChars?: number }>({
                 type: 'object',
                 properties: {
@@ -309,7 +309,7 @@ export function createAIChatTools(book: Book, options: AIChatOptions, context: A
             },
         }),
         getCurrentContext: tool({
-            description: '获取当前阅读位置附近的内容单元文本，可用于回答“本章总结”“当前页讲什么”“这里是什么意思”等上下文问题。',
+            description: '获取当前阅读位置附近的内容单元文本和 block 级 citation.href；用于回答“本章总结”“当前页讲什么”“这里是什么意思”等上下文问题，并必须为涉及原文的结论添加可点击引用。',
             inputSchema: jsonSchema<{ before?: number; after?: number; maxChars?: number }>({
                 type: 'object',
                 properties: {
@@ -410,7 +410,7 @@ async function getCurrentContext(book: Book, options: AIChatContextOptions = {})
     let remaining = maxChars
 
     for (let index = start; index <= end && remaining > 0; index++) {
-        const content = await getContent(book, index, remaining)
+        const content = await getContent(book, index, remaining, { includeBlocks: true })
         units.push(content)
         remaining -= content.text.length
     }
@@ -579,20 +579,33 @@ function buildSystemPrompt(book: Book, options: AIChatOptions, current?: AIChatR
         '# 回答格式',
         '- 回答尽量简洁、结构清晰。',
         '- 可以使用 Markdown。',
-        '- 基于书中内容回答时，优先在对应观点后添加可点击引用，而不是只标明标题或 unitIndex。',
+        '- 基于书中内容回答时，必须在对应观点后添加可点击引用，而不是只标明标题或 unitIndex。',
         '',
         '# 可点击引用规则',
-        '- searchBook 和 getContent 的结果会尽量提供 citation.href；getContent 的 blocks 也会提供 blockId、blockType、unitIndex、unitId、unitKind。',
-        '- 只要回答涉及书中具体内容、章节总结、概念解释、情节/人物/术语分析、检索结果或对原文观点的归纳，就应当使用工具并生成可点击引用。',
-        '- 生成引用的优先级：优先复制工具返回的 citation.href；如果没有 citation.href 但有 blockId，则按规则生成 rebook://jump 链接；如果两者都没有，才只标注标题或 unitIndex。',
-        '- 当工具结果提供 citation.href 时，必须逐字复制 citation.href，用 Markdown 链接生成可点击出处：`[章节或段落说明](citation.href)`。',
-        '- 当工具结果没有 citation.href 但提供 blockId 时，必须使用工具返回的字段生成链接：`rebook://jump?unitIndex=<unitIndex>&unitId=<encodeURIComponent(unitId)>&unitKind=<unitKind>&blockId=<encodeURIComponent(blockId)>&blockType=<encodeURIComponent(blockType)>`。',
-        '- 如果 blockType 缺失，可以省略 blockType 参数；unitId、unitKind、blockId 必须来自工具结果，不要根据文本自行猜测。',
-        '- blockId 引用示例：`[出处](rebook://jump?unitIndex=12&unitId=OEBPS%2Fxhtml%2Fchapter2.xhtml&unitKind=section&blockId=paragraph-21&blockType=paragraph)`。',
+        '- 引用不是某个工具的专属格式；任何工具或额外工具只要返回 citation.href、blocks[].citation.href、blockId 或可定位字段，都应视为可引用出处。',
+        '- 只要回答涉及书中具体内容、章节总结、概念解释、情节/人物/术语分析、检索结果、对原文观点的归纳或对某段文字的解释，就必须先使用工具取得原文依据，并生成可点击引用。',
+        '- 总结类回答也必须引用：每个主要主题、关键概念、重要结论或列表项后面至少放一个支持它的引用；不要因为是概括、归纳或改写就省略引用。',
+        '- 引用生成优先级：优先复制离被使用原文最近的短 citation.href，例如 block.citation.href、result.citation.href、unit.blocks[].citation.href；如果没有 citation.href 但有 blockId 和 unitIndex，则按 path 短格式生成 rebook://j 链接；如果两者都没有，才只标注标题或 unitIndex。',
+        '- 当工具结果提供 citation.href 时，必须逐字复制 citation.href，用 Markdown 链接生成可点击出处：`[出处](citation.href)`。',
+        '- 当工具结果没有 citation.href 但提供 blockId 时，必须使用同一条工具结果或其父级内容单元里的字段生成短链接：`rebook://j/<unitIndex>/<encodeURIComponent(blockId)>`。',
+        '- 如果只定位到内容单元而没有 blockId，使用短链接：`rebook://j/<unitIndex>`。',
+        '- blockId 引用示例：`[出处](rebook://j/12/paragraph-21)`。',
+        '- 禁止生成 `rebook://j?...` query 形式；引用链接只能使用 `rebook://j/<unitIndex>` 或 `rebook://j/<unitIndex>/<blockId>` path 形式。',
         '- 引用应放在它支持的具体观点、句子或列表项后面；不要只把所有引用集中放在文末。',
-        '- 每个主要结论、关键概念或检索命中，原则上至少给一个可点击引用。',
-        '- 只有在寒暄、说明自身能力、解释如何使用功能、用户明确不需要出处，或工具结果既没有 citation.href 也没有 blockId 时，才可以不生成可点击引用。',
-        '- 禁止编造 unitIndex、unitId、unitKind、blockId、blockType；所有定位字段必须来自工具结果。',
+        '- 输出前自检：如果最终回答包含书中事实或原文归纳，但没有任何 `rebook://j/` Markdown 链接，应补充引用后再回答。',
+        '- 只有在寒暄、说明自身能力、解释如何使用功能、用户明确不需要出处，或工具结果没有任何可定位字段时，才可以不生成可点击引用。',
+        '- 禁止编造 unitIndex 或 blockId；短链接路径里的第一个片段必须来自工具结果的 unitIndex，第二个片段必须来自工具结果的 blockId。',
+        '',
+        '# SVG/HTML/Mermaid 生成规则',
+        '- 只有当用户明确要求图示、可视化、页面、卡片、流程图、表格预览或交互示例时，才生成 SVG、HTML 或 Mermaid 代码。',
+        '- 生成可预览代码时，默认只输出一个 fenced code block，并使用 `mermaid`、`svg` 或 `html` 语言标记；代码块前后不要附加冗长解释。',
+        '- 以“足够表达需求的最小代码”为目标：省略注释、元数据、占位内容、重复样式、无关 aria、无用 wrapper 和外部依赖。',
+        '- 流程图、时序图、状态图、关系图、概念结构图优先用 Mermaid；需要精细视觉造型时再用 SVG；HTML 只用于复杂布局或需要交互时。',
+        '- Mermaid 应使用紧凑语法，节点文案短，避免 init 配置块、主题配置、HTML label 和重复样式，除非用户明确要求。',
+        '- HTML 默认输出 body 片段，不要输出 `<!doctype>`、`html`、`head`、`body` 样板，除非用户要求完整文档。',
+        '- SVG 默认省略 XML 声明、命名空间以外的样板和复杂滤镜；使用 `viewBox`、少量基础图形、共享属性或短 class，避免超长 path、base64、图片内嵌和大段重复文本。',
+        '- CSS 应合并重复规则，优先短 class 和共享选择器；不要为每个元素复制大段 inline style。JS 只有在用户明确要求交互时才加入。',
+        '- 保持代码可读但紧凑；不要为了美化输出大量空行或装饰性元素。若需求可能导致代码很长，先给最小可用版本。',
         '',
         '# 书籍信息',
         `- 书名：${title}`,

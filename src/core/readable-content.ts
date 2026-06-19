@@ -206,20 +206,12 @@ export function createReadableContentCitation(
         unit.title || (unit.kind === 'page' ? `Page ${unit.index + 1}` : `Section ${unit.index + 1}`),
         unit.kind === 'section' ? block?.id : undefined,
     ].filter(Boolean).join(' · ')
-    const params = new URLSearchParams({
-        unitIndex: String(unit.index),
-        unitId: String(unit.id),
-        unitKind: unit.kind,
-    })
-    if (typeof unit.sectionIndex === 'number') params.set('sectionIndex', String(unit.sectionIndex))
-    if (typeof unit.pageIndex === 'number') params.set('pageIndex', String(unit.pageIndex))
-    if (unit.kind === 'section' && block?.id) {
-        params.set('blockId', block.id)
-        params.set('blockType', block.type)
-    }
+    const href = unit.kind === 'section' && block?.id
+        ? `rebook://j/${unit.index}/${encodeURIComponent(block.id)}`
+        : `rebook://j/${unit.index}`
     return {
         label,
-        href: `rebook://jump?${params.toString()}`,
+        href,
         unitIndex: unit.index,
         unitId: unit.id,
         unitKind: unit.kind,
