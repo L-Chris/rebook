@@ -6,12 +6,26 @@
  * adapters.
  */
 
-import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, RebookPlugin, TOCItem } from './types'
+import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, TOCItem } from './types'
 import type { ParserInput, ParserOptions } from './parser'
 import type { BookRange, TextChunk, TextProvider, TextSearchResult } from './location'
 import type { PageSurface } from './page-surface'
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from './renderer'
 import type { ReaderThemeInput } from './theme'
+import {
+    createRebookExtensionHost,
+    createRebookExtensionRegistry,
+    isRebookExtension,
+    type RebookExtensionCommandRegistration,
+    type RebookExtensionContributionIndex,
+    type RebookExtension,
+    type RebookExtensionHost,
+    type RebookExtensionManifest,
+    type RebookExtensionSettingInspection,
+    type RebookExtensionRegistry,
+    type RebookExtensionRegistryInstallOptions,
+    type RebookPluginLike,
+} from './extensions'
 import type { TrialLimitController, TrialTOCAccessItem } from '../plugins/trial-limit'
 import { registry } from './parser'
 import { applyRebookPlugins } from './plugins'
@@ -36,7 +50,7 @@ export interface ReaderSessionConfig {
     /** Parser options, including platform adapters. */
     parserOptions?: ParserOptions | (() => ParserOptions)
     /** Plugins to transform the book before rendering. */
-    plugins?: readonly RebookPlugin[]
+    plugins?: readonly RebookPluginLike[]
 }
 
 export interface TOCViewItem {
@@ -66,6 +80,9 @@ export class ReaderSession {
     private renderer: Renderer
     private book: Book | null = null
     private config: ReaderSessionConfig
+    private readonly extensionRegistry: RebookExtensionRegistry = createRebookExtensionRegistry()
+    private readonly extensionHost: RebookExtensionHost = createRebookExtensionHost()
+    private readonly pluginEntries: RebookPluginLike[] = []
     private registeredListeners: Array<{
         event: string
         listener: (e: any) => void
@@ -74,6 +91,7 @@ export class ReaderSession {
 
     constructor(config: ReaderSessionConfig) {
         this.config = config
+        for (const plugin of config.plugins ?? []) this.addPluginEntry(plugin)
         this.renderer = this.createRenderer()
     }
 
@@ -86,7 +104,8 @@ export class ReaderSession {
 
         const book = await applyRebookPlugins(
             await registry.open(input, this.getParserOptions()),
-            this.config.plugins,
+            this.pluginEntries,
+            this.extensionHost,
         )
 
         this.book = book
@@ -101,7 +120,7 @@ export class ReaderSession {
         this.close()
         this.resetRenderer()
 
-        const book = await applyRebookPlugins(inputBook, this.config.plugins)
+        const book = await applyRebookPlugins(inputBook, this.pluginEntries, this.extensionHost)
 
         this.book = book
         await this.renderer.open(book)
@@ -119,6 +138,139 @@ export class ReaderSession {
      */
     getMetadata() {
         return this.book?.metadata
+    }
+
+    /**
+     * Install an extension for future book opens. Existing open books are not rewrapped automatically.
+     */
+    installExtension(
+        extension: RebookExtension,
+        options: RebookExtensionRegistryInstallOptions = {},
+    ): RebookExtension {
+        const existingIndex = this.pluginEntries.findIndex(entry =>
+            isRebookExtension(entry) && entry.manifest.id === extension.manifest.id,
+        )
+        const installed = this.extensionRegistry.install(extension, options)
+        if (existingIndex >= 0) {
+            this.extensionHost.subscriptions.deactivateExtension(installed.manifest.id)
+            this.extensionHost.commands.unregisterExtension(installed.manifest.id)
+        }
+        this.extensionHost.settings.registerExtension(installed.manifest)
+        if (existingIndex >= 0) {
+            this.pluginEntries[existingIndex] = installed
+        } else {
+            this.pluginEntries.push(installed)
+        }
+        return installed
+    }
+
+    /**
+     * Uninstall an extension by id for future book opens.
+     */
+    uninstallExtension(id: string): boolean {
+        const removed = this.extensionRegistry.uninstall(id)
+        if (!removed) return false
+        this.extensionHost.subscriptions.deactivateExtension(id)
+        this.extensionHost.commands.unregisterExtension(id)
+        this.extensionHost.settings.unregisterExtension(id)
+        for (let index = this.pluginEntries.length - 1; index >= 0; index--) {
+            const entry = this.pluginEntries[index]
+            if (isRebookExtension(entry) && entry.manifest.id === id) {
+                this.pluginEntries.splice(index, 1)
+            }
+        }
+        return true
+    }
+
+    /**
+     * Get an installed extension package by id.
+     */
+    getExtension(id: string): RebookExtension | undefined {
+        return this.extensionRegistry.get(id)
+    }
+
+    /**
+     * Check whether an extension package is installed.
+     */
+    hasExtension(id: string): boolean {
+        return this.extensionRegistry.has(id)
+    }
+
+    /**
+     * List installed extension packages.
+     */
+    getInstalledExtensions(): readonly RebookExtension[] {
+        return this.extensionRegistry.list()
+    }
+
+    /**
+     * List installed extension manifests for UI, settings, and future marketplace integrations.
+     */
+    getExtensionManifests(): readonly RebookExtensionManifest[] {
+        return this.extensionRegistry.manifests()
+    }
+
+    /**
+     * List typed contribution points declared by installed extensions.
+     */
+    getExtensionContributions(): RebookExtensionContributionIndex {
+        return this.extensionRegistry.contributions()
+    }
+
+    /**
+     * List commands registered by activated extensions.
+     */
+    getExtensionCommands(): readonly RebookExtensionCommandRegistration[] {
+        return this.extensionHost.commands.listCommands()
+    }
+
+    /**
+     * Check whether an activated extension command has a handler registered.
+     */
+    hasExtensionCommand(id: string): boolean {
+        return this.extensionHost.commands.hasCommand(id)
+    }
+
+    /**
+     * Execute a command registered during extension activation.
+     */
+    executeExtensionCommand<T = unknown>(id: string, ...args: readonly unknown[]): Promise<T> {
+        return this.extensionHost.commands.executeCommand<T>(id, ...args)
+    }
+
+    /**
+     * List settings declared by installed/activated extensions with effective values.
+     */
+    getExtensionSettings(extensionId?: string): readonly RebookExtensionSettingInspection[] {
+        return this.extensionHost.settings.list(extensionId)
+    }
+
+    /**
+     * Read one extension setting, falling back to the manifest default when present.
+     */
+    getExtensionSetting<T = unknown>(extensionId: string, key: string, fallback?: T): T {
+        return this.extensionHost.settings.get(extensionId, key, fallback)
+    }
+
+    /**
+     * Update one extension setting for subsequent command activation and plugin behavior.
+     */
+    updateExtensionSetting<T = unknown>(extensionId: string, key: string, value: T): void {
+        this.extensionHost.settings.update(extensionId, key, value)
+    }
+
+    /**
+     * Export host-managed extension setting values for persistence.
+     */
+    getExtensionSettingsSnapshot(): Record<string, Record<string, unknown>> {
+        return this.extensionHost.settings.toJSON()
+    }
+
+    /**
+     * Restore host-managed extension setting values from persisted state.
+     */
+    loadExtensionSettingsSnapshot(snapshot: Record<string, Record<string, unknown>> | undefined): void {
+        this.extensionHost.settings.load(snapshot)
     }
 
     /**
@@ -510,6 +662,14 @@ export class ReaderSession {
         return typeof this.config.parserOptions === 'function'
             ? this.config.parserOptions()
             : this.config.parserOptions
+    }
+
+    private addPluginEntry(entry: RebookPluginLike): void {
+        if (isRebookExtension(entry)) {
+            this.extensionRegistry.install(entry)
+            this.extensionHost.settings.registerExtension(entry.manifest)
+        }
+        this.pluginEntries.push(entry)
     }
 }
 

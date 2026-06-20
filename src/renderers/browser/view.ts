@@ -6,7 +6,7 @@
 
 import type { ParserOptions } from '../../core/parser'
 import type { NavigationDirection, RendererNavigationHooks } from '../../core/renderer'
-import type { RebookPlugin } from '../../core/types'
+import type { RebookPluginLike } from '../../core/extensions'
 import { ReaderSession, type ReaderSessionConfig } from '../../core/reader'
 import {
     BrowserAdaptiveRenderer,
@@ -32,7 +32,7 @@ export interface ReaderConfig extends BrowserRendererConfig {
     /** Parser options */
     parserOptions?: ParserOptions
     /** Plugins to transform the book before rendering */
-    plugins?: readonly RebookPlugin[]
+    plugins?: readonly RebookPluginLike[]
     /**
      * Content-engine override for fixed/page-native books. When omitted,
      * ReaderView mounts BrowserFixedRenderer behind BrowserAdaptiveRenderer.

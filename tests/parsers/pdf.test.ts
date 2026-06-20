@@ -1,9 +1,15 @@
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import { registry } from '../../src/core/parser'
 import { nodePdfRuntime } from '../../src/pdf/runtime/node'
 import { PDFParser, pdf } from '../../src/parsers/pdf'
 import { makeFlatePdf, makeOutlinePdf, makeSimplePdf, pdfUtf16BeHexString, pdfUtf8HexString } from '../fixtures/pdf-fixture'
+
+const PDF_WITHOUT_OUTLINE_FIXTURE = 'data/网络文学创作原理.pdf'
+const GB18030_PDF_FIXTURE = 'data/情景学习.pdf'
+const pdfWithoutOutlineTest = existsSync(PDF_WITHOUT_OUTLINE_FIXTURE) ? it : it.skip
+const gb18030PdfTest = existsSync(GB18030_PDF_FIXTURE) ? it : it.skip
 
 describe('PDFParser', () => {
     it('detects PDF inputs by extension and header', async () => {
@@ -60,8 +66,8 @@ describe('PDFParser', () => {
         expect(book.resolveHref?.(book.toc![0].href)).toEqual({ index: 0 })
     })
 
-    it('generates page TOC entries for PDFs without outlines', async () => {
-        const data = await readFile('data/网络文学创作原理.pdf')
+    pdfWithoutOutlineTest('generates page TOC entries for PDFs without outlines', async () => {
+        const data = await readFile(PDF_WITHOUT_OUTLINE_FIXTURE)
         const book = await new PDFParser().parse(data, {
             runtime: nodePdfRuntime,
             embeddedFonts: false,
@@ -76,8 +82,8 @@ describe('PDFParser', () => {
         })
     })
 
-    it('decodes legacy GB18030 text in PDFs without ToUnicode maps', async () => {
-        const data = await readFile('data/情景学习.pdf')
+    gb18030PdfTest('decodes legacy GB18030 text in PDFs without ToUnicode maps', async () => {
+        const data = await readFile(GB18030_PDF_FIXTURE)
         const book = await new PDFParser().parse(data, {
             runtime: nodePdfRuntime,
             embeddedFonts: false,

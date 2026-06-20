@@ -23,22 +23,41 @@ import {
   BrowserURLFactory,
   EBookError,
   UnsupportedFormatError,
+  createAIChatExtension,
+  createBuiltInRebookExtensionCatalog,
+  createProfessionalTranslationExtension,
   createReader,
+  createRebookExtensionCatalog,
+  createRebookExtensionManager,
+  createTTSExtension,
+  createTranslationExtension,
+  createTrialLimitExtension,
+  AI_CHAT_EXTENSION_ID,
+  PROFESSIONAL_TRANSLATION_EXTENSION_ID,
+  TRANSLATION_EXTENSION_ID,
+  TRIAL_LIMIT_EXTENSION_ID,
+  TTS_EXTENSION_ID,
   getReadableContentUnit,
   getReadableContentUnits,
+  loadRebookExtensionModule,
   registerBuiltInParsers,
   registry,
   resolveReadableContentUnitIndex,
   setRebookDebug,
   type BuiltInReaderThemeName,
+  type RebookExtension,
+  type RebookExtensionCatalogEntry,
+  type RebookExtensionCatalogItem,
+  type RebookExtensionInstallation,
+  type RebookExtensionManifest,
+  parseRebookExtensionCatalogEntries,
 } from '../../src/index.ts'
-import { withTrialLimit } from '../../src/plugins/trial-limit.ts'
-import { createBrowserTTSAudioPlayer, withTTS } from '../../src/plugins/tts.ts'
-import { withProfessionalTranslation, withTranslation } from '../../src/plugins/translation.ts'
-import { withAIChat } from '../../src/plugins/ai-chat.ts'
+import { createBrowserTTSAudioPlayer } from '../../src/plugins/tts.ts'
 
 type Panel = 'search' | 'chat' | null
-type SettingsSection = 'reading' | 'translation' | 'tts' | 'chat' | 'trial' | 'debug'
+type SettingsSection = 'reading' | 'extensions' | 'translation' | 'tts' | 'chat' | 'trial' | 'debug'
+type DemoExtensionInstallations = Record<string, RebookExtensionInstallation>
+type DemoExtensionRuntimeStatus = Record<string, { state: 'loaded' | 'loading' | 'error' | 'idle'; message: string }>
 
 interface DemoConfig {
   layout: 'paginated' | 'scrolled'
@@ -81,6 +100,9 @@ interface DemoConfig {
   chatModel: string
   chatMaxContentChars: string
   chatPanelWidth: string
+  extensionCatalogURL: string
+  extensionCatalogJSON: string
+  extensionInstallations: DemoExtensionInstallations
 }
 
 interface ChatMessage {
@@ -277,11 +299,15 @@ const defaultConfig: DemoConfig = {
   chatModel: '',
   chatMaxContentChars: '6000',
   chatPanelWidth: '420',
+  extensionCatalogURL: '',
+  extensionCatalogJSON: '',
+  extensionInstallations: {},
 }
 
 const domAdapter = new BrowserDOMAdapter()
 const urlFactory = new BrowserURLFactory()
 const parserOptions = { domAdapter, urlFactory }
+const builtInExtensionCatalog = createBuiltInRebookExtensionCatalog()
 
 registerBuiltInParsers(registry)
 
@@ -292,11 +318,14 @@ function App() {
   const bookRef = useRef<any>(null)
   const currentFileRef = useRef<File | null>(null)
   const ttsAbortRef = useRef<AbortController | null>(null)
+  const extensionRuntimeCacheRef = useRef(new Map<string, { installUrl: string; extension: RebookExtension }>())
   const ttsPlayer = useMemo(() => createBrowserTTSAudioPlayer(), [])
 
   const [config, setConfig] = useState<DemoConfig>(() => loadConfig())
   const configRef = useRef(config)
   const [draftConfig, setDraftConfig] = useState<DemoConfig>(config)
+  const [marketplaceRuntimeExtensions, setMarketplaceRuntimeExtensions] = useState<RebookExtension[]>([])
+  const [extensionRuntimeStatus, setExtensionRuntimeStatus] = useState<DemoExtensionRuntimeStatus>({})
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('reading')
   const [book, setBook] = useState<any>(null)
@@ -320,6 +349,10 @@ function App() {
   const [chatBusy, setChatBusy] = useState(false)
   const [chatPanelWidth, setChatPanelWidth] = useState(() => clampPanelWidth(config.chatPanelWidth))
   const [ttsStatus, setTTSStatus] = useState('TTS plugin disabled.')
+  const runtimeExtensionLoadKey = useMemo(() => JSON.stringify({
+    catalog: config.extensionCatalogJSON,
+    installations: config.extensionInstallations,
+  }), [config.extensionCatalogJSON, config.extensionInstallations])
 
   configRef.current = config
 
@@ -331,6 +364,72 @@ function App() {
     if (!configRef.current.debug) return
     pushDebugEntry(label, payload)
   }, [pushDebugEntry])
+
+  useEffect(() => {
+    const entries = getEnabledDemoMarketplaceExtensionItems(config)
+    let cancelled = false
+    if (!entries.length) {
+      setMarketplaceRuntimeExtensions([])
+      setExtensionRuntimeStatus({})
+      return
+    }
+
+    const loadingStatus: DemoExtensionRuntimeStatus = {}
+    for (const entry of entries) {
+      loadingStatus[entry.manifest.id] = {
+        state: entry.installUrl ? 'loading' : 'error',
+        message: entry.installUrl ? 'Loading runtime module...' : 'No installUrl is configured for this extension.',
+      }
+    }
+    setExtensionRuntimeStatus(loadingStatus)
+
+    void Promise.resolve().then(async () => {
+      const loaded: RebookExtension[] = []
+      const nextStatus: DemoExtensionRuntimeStatus = {}
+      for (const entry of entries) {
+        if (!entry.installUrl) {
+          nextStatus[entry.manifest.id] = {
+            state: 'error',
+            message: 'No installUrl is configured for this extension.',
+          }
+          continue
+        }
+        try {
+          const cached = extensionRuntimeCacheRef.current.get(entry.manifest.id)
+          const extension = cached?.installUrl === entry.installUrl
+            ? cached.extension
+            : await loadDemoMarketplaceExtension(entry)
+          extensionRuntimeCacheRef.current.set(entry.manifest.id, {
+            installUrl: entry.installUrl,
+            extension,
+          })
+          loaded.push(extension)
+          nextStatus[entry.manifest.id] = {
+            state: 'loaded',
+            message: `Loaded runtime from ${entry.installUrl}.`,
+          }
+        } catch (error) {
+          nextStatus[entry.manifest.id] = {
+            state: 'error',
+            message: `Runtime load failed: ${formatError(error)}`,
+          }
+          appendDebug('marketplace extension load failed', {
+            id: entry.manifest.id,
+            installUrl: entry.installUrl,
+            error: formatError(error),
+          })
+        }
+      }
+      if (!cancelled) {
+        setMarketplaceRuntimeExtensions(loaded)
+        setExtensionRuntimeStatus(nextStatus)
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [appendDebug, runtimeExtensionLoadKey])
 
   const scanReflowFigures = useCallback(() => ({
     ...createReflowDebugSnapshot(viewerRef.current),
@@ -485,7 +584,7 @@ function App() {
     const plugins: any[] = []
 
     if (cfg.trial) {
-      plugins.push(withTrialLimit({ maxPages: Number(cfg.trialPages) || 0 }))
+      plugins.push(createTrialLimitExtension({ maxPages: Number(cfg.trialPages) || 0 }))
     }
 
     if (cfg.translate) {
@@ -496,7 +595,7 @@ function App() {
       }
       if (cfg.professionalTranslation) {
         if (cfg.professionalServiceBaseUrl.trim() && cfg.professionalBookId.trim()) {
-          plugins.push(withProfessionalTranslation({
+          plugins.push(createProfessionalTranslationExtension({
             serviceBaseUrl: cfg.professionalServiceBaseUrl.trim(),
             bookId: cfg.professionalBookId.trim(),
             targetLanguage: 'zh-CN',
@@ -513,7 +612,7 @@ function App() {
       } else if (cfg.apiKey.trim()) {
         const model = createModel(cfg.apiKey, cfg.baseURL, cfg.model)
         if (model) {
-          plugins.push(withTranslation({
+          plugins.push(createTranslationExtension({
             model,
             targetLanguage: 'zh-CN',
             mode: () => configRef.current.translateMode,
@@ -547,13 +646,13 @@ function App() {
           ttsOptions.voiceProfile = createTTSVoiceProfile(cfg)
         }
       }
-      plugins.push(withTTS(ttsOptions))
+      plugins.push(createTTSExtension(ttsOptions))
     }
 
     if (cfg.chat) {
       const model = createModel(cfg.chatAPIKey, cfg.chatBaseURL, cfg.chatModel)
       if (model) {
-        plugins.push(withAIChat({
+        plugins.push(createAIChatExtension({
           model,
           maxContentChars: () => Number(configRef.current.chatMaxContentChars) || Number(defaultConfig.chatMaxContentChars),
           maxContextChars: () => Math.max(Number(configRef.current.chatMaxContentChars) || Number(defaultConfig.chatMaxContentChars), 20000),
@@ -574,8 +673,9 @@ function App() {
       }
     }
 
+    plugins.push(...marketplaceRuntimeExtensions)
     return plugins
-  }, [appendDebug, createModel, ttsPlayer])
+  }, [appendDebug, createModel, marketplaceRuntimeExtensions, ttsPlayer])
 
   const createDemoReader = useCallback((cfg: DemoConfig) => {
     if (!viewerRef.current) return null
@@ -631,6 +731,11 @@ function App() {
       ttsPlayer.destroy?.()
     }
   }, [])
+
+  useEffect(() => {
+    if (!readerRef.current) return
+    void resetReader(config)
+  }, [marketplaceRuntimeExtensions])
 
   useEffect(() => {
     document.title = `${bookTitle} - rebook`
@@ -1126,6 +1231,7 @@ function App() {
           setSection={setSettingsSection}
           config={draftConfig}
           setConfig={setDraftConfig}
+          extensionRuntimeStatus={extensionRuntimeStatus}
           onClose={() => setSettingsOpen(false)}
           onApply={() => void applyConfig()}
         />
@@ -2197,11 +2303,13 @@ function SettingsDialog(props: {
   setSection(section: SettingsSection): void
   config: DemoConfig
   setConfig(config: DemoConfig): void
+  extensionRuntimeStatus: DemoExtensionRuntimeStatus
   onClose(): void
   onApply(): void
 }) {
   const sections: Array<{ id: SettingsSection; label: string }> = [
     { id: 'reading', label: 'Reading' },
+    { id: 'extensions', label: 'Extensions' },
     { id: 'translation', label: 'Translation' },
     { id: 'tts', label: 'Text to Speech' },
     { id: 'chat', label: 'AI Chat' },
@@ -2237,7 +2345,13 @@ function SettingsDialog(props: {
             </button>
           </div>
           <div className="min-h-0 flex-1 overflow-auto p-5">
-            <SettingsSectionForm section={props.section} config={props.config} setConfig={props.setConfig} />
+            <SettingsSectionForm
+              section={props.section}
+              setSection={props.setSection}
+              config={props.config}
+              setConfig={props.setConfig}
+              extensionRuntimeStatus={props.extensionRuntimeStatus}
+            />
           </div>
           <div className="flex justify-end gap-2 border-t border-slate-200 p-4">
             <button className="toolbar-button" type="button" onClick={props.onClose}>Cancel</button>
@@ -2249,7 +2363,19 @@ function SettingsDialog(props: {
   )
 }
 
-function SettingsSectionForm({ section, config, setConfig }: { section: SettingsSection; config: DemoConfig; setConfig(config: DemoConfig): void }) {
+function SettingsSectionForm({
+  section,
+  setSection,
+  config,
+  setConfig,
+  extensionRuntimeStatus,
+}: {
+  section: SettingsSection
+  setSection(section: SettingsSection): void
+  config: DemoConfig
+  setConfig(config: DemoConfig): void
+  extensionRuntimeStatus: DemoExtensionRuntimeStatus
+}) {
   const update = <K extends keyof DemoConfig>(key: K, value: DemoConfig[K]) => setConfig({ ...config, [key]: value })
   if (section === 'reading') {
     return (
@@ -2261,6 +2387,16 @@ function SettingsSectionForm({ section, config, setConfig }: { section: Settings
         <SelectField label="Theme" value={config.theme} onChange={value => update('theme', value as DemoConfig['theme'])} options={[['normal', 'Normal'], ['night', 'Night']]} />
         <CheckField label="Hyphenate" checked={config.hyphenate} onChange={value => update('hyphenate', value)} />
       </FormGrid>
+    )
+  }
+  if (section === 'extensions') {
+    return (
+      <ExtensionsSettings
+        config={config}
+        setConfig={setConfig}
+        setSection={setSection}
+        extensionRuntimeStatus={extensionRuntimeStatus}
+      />
     )
   }
   if (section === 'translation') {
@@ -2333,6 +2469,187 @@ function SettingsSectionForm({ section, config, setConfig }: { section: Settings
   )
 }
 
+function ExtensionsSettings({
+  config,
+  setConfig,
+  setSection,
+  extensionRuntimeStatus,
+}: {
+  config: DemoConfig
+  setConfig(config: DemoConfig): void
+  setSection(section: SettingsSection): void
+  extensionRuntimeStatus: DemoExtensionRuntimeStatus
+}) {
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [catalogStatus, setCatalogStatus] = useState('')
+  const marketplaceCatalog = getDemoMarketplaceCatalogParseResult(config)
+  const extensionItems = createDemoExtensionManager(config).listItems()
+
+  const loadMarketplaceCatalog = async () => {
+    const url = config.extensionCatalogURL.trim()
+    if (!url) {
+      setCatalogStatus('Enter a catalog URL first.')
+      return
+    }
+    setCatalogLoading(true)
+    setCatalogStatus('')
+    try {
+      const response = await fetch(url)
+      if (!response.ok) throw new Error(`Catalog request failed with ${response.status}`)
+      const text = await response.text()
+      parseRebookExtensionCatalogEntries(JSON.parse(text), { source: 'marketplace' })
+      setConfig(normalizeConfig({ ...config, extensionCatalogJSON: text }))
+      setCatalogStatus('Catalog loaded.')
+    } catch (error) {
+      setCatalogStatus(`Catalog load failed: ${formatError(error)}`)
+    } finally {
+      setCatalogLoading(false)
+    }
+  }
+
+  return (
+    <div className="grid gap-3">
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-slate-900">Marketplace catalog</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Load a schemaVersion 1 extension catalog. Installed marketplace entries are stored locally in this demo.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="toolbar-button"
+            disabled={catalogLoading || !config.extensionCatalogURL.trim()}
+            onClick={loadMarketplaceCatalog}
+          >
+            {catalogLoading ? 'Loading...' : 'Load URL'}
+          </button>
+        </div>
+        <div className="mt-4 grid gap-3">
+          <TextField
+            label="Catalog URL"
+            value={config.extensionCatalogURL}
+            placeholder="https://example.com/rebook-extension-catalog.json"
+            onChange={value => setConfig({ ...config, extensionCatalogURL: value })}
+          />
+          <TextAreaField
+            label="Catalog JSON"
+            value={config.extensionCatalogJSON}
+            placeholder='{"schemaVersion":1,"source":"marketplace","entries":[...]}'
+            onChange={value => setConfig({ ...config, extensionCatalogJSON: value })}
+          />
+          <p className={[
+            'text-xs',
+            marketplaceCatalog.error || catalogStatus.startsWith('Catalog load failed')
+              ? 'text-red-600'
+              : 'text-slate-500',
+          ].join(' ')}>
+            {marketplaceCatalog.error || catalogStatus || `${marketplaceCatalog.entries.length} marketplace extension(s) loaded.`}
+          </p>
+        </div>
+      </section>
+      {extensionItems.map(item => {
+        const state = getDemoExtensionState(item, config)
+        const contributionBadges = getDemoExtensionContributionBadges(item.manifest)
+        const runtimeStatus = extensionRuntimeStatus[item.manifest.id]
+        return (
+          <article key={item.manifest.id} className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="flex items-start gap-4">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-slate-900">
+                    {item.manifest.displayName || item.manifest.name}
+                  </h3>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                    {item.source || 'local'}
+                  </span>
+                  <span className={[
+                    'rounded-full px-2 py-0.5 text-xs font-medium',
+                    !state.installed
+                      ? 'bg-slate-100 text-slate-500'
+                      : state.enabled
+                      ? state.configured ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
+                      : 'bg-slate-100 text-slate-600',
+                  ].join(' ')}>
+                    {!state.installed ? 'Available' : state.enabled ? state.configured ? 'Enabled' : 'Needs setup' : 'Disabled'}
+                  </span>
+                </div>
+                <p className="mt-1 max-w-2xl text-sm text-slate-600">{item.manifest.description}</p>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {item.manifest.capabilities?.map(capability => (
+                    <span key={capability} className="rounded bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium text-blue-700">
+                      {capability}
+                    </span>
+                  ))}
+                </div>
+                {contributionBadges.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {contributionBadges.map(badge => (
+                      <span key={badge} className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
+                        {badge}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                <p className="mt-3 text-xs text-slate-500">{state.message}</p>
+                {state.installed && !isDemoExtensionFeatureControlled(item.manifest) ? (
+                  <p className={[
+                    'mt-2 text-xs',
+                    runtimeStatus?.state === 'loaded'
+                      ? 'text-emerald-700'
+                      : runtimeStatus?.state === 'error'
+                      ? 'text-red-600'
+                      : 'text-slate-500',
+                  ].join(' ')}>
+                    {runtimeStatus?.message || 'Enable this extension to load its runtime module.'}
+                  </p>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {state.installed ? (
+                  <>
+                    <button
+                      type="button"
+                      className="toolbar-button"
+                      onClick={() => setSection(state.settingsSection)}
+                    >
+                      Configure
+                    </button>
+                    <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700">
+                      <span>{state.enabled ? 'On' : 'Off'}</span>
+                      <input
+                        type="checkbox"
+                        checked={state.enabled}
+                        onChange={event => setConfig(setDemoExtensionEnabled(config, item.manifest, event.target.checked))}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="toolbar-button"
+                      onClick={() => setConfig(uninstallDemoExtension(config, item.manifest))}
+                    >
+                      Uninstall
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                    onClick={() => setConfig(installDemoExtension(config, item.manifest))}
+                  >
+                    Install
+                  </button>
+                )}
+              </div>
+            </div>
+          </article>
+        )
+      })}
+    </div>
+  )
+}
+
 function Footer({
   ttsEnabled,
   ttsStatus,
@@ -2371,6 +2688,21 @@ function TextField({ label, value, onChange, type = 'text', placeholder }: { lab
   )
 }
 
+function TextAreaField({ label, value, onChange, placeholder }: { label: string; value: string; onChange(value: string): void; placeholder?: string }) {
+  return (
+    <label className="grid gap-1">
+      <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</span>
+      <textarea
+        className="input min-h-36 resize-y font-mono text-xs leading-relaxed"
+        value={value}
+        placeholder={placeholder}
+        spellCheck={false}
+        onChange={event => onChange(event.target.value)}
+      />
+    </label>
+  )
+}
+
 function SelectField({ label, value, onChange, options }: { label: string; value: string; onChange(value: string): void; options: Array<[string, string]> }) {
   return (
     <label className="grid gap-1">
@@ -2401,14 +2733,299 @@ function ProgressBar({ value }: { value: number }) {
 
 function loadConfig(): DemoConfig {
   try {
-    return { ...defaultConfig, ...JSON.parse(localStorage.getItem(CONFIG_KEY) || '{}') }
+    return normalizeConfig(JSON.parse(localStorage.getItem(CONFIG_KEY) || '{}'))
   } catch {
-    return { ...defaultConfig }
+    return normalizeConfig()
   }
 }
 
 function saveConfig(config: DemoConfig) {
-  localStorage.setItem(CONFIG_KEY, JSON.stringify(config))
+  localStorage.setItem(CONFIG_KEY, JSON.stringify(normalizeConfig(config)))
+}
+
+function getDemoExtensionState(item: RebookExtensionCatalogItem, config: DemoConfig): {
+  installed: boolean
+  enabled: boolean
+  configured: boolean
+  message: string
+  settingsSection: SettingsSection
+} {
+  const { manifest } = item
+  const featureControlled = isDemoExtensionFeatureControlled(manifest)
+  const featureEnabled = featureControlled
+    ? isDemoExtensionFeatureEnabled(manifest, config)
+    : item.enabled
+  const installed = item.installed || featureEnabled
+  const enabled = installed && featureEnabled
+  switch (manifest.id) {
+    case TRIAL_LIMIT_EXTENSION_ID:
+      return {
+        installed,
+        enabled,
+        configured: true,
+        message: config.trial
+          ? `Preview is limited to ${Number(config.trialPages) || 0} page(s).`
+          : 'Limit navigation for sample or trial reading builds.',
+        settingsSection: 'trial',
+      }
+    case TRANSLATION_EXTENSION_ID:
+      return {
+        installed,
+        enabled,
+        configured: Boolean(config.apiKey.trim()),
+        message: config.apiKey.trim()
+          ? `Translates to zh-CN in ${config.translateMode} mode.`
+          : 'Requires a translation API key and model settings.',
+        settingsSection: 'translation',
+      }
+    case PROFESSIONAL_TRANSLATION_EXTENSION_ID:
+      return {
+        installed,
+        enabled,
+        configured: Boolean(config.professionalServiceBaseUrl.trim() && config.professionalBookId.trim()),
+        message: config.professionalServiceBaseUrl.trim() && config.professionalBookId.trim()
+          ? 'Uses rebook-service professional translation workflow.'
+          : 'Requires service URL and book ID.',
+        settingsSection: 'translation',
+      }
+    case TTS_EXTENSION_ID:
+      return {
+        installed,
+        enabled,
+        configured: true,
+        message: config.ttsMultiSpeaker ? 'Multi-voice TTS is enabled.' : 'Single voice TTS is enabled.',
+        settingsSection: 'tts',
+      }
+    case AI_CHAT_EXTENSION_ID:
+      return {
+        installed,
+        enabled,
+        configured: Boolean(config.chatAPIKey.trim()),
+        message: config.chatAPIKey.trim()
+          ? 'AI chat can search, read, cite, and rewrite the current book.'
+          : 'Requires an AI chat API key and model settings.',
+        settingsSection: 'chat',
+      }
+    default:
+      return {
+        installed,
+        enabled,
+        configured: true,
+        message: 'This marketplace extension is tracked by the demo installer; runtime loading will be handled by a future extension host bridge.',
+        settingsSection: 'extensions',
+      }
+  }
+}
+
+function getDemoExtensionContributionBadges(manifest: RebookExtensionManifest): string[] {
+  const contributes = manifest.contributes
+  const badges: string[] = []
+  const commands = contributes?.commands?.length ?? 0
+  const panels = contributes?.panels?.length ?? 0
+  const settings = Object.keys(contributes?.settings ?? {}).length
+  const tools = contributes?.tools?.length ?? 0
+  if (commands) badges.push(`${commands} command${commands === 1 ? '' : 's'}`)
+  if (panels) badges.push(`${panels} panel${panels === 1 ? '' : 's'}`)
+  if (settings) badges.push(`${settings} setting${settings === 1 ? '' : 's'}`)
+  if (tools) badges.push(`${tools} tool${tools === 1 ? '' : 's'}`)
+  return badges
+}
+
+function normalizeConfig(value: Partial<DemoConfig> = {}): DemoConfig {
+  const config: DemoConfig = {
+    ...defaultConfig,
+    ...value,
+    extensionInstallations: normalizeDemoExtensionInstallations(value.extensionInstallations),
+  }
+  const manager = createDemoExtensionManager(config)
+  for (const item of manager.listItems()) {
+    const { manifest } = item
+    if (!isDemoExtensionFeatureControlled(manifest)) continue
+    const featureEnabled = isDemoExtensionFeatureEnabled(manifest, config)
+    if (manager.isInstalled(manifest.id)) {
+      if (manager.isEnabled(manifest.id) !== featureEnabled) {
+        manager.setEnabled(manifest.id, featureEnabled)
+      }
+    } else if (featureEnabled) {
+      manager.install(manifest.id, { enabled: true })
+    }
+  }
+  return createDemoConfigWithExtensionManager(config, manager)
+}
+
+function normalizeDemoExtensionInstallations(value: unknown): DemoExtensionInstallations {
+  if (!value || typeof value !== 'object') return {}
+  const installations: DemoExtensionInstallations = {}
+  const entries = Array.isArray(value)
+    ? value.map(raw => [typeof raw === 'object' && raw && 'id' in raw ? String((raw as { id?: unknown }).id ?? '') : '', raw] as const)
+    : Object.entries(value as Record<string, unknown>)
+  for (const [key, raw] of entries) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const entry = raw as Record<string, unknown>
+    const id = typeof entry.id === 'string' && entry.id.trim() ? entry.id.trim() : key.trim()
+    if (!id) continue
+    installations[id] = {
+      id,
+      version: typeof entry.version === 'string' ? entry.version : undefined,
+      enabled: entry.enabled !== false,
+      source: typeof entry.source === 'string' ? entry.source : undefined,
+      installedAt: typeof entry.installedAt === 'string' ? entry.installedAt : undefined,
+      updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : undefined,
+    }
+  }
+  return installations
+}
+
+function isDemoExtensionFeatureControlled(manifest: RebookExtensionManifest): boolean {
+  switch (manifest.id) {
+    case TRIAL_LIMIT_EXTENSION_ID:
+    case TRANSLATION_EXTENSION_ID:
+    case PROFESSIONAL_TRANSLATION_EXTENSION_ID:
+    case TTS_EXTENSION_ID:
+    case AI_CHAT_EXTENSION_ID:
+      return true
+    default:
+      return false
+  }
+}
+
+function isDemoExtensionFeatureEnabled(manifest: RebookExtensionManifest, config: DemoConfig): boolean {
+  switch (manifest.id) {
+    case TRIAL_LIMIT_EXTENSION_ID:
+      return config.trial
+    case TRANSLATION_EXTENSION_ID:
+      return config.translate && !config.professionalTranslation
+    case PROFESSIONAL_TRANSLATION_EXTENSION_ID:
+      return config.translate && config.professionalTranslation
+    case TTS_EXTENSION_ID:
+      return config.tts
+    case AI_CHAT_EXTENSION_ID:
+      return config.chat
+    default:
+      return false
+  }
+}
+
+function getDemoMarketplaceCatalogParseResult(config: DemoConfig): {
+  entries: readonly RebookExtensionCatalogEntry[]
+  error: string
+} {
+  const source = config.extensionCatalogJSON.trim()
+  if (!source) return { entries: [], error: '' }
+  try {
+    return {
+      entries: parseRebookExtensionCatalogEntries(JSON.parse(source), { source: 'marketplace' }),
+      error: '',
+    }
+  } catch (error) {
+    return {
+      entries: [],
+      error: `Catalog JSON is invalid: ${formatError(error)}`,
+    }
+  }
+}
+
+function createDemoExtensionCatalog(config: DemoConfig) {
+  const marketplaceCatalog = getDemoMarketplaceCatalogParseResult(config)
+  return createRebookExtensionCatalog([
+    ...builtInExtensionCatalog.list(),
+    ...marketplaceCatalog.entries,
+  ])
+}
+
+function createDemoExtensionManager(config: DemoConfig) {
+  return createRebookExtensionManager({
+    catalog: createDemoExtensionCatalog(config),
+    installations: Object.values(config.extensionInstallations),
+  })
+}
+
+function getEnabledDemoMarketplaceExtensionItems(config: DemoConfig): readonly RebookExtensionCatalogItem[] {
+  return createDemoExtensionManager(config)
+    .listItems()
+    .filter(item => item.enabled && !isDemoExtensionFeatureControlled(item.manifest))
+}
+
+async function loadDemoMarketplaceExtension(entry: RebookExtensionCatalogItem): Promise<RebookExtension> {
+  if (!entry.installUrl) {
+    throw new Error(`Marketplace extension "${entry.manifest.id}" does not define installUrl.`)
+  }
+  const moduleUrl = new URL(entry.installUrl, window.location.href).href
+  return loadRebookExtensionModule(
+    moduleUrl,
+    url => import(/* @vite-ignore */ url),
+    { catalogEntry: entry },
+  )
+}
+
+function createDemoConfigWithExtensionManager(config: DemoConfig, manager: ReturnType<typeof createDemoExtensionManager>): DemoConfig {
+  return {
+    ...config,
+    extensionInstallations: extensionInstallationsToRecord(manager.toJSON()),
+  }
+}
+
+function extensionInstallationsToRecord(installations: readonly RebookExtensionInstallation[]): DemoExtensionInstallations {
+  return Object.fromEntries(installations.map(installation => [installation.id, installation]))
+}
+
+function installDemoExtension(config: DemoConfig, manifest: RebookExtensionManifest): DemoConfig {
+  return setDemoExtensionEnabled(config, manifest, true)
+}
+
+function uninstallDemoExtension(config: DemoConfig, manifest: RebookExtensionManifest): DemoConfig {
+  const manager = createDemoExtensionManager(config)
+  manager.uninstall(manifest.id)
+  return setDemoExtensionFeatureEnabled(createDemoConfigWithExtensionManager(config, manager), manifest, false)
+}
+
+function setDemoExtensionEnabled(
+  config: DemoConfig,
+  manifest: RebookExtensionManifest,
+  enabled: boolean,
+): DemoConfig {
+  const manager = createDemoExtensionManager(config)
+  if (manager.isInstalled(manifest.id)) {
+    manager.setEnabled(manifest.id, enabled)
+  } else {
+    manager.install(manifest.id, { enabled })
+  }
+  if (enabled && manifest.id === TRANSLATION_EXTENSION_ID && manager.isInstalled(PROFESSIONAL_TRANSLATION_EXTENSION_ID)) {
+    manager.disable(PROFESSIONAL_TRANSLATION_EXTENSION_ID)
+  }
+  if (enabled && manifest.id === PROFESSIONAL_TRANSLATION_EXTENSION_ID && manager.isInstalled(TRANSLATION_EXTENSION_ID)) {
+    manager.disable(TRANSLATION_EXTENSION_ID)
+  }
+  return setDemoExtensionFeatureEnabled(createDemoConfigWithExtensionManager(config, manager), manifest, enabled)
+}
+
+function setDemoExtensionFeatureEnabled(
+  config: DemoConfig,
+  manifest: RebookExtensionManifest,
+  enabled: boolean,
+): DemoConfig {
+  switch (manifest.id) {
+    case TRIAL_LIMIT_EXTENSION_ID:
+      return { ...config, trial: enabled }
+    case TRANSLATION_EXTENSION_ID:
+      return enabled
+        ? { ...config, translate: true, professionalTranslation: false }
+        : config.professionalTranslation
+          ? config
+          : { ...config, translate: false }
+    case PROFESSIONAL_TRANSLATION_EXTENSION_ID:
+      return enabled
+        ? { ...config, translate: true, professionalTranslation: true }
+        : config.professionalTranslation
+          ? { ...config, translate: false, professionalTranslation: false }
+          : config
+    case TTS_EXTENSION_ID:
+      return { ...config, tts: enabled }
+    case AI_CHAT_EXTENSION_ID:
+      return { ...config, chat: enabled }
+    default:
+      return config
+  }
 }
 
 function getInitialBookURL(): string {

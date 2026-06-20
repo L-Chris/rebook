@@ -4,6 +4,7 @@ import { ReaderSession, type TOCViewItem } from '../../src/core/reader'
 import type { Book, RelocateEvent } from '../../src/core/types'
 import type { LayoutMode, ReaderMark, Renderer, RendererStyles } from '../../src/core/renderer'
 import type { PageSurface } from '../../src/core/page-surface'
+import { defineRebookExtension, defineRebookPlugin } from '../../src/core/extensions'
 import { createStaticTextProvider } from '../../src/core/text-provider'
 import { EPUBParser } from '../../src/parsers/epub'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
@@ -208,6 +209,166 @@ describe('ReaderSession', () => {
         renderer.setSurface(null)
         expect(await reader.getCurrentText()).toEqual([])
         expect(await reader.searchCurrentText('provider')).toEqual([])
+    })
+
+    it('lists extension manifests installed through reader config', async () => {
+        const extension = defineRebookPlugin({
+            id: 'example.config-extension',
+            name: 'Config Extension',
+            version: '1.0.0',
+            displayName: 'Config Extension',
+            capabilities: ['book.transform'],
+        }, input => ({ ...input, metadata: { title: 'configured' } }))
+        const renderer = new FakeRenderer()
+        const reader = new ReaderSession({
+            createRenderer: () => renderer,
+            plugins: [extension],
+        })
+
+        await reader.openBook({ sections: [] })
+
+        expect(reader.hasExtension('example.config-extension')).toBe(true)
+        expect(reader.getExtensionManifests()).toEqual([extension.manifest])
+        expect(reader.getMetadata()?.title).toBe('configured')
+    })
+
+    it('installs and uninstalls extensions for future book opens', async () => {
+        const extension = defineRebookPlugin({
+            id: 'example.runtime-extension',
+            name: 'Runtime Extension',
+            version: '1.0.0',
+        }, input => ({ ...input, metadata: { title: 'installed' } }))
+        const renderer = new FakeRenderer()
+        const reader = new ReaderSession({ createRenderer: () => renderer })
+
+        await reader.openBook({ sections: [], metadata: { title: 'plain' } })
+        expect(reader.getMetadata()?.title).toBe('plain')
+
+        reader.installExtension(extension)
+        await reader.openBook({ sections: [], metadata: { title: 'plain' } })
+        expect(reader.getMetadata()?.title).toBe('installed')
+
+        expect(reader.uninstallExtension('example.runtime-extension')).toBe(true)
+        await reader.openBook({ sections: [], metadata: { title: 'plain' } })
+        expect(reader.getMetadata()?.title).toBe('plain')
+    })
+
+    it('replaces installed extensions without changing plugin order', async () => {
+        const first = defineRebookPlugin({
+            id: 'example.replace-extension',
+            name: 'Replace Extension',
+            version: '1.0.0',
+        }, input => ({ ...input, metadata: { title: 'first' } }))
+        const second = defineRebookPlugin({
+            id: 'example.replace-extension',
+            name: 'Replace Extension',
+            version: '2.0.0',
+        }, input => ({ ...input, metadata: { title: 'second' } }))
+        const suffix = defineRebookPlugin({
+            id: 'example.suffix-extension',
+            name: 'Suffix Extension',
+            version: '1.0.0',
+        }, input => ({ ...input, metadata: { ...input.metadata, subtitle: `${input.metadata?.title}-suffix` } }))
+        const renderer = new FakeRenderer()
+        const reader = new ReaderSession({ createRenderer: () => renderer })
+
+        reader.installExtension(first)
+        reader.installExtension(suffix)
+        reader.installExtension(second, { replace: true })
+        await reader.openBook({ sections: [] })
+
+        expect(reader.getExtensionManifests().map(manifest => manifest.version)).toEqual(['2.0.0', '1.0.0'])
+        expect(reader.getMetadata()).toMatchObject({
+            title: 'second',
+            subtitle: 'second-suffix',
+        })
+    })
+
+    it('activates extension commands and removes them when the extension is uninstalled', async () => {
+        const disposed: string[] = []
+        const extension = defineRebookExtension({
+            manifest: {
+                id: 'example.reader-command',
+                name: 'Reader Command',
+                version: '1.0.0',
+                contributes: {
+                    commands: [
+                        { id: 'example.reader-command.describe', title: 'Describe Current Book' },
+                    ],
+                },
+            },
+            activate: context => {
+                context.subscriptions.push({ dispose: () => disposed.push('reader-command') })
+                context.commands.registerCommand('example.reader-command.describe', title => ({
+                    extensionId: context.extensionId,
+                    title,
+                }))
+            },
+        })
+        const renderer = new FakeRenderer()
+        const reader = new ReaderSession({ createRenderer: () => renderer })
+
+        reader.installExtension(extension)
+        expect(reader.getExtensionContributions().commands.map(command => command.contribution.id)).toEqual([
+            'example.reader-command.describe',
+        ])
+
+        await reader.openBook({ sections: [], metadata: { title: 'Command Book' } })
+
+        expect(reader.hasExtensionCommand('example.reader-command.describe')).toBe(true)
+        expect(reader.getExtensionCommands().map(command => command.extensionId)).toEqual(['example.reader-command'])
+        await expect(reader.executeExtensionCommand('example.reader-command.describe', reader.getMetadata()?.title))
+            .resolves.toEqual({
+                extensionId: 'example.reader-command',
+                title: 'Command Book',
+            })
+
+        expect(reader.uninstallExtension('example.reader-command')).toBe(true)
+        expect(reader.hasExtensionCommand('example.reader-command.describe')).toBe(false)
+        expect(disposed).toEqual(['reader-command'])
+    })
+
+    it('exposes extension settings through the reader host', async () => {
+        const extension = defineRebookExtension({
+            manifest: {
+                id: 'example.reader-settings',
+                name: 'Reader Settings',
+                version: '1.0.0',
+                contributes: {
+                    settings: {
+                        title: { type: 'string', default: 'Default Reader Title' },
+                        enabled: { type: 'boolean', default: true },
+                    },
+                },
+            },
+            activate: context => input => ({
+                ...input,
+                metadata: {
+                    ...input.metadata,
+                    title: context.settings.get('title'),
+                },
+            }),
+        })
+        const renderer = new FakeRenderer()
+        const reader = new ReaderSession({ createRenderer: () => renderer })
+
+        reader.installExtension(extension)
+
+        expect(reader.getExtensionSettings('example.reader-settings').map(setting => setting.key)).toEqual([
+            'title',
+            'enabled',
+        ])
+        expect(reader.getExtensionSetting('example.reader-settings', 'title')).toBe('Default Reader Title')
+
+        reader.updateExtensionSetting('example.reader-settings', 'title', 'Configured Reader Title')
+        await reader.openBook({ sections: [] })
+
+        expect(reader.getMetadata()?.title).toBe('Configured Reader Title')
+        expect(reader.getExtensionSettingsSnapshot()).toEqual({
+            'example.reader-settings': {
+                title: 'Configured Reader Title',
+            },
+        })
     })
 })
 

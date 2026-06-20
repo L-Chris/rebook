@@ -43,6 +43,19 @@ const waitForUpdate = () => {
     return { promise, resolve }
 }
 
+const jsonResponse = (body: unknown, status = 200) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status >= 200 && status < 300 ? 'OK' : 'Error',
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+}) as Response
+
+const waitWithTimeout = async <T>(promise: Promise<T>, message: () => string, ms = 500): Promise<T> => Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message())), ms)),
+])
+
 describe('Translation Plugin', () => {
     beforeEach(() => {
         generateTextMock.mockReset()
@@ -510,66 +523,18 @@ describe('Translation Plugin', () => {
         expect(generateTextMock).toHaveBeenCalledTimes(1)
     })
 
-    it('builds a professional pipeline profile before contextual translation', async () => {
+    it('starts backend professional translation and renders returned chunk translations', async () => {
         const update = waitForUpdate()
         const statuses: string[] = []
-        let resolveReady!: () => void
-        const readyPromise = new Promise<void>(resolve => {
-            resolveReady = resolve
+        let resolveStarted!: () => void
+        const startedPromise = new Promise<void>(resolve => {
+            resolveStarted = resolve
         })
-
-        generateTextMock.mockImplementation(async (options: any) => {
-            if (options.system.includes('senior translation editor')) {
-                return {
-                    output: {
-                        bookType: 'technical textbook',
-                        audience: 'software engineers',
-                        styleGuide: 'Use precise technical Chinese.',
-                        terminologyRules: ['Translate API as 应用程序接口 on first mention.'],
-                        properNounRules: ['Keep product names in English.'],
-                        terms: [{
-                            source: 'API',
-                            target: '应用程序接口',
-                            category: 'abbreviation',
-                            note: 'Core technical abbreviation.',
-                        }],
-                        chapterSummaries: [
-                            { sectionIndex: 0, title: 'API Basics', summary: 'Introduces API concepts.' },
-                            { sectionIndex: 1, title: 'Implementation Notes', summary: 'Explains code and tables.' },
-                        ],
-                    }
-                }
-            }
-            return createTranslationResponse(options)
-        })
-
         const professionalBlocks: TextBlock[] = [
             {
                 id: 'api',
                 type: 'paragraph',
                 segments: [{ text: 'API design keeps client and server contracts stable.' }],
-            },
-            {
-                id: 'code',
-                type: 'pre',
-                segments: [{ text: 'fetch("/api/books")' }],
-            },
-            {
-                id: 'tbl',
-                type: 'table',
-                segments: [],
-                table: {
-                    columnCount: 2,
-                    rowIndex: 0,
-                    rowCount: 1,
-                    rows: [{ cells: [{ text: 'API' }, { text: 'Contract' }] }],
-                },
-            },
-            {
-                id: 'note',
-                type: 'paragraph',
-                attrs: { 'data-rebook-footnote-content': 'An implementation note.' },
-                segments: [{ text: '1' }],
             },
         ]
         const professionalBook: Book = {
@@ -590,137 +555,142 @@ describe('Translation Plugin', () => {
                     load: () => '',
                     getBlocks: async () => professionalBlocks,
                 },
-                {
-                    id: 's2',
-                    size: 50,
-                    load: () => '',
-                    getBlocks: async () => [{
-                        id: 'math',
-                        type: 'paragraph',
-                        attrs: { class: 'equation' },
-                        segments: [{ text: '\\sum_i x_i' }],
-                    }],
-                },
             ],
         }
+        const fetcher = vi.fn(async (url: string | URL, init?: RequestInit) => {
+            const requestUrl = String(url)
+            if (requestUrl === 'https://service.example/api/books/book-1/translate') {
+                expect(init?.method).toBe('POST')
+                expect(JSON.parse(String(init?.body))).toMatchObject({
+                    targetLanguage: 'zh-CN',
+                    audience: 'software engineers',
+                    style: 'Precise Chinese.',
+                })
+                return jsonResponse({ jobId: 'job-1' })
+            }
+            if (requestUrl === 'https://service.example/api/jobs/job-1') {
+                return jsonResponse({
+                    job: {
+                        id: 'job-1',
+                        bookId: 'book-1',
+                        status: 'done',
+                        stage: 'complete',
+                        progress: 1,
+                        completedChunks: 1,
+                        totalChunks: 1,
+                    },
+                    chunkStats: [{ status: 'done', _count: { status: 1 } }],
+                })
+            }
+            if (requestUrl === 'https://service.example/api/books/book-1/chunks') {
+                return jsonResponse([{
+                    id: 'chunk-1',
+                    chapterIndex: 0,
+                    chunkIndex: 0,
+                    content: 'API design keeps client and server contracts stable.',
+                    blockIdsJson: JSON.stringify(['api']),
+                    translationJson: JSON.stringify({
+                        api: 'API 设计让客户端和服务器契约保持稳定。',
+                    }),
+                    translation: null,
+                    status: 'done',
+                }])
+            }
+            return jsonResponse({ error: 'unexpected url' }, 404)
+        })
 
         const plugin = withProfessionalTranslation({
-            model: mockModel as any,
+            serviceBaseUrl: 'https://service.example/',
+            bookId: 'book-1',
+            fetcher: fetcher as any,
             targetLanguage: 'zh-CN',
             mode: 'replace',
+            pollIntervalMs: 60_000,
             onUpdate: update.resolve,
             pipeline: {
-                onStatus: status => {
-                    statuses.push(status.phase)
-                    if (status.phase === 'ready') resolveReady()
-                },
+                audience: 'software engineers',
+                style: 'Precise Chinese.',
+            },
+            onStatus: status => {
+                statuses.push(status.phase)
+                if (status.phase === 'starting') resolveStarted()
             },
         })
 
         const wrappedBook = await plugin(professionalBook)
-        await readyPromise
         await wrappedBook.sections[0].getBlocks!()
+        await waitWithTimeout(startedPromise, () => `backend job did not start; statuses=${JSON.stringify(statuses)} calls=${JSON.stringify(fetcher.mock.calls)}`)
         ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['api'])
-        await update.promise
+        const updateEvent = await waitWithTimeout(update.promise, () => `backend chunks did not update; statuses=${JSON.stringify(statuses)} calls=${JSON.stringify(fetcher.mock.calls)}`)
+        const replaceBlocks = await wrappedBook.sections[0].getBlocks!()
 
-        const profileCall = generateTextMock.mock.calls.find((call: any[]) =>
-            call[0].system.includes('senior translation editor')
-        )
-        expect(profileCall).toBeTruthy()
-        const profilePrompt = JSON.parse(profileCall[0].prompt)
-        expect(profilePrompt.analysis.toc).toEqual([
-            { label: 'API Basics', depth: 0 },
-            { label: 'Implementation Notes', depth: 0 },
-        ])
-        expect(profilePrompt.analysis.toc[0]).not.toHaveProperty('href')
-        expect(profilePrompt.analysis.chapters[0]).toMatchObject({
-            sectionIndex: 0,
-            title: 'API Basics',
-        })
-        expect(profilePrompt.analysis.chapters[0]).not.toHaveProperty('blockCount')
-        expect(profilePrompt.analysis.chapters[0]).not.toHaveProperty('wordCount')
-        expect(profilePrompt.analysis.chapters[0]).not.toHaveProperty('structures')
-        expect(profilePrompt.analysis.chapters[1]).toMatchObject({
-            sectionIndex: 1,
-            title: 'Implementation Notes',
-        })
-        expect(profilePrompt.analysis).not.toHaveProperty('features')
-        expect(profilePrompt.analysis).not.toHaveProperty('structureSamples')
-        expect(profilePrompt.analysis).not.toHaveProperty('termCandidates')
-
-        const translationCall = generateTextMock.mock.calls.find((call: any[]) =>
-            call[0].system.includes('multi-stage translation pipeline')
-        )
-        expect(translationCall).toBeTruthy()
-        const translationPrompt = JSON.parse(translationCall[0].prompt)
-        expect(translationPrompt.context).toMatchObject({
-            bookType: 'technical textbook',
-            audience: 'software engineers',
-            chapter: { sectionIndex: 0, summary: 'Introduces API concepts.' },
-            nextChapter: { sectionIndex: 1, summary: 'Explains code and tables.' },
-        })
-        expect(translationPrompt.context.glossary[0]).toMatchObject({
-            source: 'API',
-            target: '应用程序接口',
-        })
-        expect(translationPrompt.input).toEqual({
-            '0': 'API design keeps client and server contracts stable.',
-        })
-        expect(statuses).toEqual(['analyzing', 'ready'])
-        expect((wrappedBook as TestTranslationBook).professionalTranslationStatus?.phase).toBe('ready')
+        expect(updateEvent.sectionIndex).toBe(0)
+        expect(replaceBlocks[0].segments[0].text).toBe('API 设计让客户端和服务器契约保持稳定。')
+        expect(fetcher).toHaveBeenCalledWith('https://service.example/api/books/book-1/translate', expect.any(Object))
+        expect(fetcher).toHaveBeenCalledWith('https://service.example/api/jobs/job-1', undefined)
+        expect(fetcher).toHaveBeenCalledWith('https://service.example/api/books/book-1/chunks', undefined)
+        expect(statuses).toContain('starting')
+        expect(statuses).toContain('done')
+        expect((wrappedBook as TestTranslationBook).professionalTranslationStatus?.phase).toBe('done')
+        expect(generateTextMock).not.toHaveBeenCalled()
     })
 
-    it('waits for the professional profile before translating the table of contents', async () => {
-        let resolveProfile!: (value: any) => void
-        const profilePromise = new Promise(resolve => {
-            resolveProfile = resolve
-        })
-        let resolveTOC!: (toc: Book['toc']) => void
-        const tocPromise = new Promise<Book['toc']>(resolve => {
-            resolveTOC = resolve
-        })
-        generateTextMock.mockImplementation(async (options: any) => {
-            if (options.system.includes('senior translation editor')) {
-                return profilePromise
+    it('attaches to an existing backend professional translation job without starting a new job', async () => {
+        const update = waitForUpdate()
+        const fetcher = vi.fn(async (url: string | URL) => {
+            const requestUrl = String(url)
+            if (requestUrl === 'https://service.example/api/jobs/existing-job') {
+                return jsonResponse({
+                    job: {
+                        id: 'existing-job',
+                        bookId: 'book-1',
+                        status: 'done',
+                        stage: 'complete',
+                        progress: 1,
+                        completedChunks: 1,
+                        totalChunks: 1,
+                    },
+                    chunkStats: [],
+                })
             }
-            return createTranslationResponse(options)
+            if (requestUrl === 'https://service.example/api/books/book-1/chunks') {
+                return jsonResponse([{
+                    id: 'chunk-1',
+                    chapterIndex: 0,
+                    chunkIndex: 0,
+                    content: 'Hello world.',
+                    blockIdsJson: JSON.stringify(['b1']),
+                    translationJson: JSON.stringify({ b1: '你好，世界。' }),
+                    translation: null,
+                    status: 'done',
+                }])
+            }
+            return jsonResponse({ error: 'unexpected url' }, 404)
         })
 
         const plugin = withProfessionalTranslation({
-            model: mockModel as any,
-            translateTOC: true,
-            onTOCUpdate: resolveTOC,
+            serviceBaseUrl: 'https://service.example',
+            bookId: 'book-1',
+            jobId: 'existing-job',
+            autoStart: false,
+            fetcher: fetcher as any,
+            mode: 'replace',
+            pollIntervalMs: 60_000,
+            onUpdate: update.resolve,
         })
 
-        const wrappedBook = await plugin({
-            sections: [mockSection],
-            toc: [{ label: 'Chapter One', href: 's1' }],
-        })
+        const wrappedBook = await plugin(mockBook)
+        await wrappedBook.sections[0].getBlocks!()
+        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1'])
+        await waitWithTimeout(update.promise, () => `existing backend job did not update; calls=${JSON.stringify(fetcher.mock.calls)}`)
+        const blocks = await wrappedBook.sections[0].getBlocks!()
 
-        // Accessing TOC schedules translation, but professional mode must wait for the profile first.
-        expect(wrappedBook.toc?.[0].label).toBe('Chapter One')
-        await new Promise(resolve => setTimeout(resolve, 0))
-        expect(generateTextMock).toHaveBeenCalledTimes(1)
-        expect(generateTextMock.mock.calls[0][0].system).toContain('senior translation editor')
-
-        resolveProfile({
-            output: {
-                bookType: 'book',
-                audience: 'general readers',
-                styleGuide: 'Clear Chinese.',
-                terminologyRules: [],
-                properNounRules: [],
-                terms: [],
-                chapterSummaries: [
-                    { sectionIndex: 0, title: 'Chapter One', summary: 'Opening chapter.' },
-                ],
-            },
-        })
-
-        const translatedTOC = await tocPromise
-        expect(generateTextMock).toHaveBeenCalledTimes(2)
-        expect(generateTextMock.mock.calls[1][0].system).not.toContain('senior translation editor')
-        expect(JSON.parse(generateTextMock.mock.calls[1][0].prompt)).toEqual({ '0': 'Chapter One' })
-        expect(translatedTOC?.[0].label).toBe('Chapter One / [Translated] Chapter One')
+        expect(blocks[0].segments[0].text).toBe('你好，世界。')
+        expect(fetcher).not.toHaveBeenCalledWith(
+            'https://service.example/api/books/book-1/translate',
+            expect.anything(),
+        )
+        expect(fetcher).toHaveBeenCalledWith('https://service.example/api/jobs/existing-job', undefined)
+        expect(generateTextMock).not.toHaveBeenCalled()
     })
 })

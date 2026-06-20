@@ -743,7 +743,7 @@ async function fetchJson<T>(url: string, init: RequestInit | undefined, fetcher:
 function updateSectionTranslations(target: Map<number, BackendSectionTranslation>, chunks: BackendChunk[]): number[] {
     const grouped = new Map<number, BackendChunk[]>()
     for (const chunk of chunks) {
-        if (!chunk.translation || chunk.status !== 'done') continue
+        if ((!chunk.translation && !chunk.translationJson) || chunk.status !== 'done') continue
         const group = grouped.get(chunk.chapterIndex) || []
         group.push(chunk)
         grouped.set(chunk.chapterIndex, group)

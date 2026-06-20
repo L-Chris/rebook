@@ -62,9 +62,12 @@ describe('Wechat Mini Program adapters', () => {
     await renderer.goTo(0)
 
     const snapshot = renderer.getSnapshot()
+    const text = snapshot.lines
+      .flatMap(line => line.fragments.map(fragment => fragment.text))
+      .join('')
     expect(snapshot.sectionIndex).toBe(0)
     expect(snapshot.lines.length).toBeGreaterThan(0)
-    expect(JSON.stringify(snapshot)).toContain('Visible mini program reader text')
+    expect(text).toContain('Visible mini program reader text.')
   })
 
   it('writes image resources to local mini program files when filesystem APIs are available', () => {

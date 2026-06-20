@@ -12,6 +12,9 @@
       "core/content-engine-router": [
         "dist/core/content-engine-router.d.ts"
       ],
+      "core/extensions": [
+        "dist/core/extensions.d.ts"
+      ],
       "core/parser": [
         "dist/core/parser.d.ts"
       ],
@@ -121,6 +124,10 @@
     "./core/content-engine-router": {
       "types": "./dist/core/content-engine-router.d.ts",
       "import": "./dist/core/content-engine-router.js"
+    },
+    "./core/extensions": {
+      "types": "./dist/core/extensions.d.ts",
+      "import": "./dist/core/extensions.js"
     },
     "./parsers/*": {
       "types": "./dist/parsers/*.d.ts",

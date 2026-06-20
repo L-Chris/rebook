@@ -16096,13 +16096,14 @@ function prepareBlocks(textBlocks, options = {}) {
   return { segments, blocks, baseStyle, lineHeight };
 }
 function layout(prepared, options) {
-  var _a2, _b2, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p;
+  var _a2, _b2, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q;
   const lines = [];
   const inlineSize = Math.max(1, options.inlineSize);
   const lineHeight = (_a2 = options.lineHeight) != null ? _a2 : prepared.lineHeight;
   const blockGap = (_b2 = options.blockGap) != null ? _b2 : 0;
   let top = (_c = options.blockStart) != null ? _c : 0;
-  for (const block of prepared.blocks) {
+  for (let blockIndex = 0; blockIndex < prepared.blocks.length; blockIndex++) {
+    const block = prepared.blocks[blockIndex];
     const blockStartCount = lines.length;
     if (blockStartCount > 0) top += (_d = block.block.blockGapBefore) != null ? _d : 0;
     const inlineOffset = getBlockInlineOffset(block.block, prepared.baseStyle.fontSize);
@@ -16145,7 +16146,14 @@ function layout(prepared, options) {
     }
     if (block.block.type === "image" && block.block.image) {
       const metrics = getImageBlockMetrics(block.block.image, inlineSize, lineHeight, options.maxBlockHeight);
-      top = avoidAtomicBlockPageBreak(top, metrics.height, options.maxBlockHeight, lineHeight);
+      const followingCaptionHeight = getFollowingCaptionKeepHeight(
+        prepared.blocks[blockIndex + 1],
+        prepared,
+        inlineSize,
+        lineHeight
+      );
+      const keepHeight = followingCaptionHeight > 0 ? metrics.height + ((_g = block.block.blockGapAfter) != null ? _g : blockGap) + followingCaptionHeight : metrics.height;
+      top = avoidAtomicBlockPageBreak(top, keepHeight, options.maxBlockHeight, lineHeight);
       lines.push({
         index: lines.length,
         kind: "image",
@@ -16153,7 +16161,7 @@ function layout(prepared, options) {
         image: block.block.image,
         start: null,
         end: null,
-        text: (_h = (_g = block.block.image.alt) != null ? _g : block.block.image.title) != null ? _h : "",
+        text: (_i = (_h = block.block.image.alt) != null ? _h : block.block.image.title) != null ? _i : "",
         width: metrics.width,
         top,
         height: metrics.height,
@@ -16161,7 +16169,7 @@ function layout(prepared, options) {
         segments: []
       });
       top += metrics.height;
-      top += (_i = block.block.blockGapAfter) != null ? _i : blockGap;
+      top += (_j = block.block.blockGapAfter) != null ? _j : blockGap;
       continue;
     }
     if (block.block.type === "table" && block.block.table) {
@@ -16169,7 +16177,7 @@ function layout(prepared, options) {
         block.block.table,
         inlineSize,
         getBlockLineHeight(block.block, prepared.baseStyle.fontSize, lineHeight),
-        (_k = (_j = block.block.style) == null ? void 0 : _j.fontSize) != null ? _k : prepared.baseStyle.fontSize,
+        (_l = (_k = block.block.style) == null ? void 0 : _k.fontSize) != null ? _l : prepared.baseStyle.fontSize,
         options.maxBlockHeight
       );
       top = avoidAtomicBlockPageBreak(top, metrics.height, options.maxBlockHeight, lineHeight);
@@ -16180,7 +16188,7 @@ function layout(prepared, options) {
         table: block.block.table,
         start: null,
         end: null,
-        text: (_m = (_l = block.block.table.rows[0]) == null ? void 0 : _l.cells.map((cell) => cell.text).join(" ")) != null ? _m : "",
+        text: (_n = (_m = block.block.table.rows[0]) == null ? void 0 : _m.cells.map((cell) => cell.text).join(" ")) != null ? _n : "",
         width: metrics.width,
         top,
         height: metrics.height,
@@ -16188,7 +16196,7 @@ function layout(prepared, options) {
         segments: []
       });
       top += metrics.height;
-      top += (_n = block.block.blockGapAfter) != null ? _n : blockGap;
+      top += (_o = block.block.blockGapAfter) != null ? _o : blockGap;
       continue;
     }
     if (block.block.type === "pre") {
@@ -16256,7 +16264,7 @@ function layout(prepared, options) {
         segments: allFragments
       });
       top = preTop + totalHeight;
-      top += (_o = block.block.blockGapAfter) != null ? _o : blockGap;
+      top += (_p = block.block.blockGapAfter) != null ? _p : blockGap;
       continue;
     }
     const richInline = block.prepared;
@@ -16296,7 +16304,7 @@ function layout(prepared, options) {
       });
       top += textLineHeight;
     });
-    if (lines.length > blockStartCount) top += (_p = block.block.blockGapAfter) != null ? _p : blockGap;
+    if (lines.length > blockStartCount) top += (_q = block.block.blockGapAfter) != null ? _q : blockGap;
   }
   if (lines.length === 0) {
     lines.push({
@@ -16912,6 +16920,27 @@ function avoidAtomicBlockPageBreak(top, height, maxBlockHeight, lineHeight) {
   if (offset === 0) return top;
   if (height >= maxBlockHeight) return top + Math.max(lineHeight, maxBlockHeight - offset);
   return offset + height > maxBlockHeight ? top + Math.max(lineHeight, maxBlockHeight - offset) : top;
+}
+function getFollowingCaptionKeepHeight(block, prepared, inlineSize, fallbackLineHeight) {
+  var _a2;
+  if (!(block == null ? void 0 : block.prepared) || !isCaptionBlock(block.block)) return 0;
+  const inlineOffset = getBlockInlineOffset(block.block, prepared.baseStyle.fontSize);
+  const blockInlineSize = Math.max(prepared.baseStyle.fontSize * 4, inlineSize - inlineOffset);
+  const textLineHeight = getBlockLineHeight(block.block, prepared.baseStyle.fontSize, fallbackLineHeight);
+  let lineCount = 0;
+  walkRichInlineLineRanges(block.prepared, blockInlineSize, () => {
+    lineCount += 1;
+  });
+  if (lineCount === 0) return 0;
+  return ((_a2 = block.block.blockGapBefore) != null ? _a2 : 0) + lineCount * textLineHeight;
+}
+function isCaptionBlock(block) {
+  var _a2, _b2;
+  if (block.type !== "paragraph") return false;
+  const className = (_b2 = (_a2 = block.attrs) == null ? void 0 : _a2.class) != null ? _b2 : "";
+  if (/\b(?:caption|figcaption)\b/i.test(className)) return true;
+  const text = block.segments.map((segment) => segment.text).join("").trim();
+  return /^fig(?:ure)?\.?\s*\d+[\s.:]/i.test(text);
 }
 function segmentsToBlocks(segments) {
   return splitBlocks(segments).map((block, index) => ({
@@ -21170,10 +21199,25 @@ function getReadablePageCount(lines, columnHeight, columns) {
   return Math.max(1, lastReadablePage + 1);
 }
 function getLinePageIndex(line, columnHeight, columns) {
-  const safeColumnHeight = Math.max(1, columnHeight);
   const safeColumns = Math.max(1, columns);
-  const sourceColumn = Math.floor(Math.max(0, line.top) / safeColumnHeight);
+  const { sourceColumn } = getSourceColumnPosition(line.top, columnHeight);
   return Math.floor(sourceColumn / safeColumns);
+}
+function getSourceColumnPosition(sourceTop, columnHeight) {
+  const safeTop = Math.max(0, sourceTop);
+  const safeColumnHeight = Math.max(1, columnHeight);
+  let sourceColumn = Math.floor(safeTop / safeColumnHeight);
+  let offset = safeTop - sourceColumn * safeColumnHeight;
+  const epsilon = Math.max(1e-7, safeColumnHeight * 1e-9);
+  if (offset < 0 && offset > -epsilon) offset = 0;
+  if (offset >= safeColumnHeight - epsilon) {
+    sourceColumn += 1;
+    offset = 0;
+  }
+  return {
+    sourceColumn,
+    offset: Math.max(0, offset)
+  };
 }
 function getPagePaddingBlock(mode, pageHeight, margin) {
   const preferred = mode === "paginated" ? Math.max(20, margin) : Math.max(12, margin * 0.5);
@@ -21976,11 +22020,11 @@ class WechatMiniProgramRenderer {
     const { columns, pageHeight, columnHeight, columnWidth, gap } = this.columnLayout;
     const pagePaddingBlockStart = getReflowableBlockPaddingStart(this.columnLayout);
     if (this.layoutMode !== "paginated") return { top: line.top + pagePaddingBlockStart, left: 0 };
-    const sourceColumn = Math.floor(line.top / columnHeight);
+    const { sourceColumn, offset } = getSourceColumnPosition(line.top, columnHeight);
     const row = Math.floor(sourceColumn / columns);
     const column = sourceColumn % columns;
     return {
-      top: (row - this.pageIndex) * pageHeight + pagePaddingBlockStart + line.top % columnHeight,
+      top: (row - this.pageIndex) * pageHeight + pagePaddingBlockStart + offset,
       left: column * (columnWidth + gap)
     };
   }
@@ -22138,9 +22182,98 @@ function getTableColumns(table) {
 function clamp01$1(value2) {
   return Math.max(0, Math.min(1, value2));
 }
+function isRebookExtension(value2) {
+  return value2 !== null && value2 !== void 0 && typeof value2 === "object" && "manifest" in value2;
+}
+async function resolveRebookExtension(value2) {
+  var _a2;
+  const manifest = assertRebookExtensionManifest(value2.manifest);
+  const context = {
+    apiVersion: 1,
+    extensionId: manifest.id,
+    manifest
+  };
+  const activated = await ((_a2 = value2.activate) == null ? void 0 : _a2.call(value2, context));
+  return {
+    manifest,
+    plugins: [
+      ...toPluginArray(value2.plugin),
+      ...toPluginArray(value2.plugins),
+      ...toPluginArray(activated)
+    ]
+  };
+}
+async function resolveRebookPlugins(entries) {
+  const plugins = [];
+  for (const entry of entries != null ? entries : []) {
+    if (isRebookExtension(entry)) {
+      plugins.push(...await resolveRebookExtension(entry).then((result) => result.plugins));
+    } else {
+      plugins.push(entry);
+    }
+  }
+  return plugins;
+}
+class RebookExtensionRegistry {
+  constructor() {
+    __publicField(this, "extensions", /* @__PURE__ */ new Map());
+  }
+  install(extension, options = {}) {
+    const manifest = assertRebookExtensionManifest(extension.manifest);
+    if (!options.replace && this.extensions.has(manifest.id)) {
+      throw new Error(`Rebook extension "${manifest.id}" is already installed.`);
+    }
+    this.extensions.set(manifest.id, extension);
+    return extension;
+  }
+  uninstall(id) {
+    return this.extensions.delete(id);
+  }
+  get(id) {
+    return this.extensions.get(id);
+  }
+  has(id) {
+    return this.extensions.has(id);
+  }
+  list() {
+    return Array.from(this.extensions.values());
+  }
+  manifests() {
+    return this.list().map((extension) => extension.manifest);
+  }
+  async getPlugins() {
+    return resolveRebookPlugins(this.list());
+  }
+  clear() {
+    this.extensions.clear();
+  }
+}
+function createRebookExtensionRegistry(extensions = []) {
+  const registry2 = new RebookExtensionRegistry();
+  for (const extension of extensions) registry2.install(extension);
+  return registry2;
+}
+function assertRebookExtensionManifest(manifest) {
+  if (!manifest || typeof manifest !== "object") {
+    throw new Error("Rebook extension manifest must be an object.");
+  }
+  assertNonEmptyString(manifest.id, "id");
+  assertNonEmptyString(manifest.name, "name");
+  assertNonEmptyString(manifest.version, "version");
+  return manifest;
+}
+function assertNonEmptyString(value2, field) {
+  if (typeof value2 !== "string" || value2.trim().length === 0) {
+    throw new Error(`Rebook extension manifest field "${field}" must be a non-empty string.`);
+  }
+}
+function toPluginArray(value2) {
+  if (!value2) return [];
+  return typeof value2 === "function" ? [value2] : [...value2];
+}
 async function applyRebookPlugins(book, plugins) {
   let current = book;
-  for (const plugin of plugins != null ? plugins : []) {
+  for (const plugin of await resolveRebookPlugins(plugins)) {
     current = await plugin(current);
   }
   return current;
@@ -22464,8 +22597,12 @@ class ReaderSession {
     __publicField(this, "renderer");
     __publicField(this, "book", null);
     __publicField(this, "config");
+    __publicField(this, "extensionRegistry", createRebookExtensionRegistry());
+    __publicField(this, "pluginEntries", []);
     __publicField(this, "registeredListeners", []);
+    var _a2;
     this.config = config;
+    for (const plugin of (_a2 = config.plugins) != null ? _a2 : []) this.addPluginEntry(plugin);
     this.renderer = this.createRenderer();
   }
   /**
@@ -22476,7 +22613,7 @@ class ReaderSession {
     this.resetRenderer();
     const book = await applyRebookPlugins(
       await registry.open(input, this.getParserOptions()),
-      this.config.plugins
+      this.pluginEntries
     );
     this.book = book;
     await this.renderer.open(book);
@@ -22488,7 +22625,7 @@ class ReaderSession {
   async openBook(inputBook) {
     this.close();
     this.resetRenderer();
-    const book = await applyRebookPlugins(inputBook, this.config.plugins);
+    const book = await applyRebookPlugins(inputBook, this.pluginEntries);
     this.book = book;
     await this.renderer.open(book);
   }
@@ -22504,6 +22641,59 @@ class ReaderSession {
   getMetadata() {
     var _a2;
     return (_a2 = this.book) == null ? void 0 : _a2.metadata;
+  }
+  /**
+   * Install an extension for future book opens. Existing open books are not rewrapped automatically.
+   */
+  installExtension(extension, options = {}) {
+    const existingIndex = this.pluginEntries.findIndex(
+      (entry) => isRebookExtension(entry) && entry.manifest.id === extension.manifest.id
+    );
+    const installed = this.extensionRegistry.install(extension, options);
+    if (existingIndex >= 0) {
+      this.pluginEntries[existingIndex] = installed;
+    } else {
+      this.pluginEntries.push(installed);
+    }
+    return installed;
+  }
+  /**
+   * Uninstall an extension by id for future book opens.
+   */
+  uninstallExtension(id) {
+    const removed = this.extensionRegistry.uninstall(id);
+    if (!removed) return false;
+    for (let index = this.pluginEntries.length - 1; index >= 0; index--) {
+      const entry = this.pluginEntries[index];
+      if (isRebookExtension(entry) && entry.manifest.id === id) {
+        this.pluginEntries.splice(index, 1);
+      }
+    }
+    return true;
+  }
+  /**
+   * Get an installed extension package by id.
+   */
+  getExtension(id) {
+    return this.extensionRegistry.get(id);
+  }
+  /**
+   * Check whether an extension package is installed.
+   */
+  hasExtension(id) {
+    return this.extensionRegistry.has(id);
+  }
+  /**
+   * List installed extension packages.
+   */
+  getInstalledExtensions() {
+    return this.extensionRegistry.list();
+  }
+  /**
+   * List installed extension manifests for UI, settings, and future marketplace integrations.
+   */
+  getExtensionManifests() {
+    return this.extensionRegistry.manifests();
   }
   /**
    * Get table of contents.
@@ -22844,6 +23034,12 @@ class ReaderSession {
   }
   getParserOptions() {
     return typeof this.config.parserOptions === "function" ? this.config.parserOptions() : this.config.parserOptions;
+  }
+  addPluginEntry(entry) {
+    if (isRebookExtension(entry)) {
+      this.extensionRegistry.install(entry);
+    }
+    this.pluginEntries.push(entry);
   }
 }
 function createTOCViewTree(items, activeItem, trialByItem) {
