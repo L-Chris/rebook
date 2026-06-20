@@ -39,6 +39,29 @@ describe('reflowable page model', () => {
         })
     })
 
+    it('keeps source column offset stable on floating point column boundaries', () => {
+        const layout = createLayout({
+            columns: 2,
+            pageHeight: 1174,
+            columnHeight: 898.4594594594594,
+            pagePaddingBlock: 0,
+            pagePaddingBlockStart: 124.93513513513521,
+            pagePaddingBlockEnd: 150.60540540540546,
+            columnWidth: 760,
+            gap: 24,
+        })
+        const imageTop = 17070.729729729726
+        const captionTop = imageTop + 181
+
+        const imagePosition = getRenderedReflowableLinePosition(createLine(0, imageTop), layout, 'paginated')
+        const captionPosition = getRenderedReflowableLinePosition(createLine(1, captionTop), layout, 'paginated')
+
+        expect(imagePosition.left).toBe(784)
+        expect(captionPosition.left).toBe(784)
+        expect(imagePosition.top).toBeCloseTo(10690.935135135135)
+        expect(captionPosition.top).toBeCloseTo(imagePosition.top + 181)
+    })
+
     it('calculates scrolled source viewport, fraction, and scroll targets', () => {
         const layout = createLayout({ pagePaddingBlock: 16 })
         const metrics = { scrollTop: 70, scrollHeight: 500, clientHeight: 100 }

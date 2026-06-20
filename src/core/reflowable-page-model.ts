@@ -1,7 +1,7 @@
 import type { LineRange, VisibleLineWindow } from './pretext'
 import { getVisibleLines } from './pretext'
 import type { LayoutMode } from './renderer'
-import { getLinePageIndex } from './renderer-utils'
+import { getLinePageIndex, getSourceColumnPosition } from './renderer-utils'
 import { getSpreadVisibleItemCount } from './spread-layout'
 
 export type ReflowablePageFitMode = 'auto' | 'paper' | 'viewport'
@@ -170,11 +170,11 @@ export function getRenderedReflowableLinePosition(
 
     const safeColumnHeight = Math.max(1, columnHeight)
     const safeColumns = Math.max(1, columns)
-    const sourceColumn = Math.floor(Math.max(0, line.top) / safeColumnHeight)
+    const { sourceColumn, offset } = getSourceColumnPosition(line.top, safeColumnHeight)
     const row = Math.floor(sourceColumn / safeColumns)
     const column = sourceColumn % safeColumns
     return {
-        top: row * pageHeight + pagePaddingBlockStart + (Math.max(0, line.top) % safeColumnHeight),
+        top: row * pageHeight + pagePaddingBlockStart + offset,
         left: column * (columnWidth + gap),
     }
 }

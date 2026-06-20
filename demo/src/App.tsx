@@ -123,6 +123,61 @@ interface SearchItem {
   match: string
 }
 
+interface ReflowDebugLine {
+  lineIndex: number
+  blockId: string | null
+  blockType: string | null
+  sourceTop: number | null
+  sourceHeight: number | null
+  styleTop: number | null
+  styleLeft: number | null
+  rect: {
+    x: number
+    y: number
+    width: number
+    height: number
+    bottom: number
+  }
+  text: string
+  imageSrc: string | null
+}
+
+type ReflowDebugIssueKind = 'caption-before-image' | 'distant-caption' | 'missing-caption'
+
+interface ReflowDebugFigurePair {
+  image: ReflowDebugLine
+  caption: ReflowDebugLine | null
+  visualGap: number | null
+  issue: ReflowDebugIssueKind | null
+}
+
+interface ReflowDebugSnapshot {
+  pageIndex: number | null
+  location: ReturnType<typeof summarizeLocation>
+  viewport: { width: number; height: number }
+  frame: { x: number; y: number; width: number; height: number } | null
+  rowRange: [number, number] | null
+  pairs: ReflowDebugFigurePair[]
+  issues: ReflowDebugFigurePair[]
+}
+
+interface RebookDebugTools {
+  scanFigures(): ReflowDebugSnapshot
+  logFigures(): ReflowDebugSnapshot
+  copyFigures(): Promise<ReflowDebugSnapshot>
+  next(): Promise<ReflowDebugSnapshot>
+  prev(): Promise<ReflowDebugSnapshot>
+  goTo(target: string | number): Promise<ReflowDebugSnapshot>
+  refresh(): Promise<ReflowDebugSnapshot>
+  scanPages(options?: { pages?: number; direction?: 'next' | 'prev'; stopOnIssue?: boolean }): Promise<ReflowDebugSnapshot[]>
+  findFigureIssues(pages?: number): Promise<ReflowDebugSnapshot[]>
+  sections(): unknown
+  jumpToBlock(blockId: string): Promise<void>
+  getLocation(): unknown
+  reader(): unknown
+  book(): unknown
+}
+
 const CONFIG_KEY = 'rebook-demo-config'
 const MAX_DEBUG_ENTRIES = 160
 const MAX_SEARCH_RESULTS = 80
@@ -261,12 +316,166 @@ function App() {
 
   configRef.current = config
 
-  const appendDebug = useCallback((label: string, payload: unknown = {}) => {
-    if (!configRef.current.debug) return
+  const pushDebugEntry = useCallback((label: string, payload: unknown = {}) => {
     const entry = `[${new Date().toLocaleTimeString()}] ${label}\n${safeStringify(payload)}`
     setDebugEntries(items => [entry, ...items].slice(0, MAX_DEBUG_ENTRIES))
     console.log(`[demo] ${label}`, payload)
   }, [])
+
+  const appendDebug = useCallback((label: string, payload: unknown = {}) => {
+    if (!configRef.current.debug) return
+    pushDebugEntry(label, payload)
+  }, [pushDebugEntry])
+
+  const scanReflowFigures = useCallback(() => ({
+    ...createReflowDebugSnapshot(viewerRef.current),
+    location: summarizeLocation(readerRef.current?.getLocation?.()),
+  }), [])
+
+  const logReflowFigureScan = useCallback(() => {
+    const snapshot = scanReflowFigures()
+    pushDebugEntry('reflow figure scan', summarizeReflowDebugSnapshot(snapshot))
+    return snapshot
+  }, [pushDebugEntry, scanReflowFigures])
+
+  const copyReflowFigureScan = useCallback(async () => {
+    const snapshot = scanReflowFigures()
+    await navigator.clipboard?.writeText(safeStringify(snapshot))
+    pushDebugEntry('reflow figure scan copied', summarizeReflowDebugSnapshot(snapshot))
+    return snapshot
+  }, [pushDebugEntry, scanReflowFigures])
+
+  const jumpToDebugBlock = useCallback(async (blockId: string) => {
+    const reader = readerRef.current
+    const index = reader?.getLocation?.()?.index
+    if (!reader || typeof index !== 'number' || !blockId.trim()) return
+    await reader.goTo(`${index}#${blockId.trim()}`)
+  }, [])
+
+  const runDebugNavigation = useCallback(async (action: () => Promise<void> | void) => {
+    await action()
+    await waitForDebugRender()
+    const snapshot = scanReflowFigures()
+    pushDebugEntry('reflow debug navigation', summarizeReflowDebugSnapshot(snapshot))
+    return snapshot
+  }, [pushDebugEntry, scanReflowFigures])
+
+  const debugNextPage = useCallback(() => runDebugNavigation(async () => {
+    await readerRef.current?.next?.()
+  }), [runDebugNavigation])
+
+  const debugPrevPage = useCallback(() => runDebugNavigation(async () => {
+    await readerRef.current?.prev?.()
+  }), [runDebugNavigation])
+
+  const debugGoTo = useCallback((target: string | number) => runDebugNavigation(async () => {
+    await readerRef.current?.goTo?.(target)
+  }), [runDebugNavigation])
+
+  const debugRefresh = useCallback(() => runDebugNavigation(async () => {
+    await readerRef.current?.refresh?.()
+  }), [runDebugNavigation])
+
+  const debugScanPages = useCallback(async (options: { pages?: number; direction?: 'next' | 'prev'; stopOnIssue?: boolean } = {}) => {
+    const reader = readerRef.current
+    const pages = Math.max(1, Math.min(80, Math.floor(options.pages ?? 12)))
+    const direction = options.direction ?? 'next'
+    const snapshots: ReflowDebugSnapshot[] = []
+
+    for (let index = 0; index < pages; index += 1) {
+      const snapshot = scanReflowFigures()
+      snapshots.push(snapshot)
+      if (options.stopOnIssue && snapshot.issues.length > 0) break
+      if (index === pages - 1 || !reader) break
+      if (direction === 'prev') await reader.prev?.()
+      else await reader.next?.()
+      await waitForDebugRender()
+    }
+
+    pushDebugEntry('reflow debug page scan', {
+      pages: snapshots.length,
+      direction,
+      issues: snapshots.flatMap(snapshot => summarizeReflowDebugSnapshot(snapshot).issues),
+      last: summarizeReflowDebugSnapshot(snapshots[snapshots.length - 1]!),
+    })
+    return snapshots
+  }, [pushDebugEntry, scanReflowFigures])
+
+  const debugFindFigureIssues = useCallback((pages = 20) =>
+    debugScanPages({ pages, direction: 'next', stopOnIssue: true }), [debugScanPages])
+
+  const getDebugSections = useCallback(() => summarizeDebugSections(bookRef.current), [])
+
+  const logDebugSections = useCallback(() => {
+    const sections = getDebugSections()
+    pushDebugEntry('reflow debug sections', sections)
+    return sections
+  }, [getDebugSections, pushDebugEntry])
+
+  const runDebugCommandText = useCallback(async (value: string) => {
+    const [command = '', ...args] = value.trim().split(/\s+/)
+    const name = command.toLowerCase()
+    try {
+      if (name === 'next' || name === 'n') {
+        await debugNextPage()
+      } else if (name === 'prev' || name === 'p') {
+        await debugPrevPage()
+      } else if (name === 'refresh' || name === 'r') {
+        await debugRefresh()
+      } else if (name === 'scan') {
+        await debugScanPages({ pages: Number(args[0]) || 12, direction: 'next' })
+      } else if (name === 'find') {
+        await debugFindFigureIssues(Number(args[0]) || 20)
+      } else if (name === 'go' || name === 'goto') {
+        const target = args.join(' ')
+        await debugGoTo(/^\d+$/.test(target) ? Number(target) : target)
+      } else if (name === 'block') {
+        await jumpToDebugBlock(args.join(' '))
+        await waitForDebugRender()
+        logReflowFigureScan()
+      } else if (name === 'sections' || name === 'toc') {
+        logDebugSections()
+      } else if (name === 'figures') {
+        logReflowFigureScan()
+      } else {
+        pushDebugEntry('reflow debug command failed', { command: value, error: 'Unknown command' })
+      }
+    } catch (error) {
+      pushDebugEntry('reflow debug command failed', { command: value, error: formatError(error) })
+    }
+  }, [
+    debugFindFigureIssues,
+    debugGoTo,
+    debugNextPage,
+    debugPrevPage,
+    debugRefresh,
+    debugScanPages,
+    jumpToDebugBlock,
+    logDebugSections,
+    logReflowFigureScan,
+    pushDebugEntry,
+  ])
+
+  if (typeof window !== 'undefined') {
+    const debugTools: RebookDebugTools = {
+      scanFigures: scanReflowFigures,
+      logFigures: logReflowFigureScan,
+      copyFigures: copyReflowFigureScan,
+      next: debugNextPage,
+      prev: debugPrevPage,
+      goTo: debugGoTo,
+      refresh: debugRefresh,
+      scanPages: debugScanPages,
+      findFigureIssues: debugFindFigureIssues,
+      sections: getDebugSections,
+      jumpToBlock: jumpToDebugBlock,
+      getLocation: () => readerRef.current?.getLocation?.() ?? null,
+      reader: () => readerRef.current,
+      book: () => bookRef.current,
+    }
+    ;(window as Window & { __rebookDebug?: RebookDebugTools }).__rebookDebug = debugTools
+    installRebookDebugBridge(debugTools)
+  }
 
   const createModel = useCallback((apiKey: string, baseURL: string, model: string) => {
     if (!apiKey.trim()) return null
@@ -496,6 +705,38 @@ function App() {
     const file = Array.from(files).find(Boolean)
     if (file) void openFileWithReader(file)
   }
+
+  const openURLWithReader = async (url: string, targetReader = readerRef.current) => {
+    if (!targetReader) return
+    setBusy(true)
+    setStatus(`Fetching ${url}...`)
+    try {
+      const response = await fetch(url)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const blob = await response.blob()
+      const file = new File([blob], getFileNameFromURL(url), {
+        type: blob.type || 'application/octet-stream',
+      })
+      await openFileWithReader(file, targetReader)
+    } catch (error) {
+      setStatus(`Failed to open URL: ${formatError(error)}`)
+      appendDebug('open url failed', { url, error: formatError(error) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    const url = getInitialBookURL()
+    if (!url) return
+    let cancelled = false
+    void Promise.resolve().then(async () => {
+      if (!cancelled) await openURLWithReader(url)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const refreshTOC = (reader = readerRef.current, currentLocation = reader?.getLocation?.()) => {
     if (!reader) return
@@ -816,7 +1057,7 @@ function App() {
         {activePanel && (
           <RightPanel
             panel={activePanel}
-            width={activePanel === 'chat' ? chatPanelWidth : 420}
+            width={activePanel === 'chat' ? chatPanelWidth : activePanel === 'debug' ? 520 : 420}
             onClearChat={activePanel === 'chat' ? () => {
               setChatMessages(messages => {
                 revokeChatAttachmentURLs(messages.flatMap(message => message.attachments ?? []))
@@ -875,6 +1116,12 @@ function App() {
             {activePanel === 'debug' && (
               <DebugPanel
                 entries={debugEntries}
+                onScanFigures={logReflowFigureScan}
+                onCopyFigures={() => void copyReflowFigureScan()}
+                onPrevPage={() => void debugPrevPage()}
+                onNextPage={() => void debugNextPage()}
+                onFindIssues={() => void debugFindFigureIssues(20)}
+                onRunCommand={command => void runDebugCommandText(command)}
                 onClear={() => setDebugEntries([])}
                 onCopy={() => void navigator.clipboard?.writeText(debugEntries.join('\n\n'))}
               />
@@ -932,12 +1179,10 @@ function Header(props: {
         <MessageSquareText className="h-4 w-4" />
         Chat
       </button>
-      {props.debugEnabled ? (
-        <button className={panelButtonClass(props.activePanel === 'debug')} type="button" onClick={() => props.onTogglePanel('debug')}>
-          <Bug className="h-4 w-4" />
-          Debug
-        </button>
-      ) : null}
+      <button className={panelButtonClass(props.activePanel === 'debug')} type="button" onClick={() => props.onTogglePanel('debug')}>
+        <Bug className="h-4 w-4" />
+        Debug
+      </button>
       <button className="icon-button" type="button" onClick={props.onOpenSettings} title="Settings">
         <Settings className="h-4 w-4" />
       </button>
@@ -1363,15 +1608,65 @@ function ChatReferenceChips({ references, onRemove }: { references: ChatReferenc
   )
 }
 
-function DebugPanel({ entries, onClear, onCopy }: { entries: string[]; onClear(): void; onCopy(): void }) {
+function DebugPanel({
+  entries,
+  onScanFigures,
+  onCopyFigures,
+  onPrevPage,
+  onNextPage,
+  onFindIssues,
+  onRunCommand,
+  onClear,
+  onCopy,
+}: {
+  entries: string[]
+  onScanFigures(): void
+  onCopyFigures(): void
+  onPrevPage(): void
+  onNextPage(): void
+  onFindIssues(): void
+  onRunCommand(command: string): void
+  onClear(): void
+  onCopy(): void
+}) {
+  const [command, setCommand] = useState('find 20')
+  const runCommand = () => {
+    const value = command.trim()
+    if (value) onRunCommand(value)
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex gap-2 border-b border-slate-200 p-3">
-        <button className="toolbar-button" type="button" onClick={onCopy}>Copy</button>
+      <div className="flex flex-wrap gap-2 border-b border-slate-200 p-3">
+        <button className="toolbar-button" type="button" onClick={onPrevPage}>Prev</button>
+        <button className="toolbar-button" type="button" onClick={onNextPage}>Next</button>
+        <button className="toolbar-button" type="button" onClick={onScanFigures}>Scan Figures</button>
+        <button className="toolbar-button" type="button" onClick={onFindIssues}>Find Issues</button>
+        <button className="toolbar-button" type="button" onClick={onCopyFigures}>Copy Scan</button>
+        <button className="toolbar-button" type="button" onClick={onCopy}>Copy Log</button>
         <button className="toolbar-button" type="button" onClick={onClear}>Clear</button>
       </div>
+      <div className="flex gap-2 border-b border-slate-200 p-3">
+        <input
+          className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+          data-rebook-debug-command-input="true"
+          value={command}
+          onChange={event => setCommand(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === 'Enter') runCommand()
+          }}
+        />
+        <button
+          className="toolbar-button"
+          data-rebook-debug-run="true"
+          type="button"
+          onClick={runCommand}
+        >
+          Run
+        </button>
+      </div>
       <pre className="debug-log min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-3 text-xs text-slate-700">
-        {entries.join('\n\n') || 'Debug disabled or no entries yet.'}
+        {entries.join('\n\n') || 'No debug entries yet.'}
       </pre>
     </div>
   )
@@ -2202,6 +2497,24 @@ function saveConfig(config: DemoConfig) {
   localStorage.setItem(CONFIG_KEY, JSON.stringify(config))
 }
 
+function getInitialBookURL(): string {
+  try {
+    return new URL(window.location.href).searchParams.get('book')?.trim() ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function getFileNameFromURL(url: string): string {
+  try {
+    const pathname = new URL(url, window.location.href).pathname
+    const name = decodeURIComponent(pathname.split('/').filter(Boolean).pop() ?? '')
+    return name || 'book'
+  } catch {
+    return 'book'
+  }
+}
+
 function getChatCommandToken(input: string): string | null {
   const value = input.trimStart()
   if (!value.startsWith('/')) return null
@@ -2671,6 +2984,272 @@ function summarizeLocation(location: any) {
     tocLabel: location.tocItem?.label,
     reason: location.reason,
   }
+}
+
+let rebookDebugBridgeTools: RebookDebugTools | null = null
+let rebookDebugBridgeInstalled = false
+
+function installRebookDebugBridge(tools: RebookDebugTools): void {
+  rebookDebugBridgeTools = tools
+  if (typeof document === 'undefined') return
+  document.documentElement.dataset.rebookDebugTools = 'true'
+  ensureRebookDebugBridgeOutput()
+  if (rebookDebugBridgeInstalled) return
+
+  document.addEventListener('rebook-debug-command', () => {
+    void handleRebookDebugBridgeCommand()
+  })
+  rebookDebugBridgeInstalled = true
+}
+
+async function handleRebookDebugBridgeCommand(): Promise<void> {
+  const output = ensureRebookDebugBridgeOutput()
+  const rawCommand = document.documentElement.dataset.rebookDebugCommand
+  if (!rawCommand) return
+
+  let request: { id?: string; command?: string; args?: unknown[] }
+  try {
+    request = JSON.parse(rawCommand)
+  } catch (error) {
+    writeRebookDebugBridgeResult(output, {
+      id: null,
+      ok: false,
+      error: `Invalid debug command: ${formatError(error)}`,
+    })
+    return
+  }
+
+  const id = request.id ?? String(Date.now())
+  try {
+    const result = await invokeRebookDebugCommand(request.command ?? '', request.args ?? [])
+    writeRebookDebugBridgeResult(output, { id, ok: true, result })
+  } catch (error) {
+    writeRebookDebugBridgeResult(output, { id, ok: false, error: formatError(error) })
+  }
+}
+
+async function invokeRebookDebugCommand(command: string, args: unknown[]): Promise<unknown> {
+  const tools = rebookDebugBridgeTools
+  if (!tools) throw new Error('Rebook debug tools are not ready.')
+
+  switch (command) {
+    case 'scanFigures':
+      return tools.scanFigures()
+    case 'logFigures':
+      return tools.logFigures()
+    case 'copyFigures':
+      return tools.copyFigures()
+    case 'next':
+      return tools.next()
+    case 'prev':
+      return tools.prev()
+    case 'goTo':
+      return tools.goTo(toDebugTarget(args[0]))
+    case 'refresh':
+      return tools.refresh()
+    case 'scanPages':
+      return tools.scanPages(isDebugScanOptions(args[0]) ? args[0] : undefined)
+    case 'findFigureIssues':
+      return tools.findFigureIssues(typeof args[0] === 'number' ? args[0] : undefined)
+    case 'sections':
+    case 'toc':
+      return tools.sections()
+    case 'jumpToBlock':
+      await tools.jumpToBlock(String(args[0] ?? ''))
+      return tools.scanFigures()
+    case 'getLocation':
+      return tools.getLocation()
+    default:
+      throw new Error(`Unknown debug command: ${command}`)
+  }
+}
+
+function toDebugTarget(value: unknown): string | number {
+  if (typeof value === 'number' || typeof value === 'string') return value
+  throw new Error('goTo requires a string or number target.')
+}
+
+function isDebugScanOptions(value: unknown): value is { pages?: number; direction?: 'next' | 'prev'; stopOnIssue?: boolean } {
+  if (!value || typeof value !== 'object') return false
+  const options = value as { direction?: unknown }
+  return options.direction == null || options.direction === 'next' || options.direction === 'prev'
+}
+
+function ensureRebookDebugBridgeOutput(): HTMLTextAreaElement {
+  const existing = document.getElementById('rebook-debug-bridge-output')
+  if (existing instanceof HTMLTextAreaElement) return existing
+
+  const output = document.createElement('textarea')
+  output.id = 'rebook-debug-bridge-output'
+  output.dataset.rebookDebugOutput = 'true'
+  output.setAttribute('aria-hidden', 'true')
+  output.tabIndex = -1
+  output.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;'
+  document.body.appendChild(output)
+  return output
+}
+
+function writeRebookDebugBridgeResult(output: HTMLTextAreaElement, result: unknown): void {
+  output.value = safeStringify(result)
+  output.dataset.updatedAt = String(Date.now())
+  document.dispatchEvent(new CustomEvent('rebook-debug-result'))
+}
+
+function createReflowDebugSnapshot(root: HTMLElement | null): ReflowDebugSnapshot {
+  const scope = root ?? document.body
+  const frame = scope.querySelector<HTMLElement>('[data-page-index]')
+  const frameRect = frame?.getBoundingClientRect()
+  const lines = Array.from(scope.querySelectorAll<HTMLElement>('[data-rebook-line-index]'))
+    .map(readReflowDebugLine)
+    .sort((a, b) => a.lineIndex - b.lineIndex)
+  const captions = lines.filter(isReflowDebugCaption)
+  const images = lines.filter(line => line.blockType === 'image')
+  const maxLineIndex = lines[lines.length - 1]?.lineIndex ?? -1
+  const pairs = images.map(image => createReflowDebugFigurePair(image, captions, maxLineIndex))
+  const rowRange = lines.length
+    ? [lines[0]!.lineIndex, lines[lines.length - 1]!.lineIndex] as [number, number]
+    : null
+
+  return {
+    pageIndex: parseNullableNumber(frame?.dataset.pageIndex),
+    location: null,
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    },
+    frame: frameRect
+      ? {
+        x: frameRect.x,
+        y: frameRect.y,
+        width: frameRect.width,
+        height: frameRect.height,
+      }
+      : null,
+    rowRange,
+    pairs,
+    issues: pairs.filter(pair => pair.issue),
+  }
+}
+
+function readReflowDebugLine(element: HTMLElement): ReflowDebugLine {
+  const rect = element.getBoundingClientRect()
+  const style = getComputedStyle(element)
+  return {
+    lineIndex: parseNullableNumber(element.dataset.rebookLineIndex) ?? -1,
+    blockId: element.dataset.blockId ?? null,
+    blockType: element.dataset.blockType ?? null,
+    sourceTop: parseNullableNumber(element.dataset.sourceTop),
+    sourceHeight: parseNullableNumber(element.dataset.sourceHeight),
+    styleTop: parseCSSPixelValue(style.top),
+    styleLeft: parseCSSPixelValue(style.left),
+    rect: {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+      bottom: rect.bottom,
+    },
+    text: normalizeDebugText(element.textContent ?? ''),
+    imageSrc: element.querySelector('img')?.getAttribute('src') ?? null,
+  }
+}
+
+function createReflowDebugFigurePair(
+  image: ReflowDebugLine,
+  captions: ReflowDebugLine[],
+  maxLineIndex: number,
+): ReflowDebugFigurePair {
+  const caption = captions.find(item => item.lineIndex > image.lineIndex) ?? null
+  const lineDistance = caption ? caption.lineIndex - image.lineIndex : Number.POSITIVE_INFINITY
+  const visualGap = caption ? caption.rect.y - image.rect.bottom : null
+  let issue: ReflowDebugIssueKind | null = null
+
+  if ((!caption && maxLineIndex - image.lineIndex > 12) || lineDistance > 12) {
+    issue = 'missing-caption'
+  } else if (visualGap != null && visualGap < -2) {
+    issue = 'caption-before-image'
+  } else if (visualGap != null && visualGap > 96) {
+    issue = 'distant-caption'
+  }
+
+  return {
+    image,
+    caption,
+    visualGap,
+    issue,
+  }
+}
+
+function isReflowDebugCaption(line: ReflowDebugLine): boolean {
+  return /^fig(?:ure)?\.?\s*\d+[\s.:]/i.test(line.text)
+}
+
+function summarizeReflowDebugSnapshot(snapshot: ReflowDebugSnapshot) {
+  return {
+    pageIndex: snapshot.pageIndex,
+    location: snapshot.location,
+    viewport: snapshot.viewport,
+    rowRange: snapshot.rowRange,
+    figures: snapshot.pairs.length,
+    issues: snapshot.issues.map(pair => ({
+      issue: pair.issue,
+      imageLine: pair.image.lineIndex,
+      imageBlock: pair.image.blockId,
+      captionLine: pair.caption?.lineIndex ?? null,
+      captionBlock: pair.caption?.blockId ?? null,
+      caption: pair.caption?.text ?? null,
+      visualGap: pair.visualGap,
+      imageRect: pair.image.rect,
+      captionRect: pair.caption?.rect ?? null,
+      sourceTop: {
+        image: pair.image.sourceTop,
+        caption: pair.caption?.sourceTop ?? null,
+      },
+    })),
+  }
+}
+
+function summarizeDebugSections(book: any) {
+  const sections = (book?.sections ?? []).map((section: any, index: number) => ({
+    index,
+    id: section?.id,
+    title: formatLanguageMap(section?.title ?? section?.label),
+    href: section?.href,
+  }))
+  const toc = flattenTOCItems(book?.toc ?? []).map((item: any) => {
+    const resolved = book?.resolveHref?.(item.href)
+    return {
+      label: item.label,
+      href: item.href,
+      index: resolved?.index ?? null,
+      anchor: resolved?.anchor ?? null,
+    }
+  })
+  return { sections, toc }
+}
+
+function parseCSSPixelValue(value: string): number | null {
+  return parseNullableNumber(value.replace(/px$/, ''))
+}
+
+function parseNullableNumber(value: string | undefined | null): number | null {
+  if (value == null || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function normalizeDebugText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function waitForDebugRender(): Promise<void> {
+  return new Promise(resolve => {
+    requestAnimationFrame(() => {
+      window.setTimeout(() => {
+        requestAnimationFrame(() => resolve())
+      }, 120)
+    })
+  })
 }
 
 function formatProgress(location: any) {

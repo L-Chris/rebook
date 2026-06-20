@@ -8,6 +8,7 @@ import {
     prepareBlocks,
     prepare,
 } from '../../src/core/pretext'
+import { getRenderedReflowableLinePosition } from '../../src/core/reflowable-page-model'
 
 beforeAll(() => {
     vi.stubGlobal('OffscreenCanvas', class {
@@ -304,6 +305,76 @@ describe('Pretext pipeline', () => {
         })
         expect(tableLines[0].kind).toBe('table')
         expect(tableLines[0].top).toBe(100)
+    })
+
+    it('keeps image blocks with following captions when checking page column overflow', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('p', {}, [
+                elementNode('img', {
+                    src: 'blob:figure',
+                    width: '80',
+                    height: '30',
+                }),
+            ]),
+            elementNode('p', { class: 'caption' }, [textNode('Figure 1. Caption')]),
+        ], { fontSize: 10, lineHeight: 1 })
+
+        const lines = layout(prepareBlocks(blocks, { baseStyle: { fontSize: 10, lineHeight: 1 } }), {
+            inlineSize: 120,
+            blockStart: 60,
+            maxBlockHeight: 100,
+        })
+
+        expect(lines[0].kind).toBe('image')
+        expect(lines[0].top).toBe(100)
+        expect(lines[1].text).toBe('Figure 1. Caption')
+        expect(lines[1].top).toBeGreaterThan(lines[0].top + lines[0].height)
+    })
+
+    it('keeps image captions visually adjacent after paginated column mapping', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('p', {}, [
+                elementNode('img', {
+                    src: 'blob:figure',
+                    width: '80',
+                    height: '20',
+                }),
+            ]),
+            elementNode('p', { class: 'caption' }, [
+                textNode('Figure 1. Caption wraps onto another rendered line.'),
+            ]),
+        ], { fontSize: 10, lineHeight: 1 })
+
+        const lines = layout(prepareBlocks(blocks, { baseStyle: { fontSize: 10, lineHeight: 1 } }), {
+            inlineSize: 120,
+            blockStart: 65,
+            maxBlockHeight: 100,
+        })
+        const imageLine = lines[0]
+        const captionLine = lines[1]
+        const layoutModel = {
+            margin: 0,
+            gap: 20,
+            columnWidth: 120,
+            columns: 2,
+            pageHeight: 120,
+            columnHeight: 100,
+            pagePaddingInline: 0,
+            pagePaddingBlock: 0,
+            totalHeight: 120,
+            pageCount: 1,
+        }
+
+        const imagePosition = getRenderedReflowableLinePosition(imageLine, layoutModel, 'paginated')
+        const captionPosition = getRenderedReflowableLinePosition(captionLine, layoutModel, 'paginated')
+
+        expect(imageLine.kind).toBe('image')
+        expect(imageLine.top).toBe(100)
+        expect(captionLine.text).toContain('Figure 1. Caption')
+        expect(captionLine.top).toBeGreaterThanOrEqual(imageLine.top + imageLine.height)
+        expect(captionLine.top - (imageLine.top + imageLine.height)).toBeLessThan(20)
+        expect(captionPosition.left).toBe(imagePosition.left)
+        expect(captionPosition.top).toBeGreaterThan(imagePosition.top)
     })
 
     it('delegates preparation and line layout to Pretext while preserving segment ranges', () => {

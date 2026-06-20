@@ -514,7 +514,8 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
     const blockGap = options.blockGap ?? 0
     let top = options.blockStart ?? 0
 
-    for (const block of prepared.blocks) {
+    for (let blockIndex = 0; blockIndex < prepared.blocks.length; blockIndex++) {
+        const block = prepared.blocks[blockIndex]!
         const blockStartCount = lines.length
         if (blockStartCount > 0) top += block.block.blockGapBefore ?? 0
         const inlineOffset = getBlockInlineOffset(block.block, prepared.baseStyle.fontSize)
@@ -557,7 +558,16 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
         }
         if (block.block.type === 'image' && block.block.image) {
             const metrics = getImageBlockMetrics(block.block.image, inlineSize, lineHeight, options.maxBlockHeight)
-            top = avoidAtomicBlockPageBreak(top, metrics.height, options.maxBlockHeight, lineHeight)
+            const followingCaptionHeight = getFollowingCaptionKeepHeight(
+                prepared.blocks[blockIndex + 1],
+                prepared,
+                inlineSize,
+                lineHeight,
+            )
+            const keepHeight = followingCaptionHeight > 0
+                ? metrics.height + (block.block.blockGapAfter ?? blockGap) + followingCaptionHeight
+                : metrics.height
+            top = avoidAtomicBlockPageBreak(top, keepHeight, options.maxBlockHeight, lineHeight)
             lines.push({
                 index: lines.length,
                 kind: 'image',
@@ -1472,6 +1482,33 @@ function avoidAtomicBlockPageBreak(
     return offset + height > maxBlockHeight
         ? top + Math.max(lineHeight, maxBlockHeight - offset)
         : top
+}
+
+function getFollowingCaptionKeepHeight(
+    block: PreparedTextBlock | undefined,
+    prepared: PreparedText,
+    inlineSize: number,
+    fallbackLineHeight: number,
+): number {
+    if (!block?.prepared || !isCaptionBlock(block.block)) return 0
+
+    const inlineOffset = getBlockInlineOffset(block.block, prepared.baseStyle.fontSize)
+    const blockInlineSize = Math.max(prepared.baseStyle.fontSize * 4, inlineSize - inlineOffset)
+    const textLineHeight = getBlockLineHeight(block.block, prepared.baseStyle.fontSize, fallbackLineHeight)
+    let lineCount = 0
+    walkRichInlineLineRanges(block.prepared, blockInlineSize, () => {
+        lineCount += 1
+    })
+    if (lineCount === 0) return 0
+    return (block.block.blockGapBefore ?? 0) + lineCount * textLineHeight
+}
+
+function isCaptionBlock(block: TextBlock): boolean {
+    if (block.type !== 'paragraph') return false
+    const className = block.attrs?.class ?? ''
+    if (/\b(?:caption|figcaption)\b/i.test(className)) return true
+    const text = block.segments.map(segment => segment.text).join('').trim()
+    return /^fig(?:ure)?\.?\s*\d+[\s.:]/i.test(text)
 }
 
 function segmentsToBlocks(segments: readonly TextSegment[]): TextBlock[] {

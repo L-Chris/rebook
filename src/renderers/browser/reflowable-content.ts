@@ -42,6 +42,11 @@ export class BrowserReflowableContentRenderer implements ContentRenderer<Browser
     renderSurface(context: BrowserReflowableContentRenderContext): BrowserPageSurface {
         const content = document.createElement('div')
         content.dataset.rebookReflowableContentLayer = 'true'
+        content.dataset.rebookColumns = String(context.layout.columns)
+        content.dataset.rebookColumnHeight = String(context.layout.columnHeight)
+        content.dataset.rebookPageHeight = String(context.layout.pageHeight)
+        content.dataset.rebookPagePaddingBlockStart = String(context.layout.pagePaddingBlockStart ?? context.layout.pagePaddingBlock)
+        content.dataset.rebookPagePaddingBlockEnd = String(context.layout.pagePaddingBlockEnd ?? context.layout.pagePaddingBlock)
         content.style.cssText = `
             position: absolute;
             left: 0;
@@ -136,6 +141,8 @@ export class BrowserReflowableContentRenderer implements ContentRenderer<Browser
             lineEl.dataset.blockType = block.type
         }
         lineEl.dataset.rebookLineIndex = String(line.index)
+        lineEl.dataset.sourceTop = String(line.top)
+        lineEl.dataset.sourceHeight = String(line.height)
 
         for (const fragment of line.segments) {
             const span = document.createElement('span')
@@ -191,6 +198,8 @@ function createImageLine(
         wrapper.dataset.blockType = line.block.type
     }
     wrapper.dataset.rebookLineIndex = String(line.index)
+    wrapper.dataset.sourceTop = String(line.top)
+    wrapper.dataset.sourceHeight = String(line.height)
     if (image.isCover) wrapper.dataset.cover = 'true'
 
     const img = document.createElement('img')
@@ -247,6 +256,8 @@ function createPreBlock(
         wrapper.dataset.blockType = block.type
     }
     wrapper.dataset.rebookLineIndex = String(line.index)
+    wrapper.dataset.sourceTop = String(line.top)
+    wrapper.dataset.sourceHeight = String(line.height)
 
     wrapper.textContent = line.text
 
@@ -274,6 +285,8 @@ function createSeparatorLine(
         wrapper.dataset.blockType = line.block.type
     }
     wrapper.dataset.rebookLineIndex = String(line.index)
+    wrapper.dataset.sourceTop = String(line.top)
+    wrapper.dataset.sourceHeight = String(line.height)
 
     const rule = document.createElement('div')
     rule.style.cssText = `
@@ -310,6 +323,8 @@ function createTableLine(
     wrapper.dataset.blockId = line.block?.id ?? `table-row-${table.rowIndex}`
     wrapper.dataset.blockType = 'table'
     wrapper.dataset.rebookLineIndex = String(line.index)
+    wrapper.dataset.sourceTop = String(line.top)
+    wrapper.dataset.sourceHeight = String(line.height)
     wrapper.setAttribute('role', 'row')
 
     const row = document.createElement('div')

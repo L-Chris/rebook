@@ -20,6 +20,7 @@ import {
     getPagePaddingInline,
     getPluginPrefetchPageCount,
     getReadablePageCount,
+    getSourceColumnPosition,
     parseCSSPixels,
 } from '../../core/renderer-utils'
 import {
@@ -865,11 +866,11 @@ export class WechatMiniProgramRenderer implements Renderer {
         const { columns, pageHeight, columnHeight, columnWidth, gap } = this.columnLayout
         const pagePaddingBlockStart = getReflowableBlockPaddingStart(this.columnLayout)
         if (this.layoutMode !== 'paginated') return { top: line.top + pagePaddingBlockStart, left: 0 }
-        const sourceColumn = Math.floor(line.top / columnHeight)
+        const { sourceColumn, offset } = getSourceColumnPosition(line.top, columnHeight)
         const row = Math.floor(sourceColumn / columns)
         const column = sourceColumn % columns
         return {
-            top: (row - this.pageIndex) * pageHeight + pagePaddingBlockStart + (line.top % columnHeight),
+            top: (row - this.pageIndex) * pageHeight + pagePaddingBlockStart + offset,
             left: column * (columnWidth + gap),
         }
     }

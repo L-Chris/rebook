@@ -49,10 +49,28 @@ export function getReadablePageCount(lines: readonly LineRange[], columnHeight: 
 }
 
 export function getLinePageIndex(line: LineRange, columnHeight: number, columns: number): number {
-    const safeColumnHeight = Math.max(1, columnHeight)
     const safeColumns = Math.max(1, columns)
-    const sourceColumn = Math.floor(Math.max(0, line.top) / safeColumnHeight)
+    const { sourceColumn } = getSourceColumnPosition(line.top, columnHeight)
     return Math.floor(sourceColumn / safeColumns)
+}
+
+export function getSourceColumnPosition(sourceTop: number, columnHeight: number): { sourceColumn: number; offset: number } {
+    const safeTop = Math.max(0, sourceTop)
+    const safeColumnHeight = Math.max(1, columnHeight)
+    let sourceColumn = Math.floor(safeTop / safeColumnHeight)
+    let offset = safeTop - sourceColumn * safeColumnHeight
+    const epsilon = Math.max(1e-7, safeColumnHeight * 1e-9)
+
+    if (offset < 0 && offset > -epsilon) offset = 0
+    if (offset >= safeColumnHeight - epsilon) {
+        sourceColumn += 1
+        offset = 0
+    }
+
+    return {
+        sourceColumn,
+        offset: Math.max(0, offset),
+    }
 }
 
 export function getPagePaddingBlock(mode: LayoutMode, pageHeight: number, margin: number): number {
