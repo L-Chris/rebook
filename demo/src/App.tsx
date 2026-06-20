@@ -2,7 +2,6 @@ import { Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useS
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  Bug,
   ArrowUp,
   ExternalLink,
   Loader2,
@@ -38,7 +37,7 @@ import { createBrowserTTSAudioPlayer, withTTS } from '../../src/plugins/tts.ts'
 import { withProfessionalTranslation, withTranslation } from '../../src/plugins/translation.ts'
 import { withAIChat } from '../../src/plugins/ai-chat.ts'
 
-type Panel = 'search' | 'chat' | 'debug' | null
+type Panel = 'search' | 'chat' | null
 type SettingsSection = 'reading' | 'translation' | 'tts' | 'chat' | 'trial' | 'debug'
 
 interface DemoConfig {
@@ -161,25 +160,34 @@ interface ReflowDebugSnapshot {
   issues: ReflowDebugFigurePair[]
 }
 
+type ReflowDebugScanOptions = { pages?: number; direction?: 'next' | 'prev'; stopOnIssue?: boolean }
+
 interface RebookDebugTools {
+  version: string
+  help(): unknown
+  figures(): ReflowDebugSnapshot
   scanFigures(): ReflowDebugSnapshot
   logFigures(): ReflowDebugSnapshot
   copyFigures(): Promise<ReflowDebugSnapshot>
+  go(target: string | number): Promise<ReflowDebugSnapshot>
   next(): Promise<ReflowDebugSnapshot>
   prev(): Promise<ReflowDebugSnapshot>
   goTo(target: string | number): Promise<ReflowDebugSnapshot>
   refresh(): Promise<ReflowDebugSnapshot>
-  scanPages(options?: { pages?: number; direction?: 'next' | 'prev'; stopOnIssue?: boolean }): Promise<ReflowDebugSnapshot[]>
+  scan(options?: ReflowDebugScanOptions): Promise<ReflowDebugSnapshot[]>
+  scanPages(options?: ReflowDebugScanOptions): Promise<ReflowDebugSnapshot[]>
+  find(pages?: number): Promise<ReflowDebugSnapshot[]>
   findFigureIssues(pages?: number): Promise<ReflowDebugSnapshot[]>
+  block(blockId: string): Promise<ReflowDebugSnapshot>
   sections(): unknown
   jumpToBlock(blockId: string): Promise<void>
+  location(): unknown
   getLocation(): unknown
   reader(): unknown
   book(): unknown
 }
 
 const CONFIG_KEY = 'rebook-demo-config'
-const MAX_DEBUG_ENTRIES = 160
 const MAX_SEARCH_RESULTS = 80
 const MAX_CHAT_REFERENCE_OPTIONS = 120
 const MAX_CHAT_REFERENCE_SUGGESTIONS = 8
@@ -300,7 +308,6 @@ function App() {
   const [status, setStatus] = useState('Drop an e-book here or open a file.')
   const [busy, setBusy] = useState(false)
   const [dragging, setDragging] = useState(false)
-  const [debugEntries, setDebugEntries] = useState<string[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [searchScope, setSearchScope] = useState<'unit' | 'book'>('unit')
   const [searchResults, setSearchResults] = useState<SearchItem[]>([])
@@ -317,8 +324,6 @@ function App() {
   configRef.current = config
 
   const pushDebugEntry = useCallback((label: string, payload: unknown = {}) => {
-    const entry = `[${new Date().toLocaleTimeString()}] ${label}\n${safeStringify(payload)}`
-    setDebugEntries(items => [entry, ...items].slice(0, MAX_DEBUG_ENTRIES))
     console.log(`[demo] ${label}`, payload)
   }, [])
 
@@ -376,7 +381,11 @@ function App() {
     await readerRef.current?.refresh?.()
   }), [runDebugNavigation])
 
-  const debugScanPages = useCallback(async (options: { pages?: number; direction?: 'next' | 'prev'; stopOnIssue?: boolean } = {}) => {
+  const debugJumpToBlock = useCallback((blockId: string) => runDebugNavigation(async () => {
+    await jumpToDebugBlock(blockId)
+  }), [jumpToDebugBlock, runDebugNavigation])
+
+  const debugScanPages = useCallback(async (options: ReflowDebugScanOptions = {}) => {
     const reader = readerRef.current
     const pages = Math.max(1, Math.min(80, Math.floor(options.pages ?? 12)))
     const direction = options.direction ?? 'next'
@@ -406,74 +415,62 @@ function App() {
 
   const getDebugSections = useCallback(() => summarizeDebugSections(bookRef.current), [])
 
-  const logDebugSections = useCallback(() => {
-    const sections = getDebugSections()
-    pushDebugEntry('reflow debug sections', sections)
-    return sections
-  }, [getDebugSections, pushDebugEntry])
-
-  const runDebugCommandText = useCallback(async (value: string) => {
-    const [command = '', ...args] = value.trim().split(/\s+/)
-    const name = command.toLowerCase()
-    try {
-      if (name === 'next' || name === 'n') {
-        await debugNextPage()
-      } else if (name === 'prev' || name === 'p') {
-        await debugPrevPage()
-      } else if (name === 'refresh' || name === 'r') {
-        await debugRefresh()
-      } else if (name === 'scan') {
-        await debugScanPages({ pages: Number(args[0]) || 12, direction: 'next' })
-      } else if (name === 'find') {
-        await debugFindFigureIssues(Number(args[0]) || 20)
-      } else if (name === 'go' || name === 'goto') {
-        const target = args.join(' ')
-        await debugGoTo(/^\d+$/.test(target) ? Number(target) : target)
-      } else if (name === 'block') {
-        await jumpToDebugBlock(args.join(' '))
-        await waitForDebugRender()
-        logReflowFigureScan()
-      } else if (name === 'sections' || name === 'toc') {
-        logDebugSections()
-      } else if (name === 'figures') {
-        logReflowFigureScan()
-      } else {
-        pushDebugEntry('reflow debug command failed', { command: value, error: 'Unknown command' })
-      }
-    } catch (error) {
-      pushDebugEntry('reflow debug command failed', { command: value, error: formatError(error) })
-    }
-  }, [
-    debugFindFigureIssues,
-    debugGoTo,
-    debugNextPage,
-    debugPrevPage,
-    debugRefresh,
-    debugScanPages,
-    jumpToDebugBlock,
-    logDebugSections,
-    logReflowFigureScan,
-    pushDebugEntry,
-  ])
+  const getDebugHelp = useCallback(() => ({
+    global: 'window.rebookDebug',
+    aliases: ['window.__rebookDebug', 'window.rebookDebug'],
+    examples: [
+      'await rebookDebug.go(11)',
+      "await rebookDebug.block('image-116')",
+      'rebookDebug.figures().issues',
+      'await rebookDebug.scan({ pages: 20, stopOnIssue: true })',
+      'rebookDebug.sections()',
+    ],
+    methods: [
+      'help',
+      'figures',
+      'go',
+      'next',
+      'prev',
+      'refresh',
+      'scan',
+      'find',
+      'block',
+      'sections',
+      'location',
+    ],
+  }), [])
 
   if (typeof window !== 'undefined') {
     const debugTools: RebookDebugTools = {
+      version: '2026-06-20',
+      help: getDebugHelp,
+      figures: scanReflowFigures,
       scanFigures: scanReflowFigures,
       logFigures: logReflowFigureScan,
       copyFigures: copyReflowFigureScan,
+      go: debugGoTo,
       next: debugNextPage,
       prev: debugPrevPage,
       goTo: debugGoTo,
       refresh: debugRefresh,
+      scan: debugScanPages,
       scanPages: debugScanPages,
+      find: debugFindFigureIssues,
       findFigureIssues: debugFindFigureIssues,
+      block: debugJumpToBlock,
       sections: getDebugSections,
       jumpToBlock: jumpToDebugBlock,
+      location: () => readerRef.current?.getLocation?.() ?? null,
       getLocation: () => readerRef.current?.getLocation?.() ?? null,
       reader: () => readerRef.current,
       book: () => bookRef.current,
     }
-    ;(window as Window & { __rebookDebug?: RebookDebugTools }).__rebookDebug = debugTools
+    const debugWindow = window as Window & {
+      __rebookDebug?: RebookDebugTools
+      rebookDebug?: RebookDebugTools
+    }
+    debugWindow.__rebookDebug = debugTools
+    debugWindow.rebookDebug = debugTools
     installRebookDebugBridge(debugTools)
   }
 
@@ -1002,7 +999,6 @@ function App() {
         busy={busy}
         sidebarOpen={sidebarOpen}
         activePanel={activePanel}
-        debugEnabled={config.debug}
         onToggleSidebar={() => setSidebarOpen(open => !open)}
         onOpenFile={() => fileInputRef.current?.click()}
         onOpenSettings={() => {
@@ -1057,7 +1053,7 @@ function App() {
         {activePanel && (
           <RightPanel
             panel={activePanel}
-            width={activePanel === 'chat' ? chatPanelWidth : activePanel === 'debug' ? 520 : 420}
+            width={activePanel === 'chat' ? chatPanelWidth : 420}
             onClearChat={activePanel === 'chat' ? () => {
               setChatMessages(messages => {
                 revokeChatAttachmentURLs(messages.flatMap(message => message.attachments ?? []))
@@ -1113,19 +1109,6 @@ function App() {
                 onCitation={href => void openChatCitation(href)}
               />
             )}
-            {activePanel === 'debug' && (
-              <DebugPanel
-                entries={debugEntries}
-                onScanFigures={logReflowFigureScan}
-                onCopyFigures={() => void copyReflowFigureScan()}
-                onPrevPage={() => void debugPrevPage()}
-                onNextPage={() => void debugNextPage()}
-                onFindIssues={() => void debugFindFigureIssues(20)}
-                onRunCommand={command => void runDebugCommandText(command)}
-                onClear={() => setDebugEntries([])}
-                onCopy={() => void navigator.clipboard?.writeText(debugEntries.join('\n\n'))}
-              />
-            )}
           </RightPanel>
         )}
       </main>
@@ -1155,7 +1138,6 @@ function Header(props: {
   busy: boolean
   sidebarOpen: boolean
   activePanel: Panel
-  debugEnabled: boolean
   onToggleSidebar(): void
   onOpenFile(): void
   onOpenSettings(): void
@@ -1178,10 +1160,6 @@ function Header(props: {
       <button className={panelButtonClass(props.activePanel === 'chat')} type="button" onClick={() => props.onTogglePanel('chat')}>
         <MessageSquareText className="h-4 w-4" />
         Chat
-      </button>
-      <button className={panelButtonClass(props.activePanel === 'debug')} type="button" onClick={() => props.onTogglePanel('debug')}>
-        <Bug className="h-4 w-4" />
-        Debug
       </button>
       <button className="icon-button" type="button" onClick={props.onOpenSettings} title="Settings">
         <Settings className="h-4 w-4" />
@@ -1604,70 +1582,6 @@ function ChatReferenceChips({ references, onRemove }: { references: ChatReferenc
           ) : null}
         </span>
       ))}
-    </div>
-  )
-}
-
-function DebugPanel({
-  entries,
-  onScanFigures,
-  onCopyFigures,
-  onPrevPage,
-  onNextPage,
-  onFindIssues,
-  onRunCommand,
-  onClear,
-  onCopy,
-}: {
-  entries: string[]
-  onScanFigures(): void
-  onCopyFigures(): void
-  onPrevPage(): void
-  onNextPage(): void
-  onFindIssues(): void
-  onRunCommand(command: string): void
-  onClear(): void
-  onCopy(): void
-}) {
-  const [command, setCommand] = useState('find 20')
-  const runCommand = () => {
-    const value = command.trim()
-    if (value) onRunCommand(value)
-  }
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap gap-2 border-b border-slate-200 p-3">
-        <button className="toolbar-button" type="button" onClick={onPrevPage}>Prev</button>
-        <button className="toolbar-button" type="button" onClick={onNextPage}>Next</button>
-        <button className="toolbar-button" type="button" onClick={onScanFigures}>Scan Figures</button>
-        <button className="toolbar-button" type="button" onClick={onFindIssues}>Find Issues</button>
-        <button className="toolbar-button" type="button" onClick={onCopyFigures}>Copy Scan</button>
-        <button className="toolbar-button" type="button" onClick={onCopy}>Copy Log</button>
-        <button className="toolbar-button" type="button" onClick={onClear}>Clear</button>
-      </div>
-      <div className="flex gap-2 border-b border-slate-200 p-3">
-        <input
-          className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-          data-rebook-debug-command-input="true"
-          value={command}
-          onChange={event => setCommand(event.target.value)}
-          onKeyDown={event => {
-            if (event.key === 'Enter') runCommand()
-          }}
-        />
-        <button
-          className="toolbar-button"
-          data-rebook-debug-run="true"
-          type="button"
-          onClick={runCommand}
-        >
-          Run
-        </button>
-      </div>
-      <pre className="debug-log min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-3 text-xs text-slate-700">
-        {entries.join('\n\n') || 'No debug entries yet.'}
-      </pre>
     </div>
   )
 }
@@ -3033,12 +2947,17 @@ async function invokeRebookDebugCommand(command: string, args: unknown[]): Promi
   if (!tools) throw new Error('Rebook debug tools are not ready.')
 
   switch (command) {
+    case 'help':
+      return tools.help()
+    case 'figures':
     case 'scanFigures':
       return tools.scanFigures()
     case 'logFigures':
       return tools.logFigures()
     case 'copyFigures':
       return tools.copyFigures()
+    case 'go':
+      return tools.go(toDebugTarget(args[0]))
     case 'next':
       return tools.next()
     case 'prev':
@@ -3047,16 +2966,23 @@ async function invokeRebookDebugCommand(command: string, args: unknown[]): Promi
       return tools.goTo(toDebugTarget(args[0]))
     case 'refresh':
       return tools.refresh()
+    case 'scan':
+      return tools.scan(isDebugScanOptions(args[0]) ? args[0] : undefined)
     case 'scanPages':
       return tools.scanPages(isDebugScanOptions(args[0]) ? args[0] : undefined)
+    case 'find':
+      return tools.find(typeof args[0] === 'number' ? args[0] : undefined)
     case 'findFigureIssues':
       return tools.findFigureIssues(typeof args[0] === 'number' ? args[0] : undefined)
     case 'sections':
     case 'toc':
       return tools.sections()
+    case 'block':
+      return tools.block(String(args[0] ?? ''))
     case 'jumpToBlock':
       await tools.jumpToBlock(String(args[0] ?? ''))
       return tools.scanFigures()
+    case 'location':
     case 'getLocation':
       return tools.getLocation()
     default:
@@ -3069,7 +2995,7 @@ function toDebugTarget(value: unknown): string | number {
   throw new Error('goTo requires a string or number target.')
 }
 
-function isDebugScanOptions(value: unknown): value is { pages?: number; direction?: 'next' | 'prev'; stopOnIssue?: boolean } {
+function isDebugScanOptions(value: unknown): value is ReflowDebugScanOptions {
   if (!value || typeof value !== 'object') return false
   const options = value as { direction?: unknown }
   return options.direction == null || options.direction === 'next' || options.direction === 'prev'
