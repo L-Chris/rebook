@@ -1,6 +1,6 @@
 {
   "name": "rebook",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "A modular e-book parsing and rendering library",
   "type": "module",
   "main": "./dist/index.js",
@@ -14,6 +14,9 @@
       ],
       "core/extensions": [
         "dist/core/extensions.d.ts"
+      ],
+      "core/readable-content": [
+        "dist/core/readable-content.d.ts"
       ],
       "core/parser": [
         "dist/core/parser.d.ts"
@@ -128,6 +131,10 @@
     "./core/extensions": {
       "types": "./dist/core/extensions.d.ts",
       "import": "./dist/core/extensions.js"
+    },
+    "./core/readable-content": {
+      "types": "./dist/core/readable-content.d.ts",
+      "import": "./dist/core/readable-content.js"
     },
     "./parsers/*": {
       "types": "./dist/parsers/*.d.ts",

@@ -22182,18 +22182,260 @@ function getTableColumns(table) {
 function clamp01$1(value2) {
   return Math.max(0, Math.min(1, value2));
 }
+class RebookExtensionCommandRegistry {
+  constructor() {
+    __publicField(this, "commands", /* @__PURE__ */ new Map());
+  }
+  registerExtensionCommand(manifest, id, handler) {
+    const normalizedManifest = assertRebookExtensionManifest(manifest);
+    assertNonEmptyString(id, "command id");
+    if (typeof handler !== "function") {
+      throw new Error(`Rebook extension command "${id}" handler must be a function.`);
+    }
+    const existing = this.commands.get(id);
+    if (existing && existing.extensionId !== normalizedManifest.id) {
+      throw new Error(`Rebook extension command "${id}" is already registered by "${existing.extensionId}".`);
+    }
+    const registration = {
+      id,
+      extensionId: normalizedManifest.id,
+      manifest: normalizedManifest,
+      handler
+    };
+    this.commands.set(id, registration);
+    return {
+      dispose: () => {
+        if (this.commands.get(id) === registration) this.commands.delete(id);
+      }
+    };
+  }
+  async executeCommand(id, ...args) {
+    const registration = this.commands.get(id);
+    if (!registration) throw new Error(`Rebook extension command "${id}" is not registered.`);
+    return await registration.handler(...args);
+  }
+  hasCommand(id) {
+    return this.commands.has(id);
+  }
+  listCommands() {
+    return Array.from(this.commands.values());
+  }
+  unregisterCommand(id) {
+    return this.commands.delete(id);
+  }
+  unregisterExtension(extensionId) {
+    let removed = 0;
+    for (const [id, registration] of this.commands) {
+      if (registration.extensionId === extensionId) {
+        this.commands.delete(id);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+  clear() {
+    this.commands.clear();
+  }
+}
+function createRebookExtensionCommandRegistry() {
+  return new RebookExtensionCommandRegistry();
+}
+class RebookExtensionSettingsRegistry {
+  constructor() {
+    __publicField(this, "values", /* @__PURE__ */ new Map());
+    __publicField(this, "contributions", /* @__PURE__ */ new Map());
+  }
+  registerExtension(manifest) {
+    var _a2, _b2;
+    const normalizedManifest = assertRebookExtensionManifest(manifest);
+    this.contributions.set(normalizedManifest.id, {
+      manifest: normalizedManifest,
+      settings: (_b2 = (_a2 = normalizedManifest.contributes) == null ? void 0 : _a2.settings) != null ? _b2 : {}
+    });
+    return {
+      dispose: () => {
+        this.contributions.delete(normalizedManifest.id);
+      }
+    };
+  }
+  unregisterExtension(extensionId) {
+    return this.contributions.delete(extensionId);
+  }
+  get(extensionId, key, fallback) {
+    const storedKey = createSettingStorageKey(extensionId, key);
+    if (this.values.has(storedKey)) return this.values.get(storedKey);
+    const contribution = this.getContribution(extensionId, key);
+    if (contribution && "default" in contribution) return contribution.default;
+    return fallback;
+  }
+  update(extensionId, key, value2) {
+    assertNonEmptyString(extensionId, "extension id");
+    assertNonEmptyString(key, "setting key");
+    const contribution = this.getContribution(extensionId, key);
+    if (contribution) assertSettingValue(extensionId, key, contribution, value2);
+    this.values.set(createSettingStorageKey(extensionId, key), value2);
+  }
+  inspect(extensionId, key) {
+    const storedKey = createSettingStorageKey(extensionId, key);
+    const registered = this.contributions.get(extensionId);
+    const contribution = this.getContribution(extensionId, key);
+    const hasValue = this.values.has(storedKey);
+    const value2 = hasValue ? this.values.get(storedKey) : void 0;
+    const hasDefault = Boolean(contribution && "default" in contribution);
+    const defaultValue = hasDefault ? contribution == null ? void 0 : contribution.default : void 0;
+    const effectiveValue = hasValue ? value2 : hasDefault ? defaultValue : void 0;
+    return {
+      extensionId,
+      key,
+      manifest: registered == null ? void 0 : registered.manifest,
+      contribution,
+      defaultValue,
+      value: value2,
+      effectiveValue
+    };
+  }
+  list(extensionId) {
+    const result = [];
+    for (const [currentExtensionId, registered] of this.contributions) {
+      if (extensionId !== void 0 && currentExtensionId !== extensionId) continue;
+      for (const key of Object.keys(registered.settings)) {
+        result.push(this.inspect(currentExtensionId, key));
+      }
+    }
+    return result;
+  }
+  toJSON() {
+    var _a2;
+    const result = {};
+    for (const [storedKey, value2] of this.values) {
+      const [extensionId, key] = splitSettingStorageKey(storedKey);
+      (_a2 = result[extensionId]) != null ? _a2 : result[extensionId] = {};
+      result[extensionId][key] = value2;
+    }
+    return result;
+  }
+  load(snapshot) {
+    this.values.clear();
+    if (!snapshot || typeof snapshot !== "object") return;
+    for (const [extensionId, settings] of Object.entries(snapshot)) {
+      if (!settings || typeof settings !== "object" || Array.isArray(settings)) continue;
+      for (const [key, value2] of Object.entries(settings)) {
+        this.update(extensionId, key, value2);
+      }
+    }
+  }
+  clearValues(extensionId) {
+    if (extensionId === void 0) {
+      this.values.clear();
+      return;
+    }
+    const prefix = `${extensionId}\0`;
+    for (const storedKey of Array.from(this.values.keys())) {
+      if (storedKey.startsWith(prefix)) this.values.delete(storedKey);
+    }
+  }
+  clear() {
+    this.values.clear();
+    this.contributions.clear();
+  }
+  getContribution(extensionId, key) {
+    var _a2;
+    return (_a2 = this.contributions.get(extensionId)) == null ? void 0 : _a2.settings[key];
+  }
+}
+function createRebookExtensionSettingsRegistry() {
+  return new RebookExtensionSettingsRegistry();
+}
+class RebookExtensionSubscriptionRegistry {
+  constructor() {
+    __publicField(this, "subscriptions", /* @__PURE__ */ new Map());
+  }
+  setExtensionSubscriptions(extensionId, subscriptions) {
+    this.deactivateExtension(extensionId);
+    if (subscriptions.length) this.subscriptions.set(extensionId, [...subscriptions]);
+  }
+  list(extensionId) {
+    var _a2;
+    if (extensionId !== void 0) return [...(_a2 = this.subscriptions.get(extensionId)) != null ? _a2 : []];
+    return Array.from(this.subscriptions.values()).flatMap((items) => items);
+  }
+  count(extensionId) {
+    return this.list(extensionId).length;
+  }
+  deactivateExtension(extensionId) {
+    const subscriptions = this.subscriptions.get(extensionId);
+    if (!subscriptions) return 0;
+    this.subscriptions.delete(extensionId);
+    disposeRebookDisposables(subscriptions);
+    return subscriptions.length;
+  }
+  clear() {
+    for (const extensionId of Array.from(this.subscriptions.keys())) {
+      this.deactivateExtension(extensionId);
+    }
+  }
+}
+function createRebookExtensionSubscriptionRegistry() {
+  return new RebookExtensionSubscriptionRegistry();
+}
+function createRebookExtensionHost() {
+  return {
+    commands: createRebookExtensionCommandRegistry(),
+    settings: createRebookExtensionSettingsRegistry(),
+    subscriptions: createRebookExtensionSubscriptionRegistry()
+  };
+}
 function isRebookExtension(value2) {
   return value2 !== null && value2 !== void 0 && typeof value2 === "object" && "manifest" in value2;
 }
-async function resolveRebookExtension(value2) {
+function getRebookExtensionContributionIndex(entries) {
+  var _a2, _b2, _c, _d;
+  const commands = [];
+  const panels = [];
+  const settings = [];
+  const tools = [];
+  for (const entry of entries) {
+    const manifest = assertRebookExtensionManifest(isRebookExtension(entry) ? entry.manifest : entry);
+    const contributes = manifest.contributes;
+    for (const contribution of (_a2 = contributes == null ? void 0 : contributes.commands) != null ? _a2 : []) {
+      commands.push({ extensionId: manifest.id, manifest, contribution });
+    }
+    for (const contribution of (_b2 = contributes == null ? void 0 : contributes.panels) != null ? _b2 : []) {
+      panels.push({ extensionId: manifest.id, manifest, contribution });
+    }
+    for (const [key, contribution] of Object.entries((_c = contributes == null ? void 0 : contributes.settings) != null ? _c : {})) {
+      settings.push({ extensionId: manifest.id, manifest, key, contribution });
+    }
+    for (const contribution of (_d = contributes == null ? void 0 : contributes.tools) != null ? _d : []) {
+      tools.push({ extensionId: manifest.id, manifest, contribution });
+    }
+  }
+  return { commands, panels, settings, tools };
+}
+async function resolveRebookExtension(value2, host = createRebookExtensionHost()) {
   var _a2;
   const manifest = assertRebookExtensionManifest(value2.manifest);
+  host.subscriptions.deactivateExtension(manifest.id);
+  host.commands.unregisterExtension(manifest.id);
+  host.settings.registerExtension(manifest);
+  const subscriptions = [];
   const context = {
     apiVersion: 1,
     extensionId: manifest.id,
-    manifest
+    manifest,
+    subscriptions,
+    commands: createScopedCommandService(host.commands, manifest, subscriptions),
+    settings: createScopedSettingsService(host.settings, manifest)
   };
-  const activated = await ((_a2 = value2.activate) == null ? void 0 : _a2.call(value2, context));
+  let activated;
+  try {
+    activated = await ((_a2 = value2.activate) == null ? void 0 : _a2.call(value2, context));
+  } catch (error) {
+    disposeRebookDisposables(subscriptions);
+    host.commands.unregisterExtension(manifest.id);
+    throw error;
+  }
+  host.subscriptions.setExtensionSubscriptions(manifest.id, subscriptions);
   return {
     manifest,
     plugins: [
@@ -22203,11 +22445,11 @@ async function resolveRebookExtension(value2) {
     ]
   };
 }
-async function resolveRebookPlugins(entries) {
+async function resolveRebookPlugins(entries, host) {
   const plugins = [];
   for (const entry of entries != null ? entries : []) {
     if (isRebookExtension(entry)) {
-      plugins.push(...await resolveRebookExtension(entry).then((result) => result.plugins));
+      plugins.push(...await resolveRebookExtension(entry, host).then((result) => result.plugins));
     } else {
       plugins.push(entry);
     }
@@ -22241,8 +22483,11 @@ class RebookExtensionRegistry {
   manifests() {
     return this.list().map((extension) => extension.manifest);
   }
-  async getPlugins() {
-    return resolveRebookPlugins(this.list());
+  contributions() {
+    return getRebookExtensionContributionIndex(this.list());
+  }
+  async getPlugins(host) {
+    return resolveRebookPlugins(this.list(), host);
   }
   clear() {
     this.extensions.clear();
@@ -22260,6 +22505,7 @@ function assertRebookExtensionManifest(manifest) {
   assertNonEmptyString(manifest.id, "id");
   assertNonEmptyString(manifest.name, "name");
   assertNonEmptyString(manifest.version, "version");
+  assertRebookExtensionContributions(manifest);
   return manifest;
 }
 function assertNonEmptyString(value2, field) {
@@ -22267,13 +22513,142 @@ function assertNonEmptyString(value2, field) {
     throw new Error(`Rebook extension manifest field "${field}" must be a non-empty string.`);
   }
 }
+const validSettingTypes = /* @__PURE__ */ new Set([
+  "string",
+  "number",
+  "integer",
+  "boolean",
+  "array",
+  "object"
+]);
+function assertRebookExtensionContributions(manifest) {
+  const contributes = manifest.contributes;
+  if (contributes === void 0) return;
+  if (!contributes || typeof contributes !== "object") {
+    throw new Error(`Rebook extension "${manifest.id}" contributions must be an object.`);
+  }
+  assertNamedContributionArray(manifest.id, "commands", contributes.commands);
+  assertNamedContributionArray(manifest.id, "panels", contributes.panels);
+  assertNamedContributionArray(manifest.id, "tools", contributes.tools);
+  if (contributes.settings !== void 0) {
+    if (!contributes.settings || typeof contributes.settings !== "object" || Array.isArray(contributes.settings)) {
+      throw new Error(`Rebook extension "${manifest.id}" settings contribution must be an object.`);
+    }
+    for (const [key, setting] of Object.entries(contributes.settings)) {
+      assertNonEmptyString(key, `contributes.settings key for ${manifest.id}`);
+      if (!setting || typeof setting !== "object") {
+        throw new Error(`Rebook extension "${manifest.id}" setting "${key}" must be an object.`);
+      }
+      if (!validSettingTypes.has(setting.type)) {
+        throw new Error(`Rebook extension "${manifest.id}" setting "${key}" has unsupported type "${String(setting.type)}".`);
+      }
+    }
+  }
+}
+function assertNamedContributionArray(extensionId, field, contributions) {
+  if (contributions === void 0) return;
+  if (!Array.isArray(contributions)) {
+    throw new Error(`Rebook extension "${extensionId}" ${field} contribution must be an array.`);
+  }
+  for (const [index, contribution] of contributions.entries()) {
+    if (!contribution || typeof contribution !== "object") {
+      throw new Error(`Rebook extension "${extensionId}" ${field}[${index}] must be an object.`);
+    }
+    assertNonEmptyString(contribution.id, `contributes.${field}[${index}].id`);
+    assertNonEmptyString(contribution.title, `contributes.${field}[${index}].title`);
+  }
+}
+function createScopedCommandService(registry2, manifest, subscriptions) {
+  return {
+    registerCommand(id, handler) {
+      const disposable = registry2.registerExtensionCommand(manifest, id, handler);
+      subscriptions.push(disposable);
+      return disposable;
+    },
+    executeCommand(id, ...args) {
+      return registry2.executeCommand(id, ...args);
+    },
+    hasCommand(id) {
+      return registry2.hasCommand(id);
+    },
+    listCommands() {
+      return registry2.listCommands();
+    }
+  };
+}
+function createScopedSettingsService(registry2, manifest) {
+  return {
+    get(key, fallback) {
+      return registry2.get(manifest.id, key, fallback);
+    },
+    update(key, value2) {
+      registry2.update(manifest.id, key, value2);
+    },
+    inspect(key) {
+      return registry2.inspect(manifest.id, key);
+    },
+    list() {
+      return registry2.list(manifest.id);
+    }
+  };
+}
+function disposeRebookDisposables(disposables) {
+  const errors2 = [];
+  for (const disposable of [...disposables].reverse()) {
+    try {
+      disposable.dispose();
+    } catch (error) {
+      errors2.push(error);
+    }
+  }
+  if (errors2.length) {
+    throw new Error(`Failed to dispose ${errors2.length} rebook extension subscription(s).`);
+  }
+}
+function createSettingStorageKey(extensionId, key) {
+  assertNonEmptyString(extensionId, "extension id");
+  assertNonEmptyString(key, "setting key");
+  return `${extensionId}\0${key}`;
+}
+function splitSettingStorageKey(storedKey) {
+  const separatorIndex = storedKey.indexOf("\0");
+  if (separatorIndex < 0) return [storedKey, ""];
+  return [storedKey.slice(0, separatorIndex), storedKey.slice(separatorIndex + 1)];
+}
+function assertSettingValue(extensionId, key, contribution, value2) {
+  var _a2;
+  if (!settingValueMatchesType(contribution.type, value2)) {
+    throw new Error(`Rebook extension "${extensionId}" setting "${key}" must be ${contribution.type}.`);
+  }
+  if (((_a2 = contribution.enum) == null ? void 0 : _a2.length) && !contribution.enum.some((item) => Object.is(item, value2))) {
+    throw new Error(`Rebook extension "${extensionId}" setting "${key}" must be one of its declared enum values.`);
+  }
+}
+function settingValueMatchesType(type, value2) {
+  switch (type) {
+    case "string":
+      return typeof value2 === "string";
+    case "number":
+      return typeof value2 === "number" && Number.isFinite(value2);
+    case "integer":
+      return typeof value2 === "number" && Number.isInteger(value2);
+    case "boolean":
+      return typeof value2 === "boolean";
+    case "array":
+      return Array.isArray(value2);
+    case "object":
+      return Boolean(value2 && typeof value2 === "object" && !Array.isArray(value2));
+    default:
+      return false;
+  }
+}
 function toPluginArray(value2) {
   if (!value2) return [];
   return typeof value2 === "function" ? [value2] : [...value2];
 }
-async function applyRebookPlugins(book, plugins) {
+async function applyRebookPlugins(book, plugins, host) {
   let current = book;
-  for (const plugin of await resolveRebookPlugins(plugins)) {
+  for (const plugin of await resolveRebookPlugins(plugins, host)) {
     current = await plugin(current);
   }
   return current;
@@ -22598,6 +22973,7 @@ class ReaderSession {
     __publicField(this, "book", null);
     __publicField(this, "config");
     __publicField(this, "extensionRegistry", createRebookExtensionRegistry());
+    __publicField(this, "extensionHost", createRebookExtensionHost());
     __publicField(this, "pluginEntries", []);
     __publicField(this, "registeredListeners", []);
     var _a2;
@@ -22613,7 +22989,8 @@ class ReaderSession {
     this.resetRenderer();
     const book = await applyRebookPlugins(
       await registry.open(input, this.getParserOptions()),
-      this.pluginEntries
+      this.pluginEntries,
+      this.extensionHost
     );
     this.book = book;
     await this.renderer.open(book);
@@ -22625,7 +23002,7 @@ class ReaderSession {
   async openBook(inputBook) {
     this.close();
     this.resetRenderer();
-    const book = await applyRebookPlugins(inputBook, this.pluginEntries);
+    const book = await applyRebookPlugins(inputBook, this.pluginEntries, this.extensionHost);
     this.book = book;
     await this.renderer.open(book);
   }
@@ -22651,6 +23028,11 @@ class ReaderSession {
     );
     const installed = this.extensionRegistry.install(extension, options);
     if (existingIndex >= 0) {
+      this.extensionHost.subscriptions.deactivateExtension(installed.manifest.id);
+      this.extensionHost.commands.unregisterExtension(installed.manifest.id);
+    }
+    this.extensionHost.settings.registerExtension(installed.manifest);
+    if (existingIndex >= 0) {
       this.pluginEntries[existingIndex] = installed;
     } else {
       this.pluginEntries.push(installed);
@@ -22663,6 +23045,9 @@ class ReaderSession {
   uninstallExtension(id) {
     const removed = this.extensionRegistry.uninstall(id);
     if (!removed) return false;
+    this.extensionHost.subscriptions.deactivateExtension(id);
+    this.extensionHost.commands.unregisterExtension(id);
+    this.extensionHost.settings.unregisterExtension(id);
     for (let index = this.pluginEntries.length - 1; index >= 0; index--) {
       const entry = this.pluginEntries[index];
       if (isRebookExtension(entry) && entry.manifest.id === id) {
@@ -22694,6 +23079,60 @@ class ReaderSession {
    */
   getExtensionManifests() {
     return this.extensionRegistry.manifests();
+  }
+  /**
+   * List typed contribution points declared by installed extensions.
+   */
+  getExtensionContributions() {
+    return this.extensionRegistry.contributions();
+  }
+  /**
+   * List commands registered by activated extensions.
+   */
+  getExtensionCommands() {
+    return this.extensionHost.commands.listCommands();
+  }
+  /**
+   * Check whether an activated extension command has a handler registered.
+   */
+  hasExtensionCommand(id) {
+    return this.extensionHost.commands.hasCommand(id);
+  }
+  /**
+   * Execute a command registered during extension activation.
+   */
+  executeExtensionCommand(id, ...args) {
+    return this.extensionHost.commands.executeCommand(id, ...args);
+  }
+  /**
+   * List settings declared by installed/activated extensions with effective values.
+   */
+  getExtensionSettings(extensionId) {
+    return this.extensionHost.settings.list(extensionId);
+  }
+  /**
+   * Read one extension setting, falling back to the manifest default when present.
+   */
+  getExtensionSetting(extensionId, key, fallback) {
+    return this.extensionHost.settings.get(extensionId, key, fallback);
+  }
+  /**
+   * Update one extension setting for subsequent command activation and plugin behavior.
+   */
+  updateExtensionSetting(extensionId, key, value2) {
+    this.extensionHost.settings.update(extensionId, key, value2);
+  }
+  /**
+   * Export host-managed extension setting values for persistence.
+   */
+  getExtensionSettingsSnapshot() {
+    return this.extensionHost.settings.toJSON();
+  }
+  /**
+   * Restore host-managed extension setting values from persisted state.
+   */
+  loadExtensionSettingsSnapshot(snapshot) {
+    this.extensionHost.settings.load(snapshot);
   }
   /**
    * Get table of contents.
@@ -23038,6 +23477,7 @@ class ReaderSession {
   addPluginEntry(entry) {
     if (isRebookExtension(entry)) {
       this.extensionRegistry.install(entry);
+      this.extensionHost.settings.registerExtension(entry.manifest);
     }
     this.pluginEntries.push(entry);
   }

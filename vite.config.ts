@@ -26,6 +26,7 @@ export default defineConfig({
         'core/mark-resolver': resolve(__dirname, 'src/core/mark-resolver.ts'),
         'core/page-surface': resolve(__dirname, 'src/core/page-surface.ts'),
         'core/parser': resolve(__dirname, 'src/core/parser.ts'),
+        'core/readable-content': resolve(__dirname, 'src/core/readable-content.ts'),
         'core/reader': resolve(__dirname, 'src/core/reader.ts'),
         'core/reflowable-page-model': resolve(__dirname, 'src/core/reflowable-page-model.ts'),
         'core/reflowable-text-provider': resolve(__dirname, 'src/core/reflowable-text-provider.ts'),
