@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react'
 import { createOpenAI } from '@ai-sdk/openai'
+import { jsonSchema, tool, type ToolSet } from 'ai'
 import {
   BrowserDOMAdapter,
   BrowserURLFactory,
@@ -172,6 +173,13 @@ interface ReflowDebugFigurePair {
   issue: ReflowDebugIssueKind | null
 }
 
+type StoryEntityKind = 'character' | 'person' | 'location' | 'organization' | 'event' | 'concept' | 'all'
+
+interface StoryMemoryToolConfig {
+  serviceBaseUrl: string
+  bookId: string
+}
+
 interface ReflowDebugSnapshot {
   pageIndex: number | null
   location: ReturnType<typeof summarizeLocation>
@@ -216,7 +224,7 @@ const MAX_CHAT_REFERENCE_SUGGESTIONS = 8
 const MAX_CHAT_REFERENCE_EXCERPT = 220
 
 interface ChatCommand {
-  name: '/summary' | '/search' | '/rewrite' | '/extract'
+  name: '/summary' | '/search' | '/rewrite' | '/extract' | '/story-index' | '/timeline' | '/profile' | '/relations' | '/entities'
   description: string
   insertText: string
   requiresArgs?: boolean
@@ -255,6 +263,43 @@ const CHAT_COMMANDS: ChatCommand[] = [
     description: '提取当前章节关键概念',
     insertText: '/extract',
     buildPrompt: () => '请提取当前章节的关键概念。要求：用中文回答；先列出概念清单，再分别解释每个概念的含义、它在本章中的作用，以及概念之间的关系；涉及本章具体内容时添加可点击引用。',
+  },
+  {
+    name: '/story-index',
+    description: '索引本书故事记忆',
+    insertText: '/story-index',
+    buildPrompt: args => {
+      const extra = args ? `\n额外索引要求：${args}` : ''
+      return `请调用 indexStoryMemory 为当前后端书籍建立故事记忆索引。默认索引本书前 80 个 chunk；完成后只简要说明索引状态、bookId、indexedChunks。${extra}`
+    },
+  },
+  {
+    name: '/timeline',
+    description: '整理故事事件时间线',
+    insertText: '/timeline ',
+    buildPrompt: args => `请结合 story memory 工具整理本书事件时间线。${args ? `重点关注：${args}。` : ''}要求：先调用 getStoryTimeline；必要时再用 searchBook 或 getContent 补充原文依据；最终回答用中文，并给关键事件添加可点击引用。`,
+  },
+  {
+    name: '/profile',
+    description: '查询人物细节',
+    insertText: '/profile ',
+    requiresArgs: true,
+    missingArgsMessage: '请输入人物名称，例如 `/profile 哈利`。',
+    buildPrompt: args => `请结合 story memory 工具整理“${args}”的人物档案。要求：调用 getCharacterProfile；说明身份、别名、性格/动机、重要行动和出场证据；最终回答用中文，并给关键结论添加可点击引用。`,
+  },
+  {
+    name: '/relations',
+    description: '查询人物关系',
+    insertText: '/relations ',
+    requiresArgs: true,
+    missingArgsMessage: '请输入人物名称，例如 `/relations 哈利`。',
+    buildPrompt: args => `请结合 story memory 工具整理“${args}”的人物关系。要求：调用 getCharacterRelationships；必要时再调用 getCharacterProfile 或 searchStoryMemory；最终回答用中文，并给关系结论添加可点击引用。`,
+  },
+  {
+    name: '/entities',
+    description: '提取人物地点事件',
+    insertText: '/entities ',
+    buildPrompt: args => `请结合 story memory 工具提取本书中的人物、地点、组织和事件。${args ? `筛选要求：${args}。` : ''}要求：调用 getStoryEntities；按类型分组；最终回答用中文，并尽量附可点击引用。`,
   },
 ]
 
@@ -304,6 +349,229 @@ const defaultConfig: DemoConfig = {
   extensionInstallations: {},
 }
 
+function readStoryMemoryToolConfig(config: DemoConfig): StoryMemoryToolConfig | null {
+  const serviceBaseUrl = config.professionalServiceBaseUrl.trim()
+  const bookId = config.professionalBookId.trim()
+  if (!serviceBaseUrl || !bookId) return null
+  return { serviceBaseUrl, bookId }
+}
+
+function buildStoryMemorySystemPrompt(config: DemoConfig): string | undefined {
+  const storyMemory = readStoryMemoryToolConfig(config)
+  if (!storyMemory) return undefined
+  return [
+    '# Story Memory 工具',
+    '- 当前 AI Chat 已接入 rebook-service story memory，可用于跨章节检索人物、地点、组织、事件、人物关系、人物细节和故事时间线。',
+    '- 当用户询问“时间线”“人物关系”“人物细节”“角色背景”“地点/组织/事件”“前因后果”时，优先调用 story memory 工具：getStoryTimeline、getStoryEntities、getCharacterProfile、getCharacterRelationships 或 searchStoryMemory。',
+    '- 如果 story memory 工具返回的候选证据缺少 rebook://j/ 引用，必须再调用 searchBook、getContent 或 getCurrentContext 补充原文出处。',
+    '- 只有当用户明确要求“索引/建立故事记忆/刷新故事记忆”时，才调用 indexStoryMemory；不要在普通问答中自动索引。',
+    `- 当前 story memory bookId: ${storyMemory.bookId}`,
+  ].join('\n')
+}
+
+function createStoryMemoryTools(
+  storyMemory: StoryMemoryToolConfig | null,
+  onLog?: (event: unknown) => void,
+): ToolSet {
+  return {
+    indexStoryMemory: tool({
+      description: '为当前后端书籍建立或刷新 story memory 索引。只在用户明确要求索引、刷新或建立故事记忆时调用；普通问答不要调用。',
+      inputSchema: jsonSchema<{ chapterIndex?: number; maxChunks?: number; extraInstructions?: string }>({
+        type: 'object',
+        properties: {
+          chapterIndex: { type: 'number', description: '只索引指定章节；不填则按 maxChunks 从全书开始索引。' },
+          maxChunks: { type: 'number', description: '最多索引多少个 chunk，默认 80。' },
+          extraInstructions: { type: 'string', description: '额外抽取要求。' },
+        },
+        additionalProperties: false,
+      }),
+      execute: async input => compactStoryIndexResponse(await callStoryMemoryTool(storyMemory, '/index', {
+        method: 'POST',
+        body: {
+          chapterIndex: input.chapterIndex,
+          maxChunks: input.maxChunks ?? 80,
+          extraInstructions: input.extraInstructions,
+        },
+      }, onLog)),
+    }),
+    getStoryChapters: tool({
+      description: '获取后端书籍章节结构和每章首段引用，用于把 story memory 结果映射回章节。',
+      inputSchema: jsonSchema({
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      }),
+      execute: async () => callStoryMemoryTool(storyMemory, '/chapters', { method: 'GET' }, onLog),
+    }),
+    searchStoryMemory: tool({
+      description: '在当前书籍 story memory 中搜索情节事实、人物、地点、组织、概念和带出处的证据。',
+      inputSchema: jsonSchema<{ query: string; limit?: number }>({
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '检索问题或关键词。' },
+          limit: { type: 'number', description: '最多返回候选数量，默认 12。' },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      }),
+      execute: async input => callStoryMemoryTool(storyMemory, '/search', {
+        method: 'POST',
+        body: input,
+      }, onLog),
+    }),
+    getStoryTimeline: tool({
+      description: '获取当前书籍的故事事件时间线候选，用于回答事件顺序、前因后果、情节发展。',
+      inputSchema: jsonSchema<{ query?: string; limit?: number }>({
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '可选筛选条件，例如人物名、章节名或事件关键词。' },
+          limit: { type: 'number', description: '最多返回事件数量，默认 24。' },
+        },
+        additionalProperties: false,
+      }),
+      execute: async input => callStoryMemoryTool(storyMemory, '/timeline', {
+        method: 'POST',
+        body: input,
+      }, onLog),
+    }),
+    getStoryEntities: tool({
+      description: '检索当前书籍的人物、地点、组织、事件或关键概念。',
+      inputSchema: jsonSchema<{ kind?: StoryEntityKind; query?: string; limit?: number }>({
+        type: 'object',
+        properties: {
+          kind: {
+            type: 'string',
+            enum: ['character', 'person', 'location', 'organization', 'event', 'concept', 'all'],
+            description: '实体类型，不填默认 all。',
+          },
+          query: { type: 'string', description: '可选筛选关键词。' },
+          limit: { type: 'number', description: '最多返回候选数量，默认 12。' },
+        },
+        additionalProperties: false,
+      }),
+      execute: async input => callStoryMemoryTool(storyMemory, '/entities', {
+        method: 'POST',
+        body: input,
+      }, onLog),
+    }),
+    getCharacterProfile: tool({
+      description: '查询人物档案候选，包括身份、别名、性格、动机、目标、重要行动和证据。',
+      inputSchema: jsonSchema<{ name: string; limit?: number }>({
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '人物名称或别名。' },
+          limit: { type: 'number', description: '最多返回证据数量，默认 16。' },
+        },
+        required: ['name'],
+        additionalProperties: false,
+      }),
+      execute: async input => callStoryMemoryTool(storyMemory, '/characters/profile', {
+        method: 'POST',
+        body: input,
+      }, onLog),
+    }),
+    getCharacterRelationships: tool({
+      description: '查询某个人物周围的人物关系和互动事实。',
+      inputSchema: jsonSchema<{ name: string; limit?: number }>({
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '人物名称或别名。' },
+          limit: { type: 'number', description: '最多返回关系事实数量，默认 20。' },
+        },
+        required: ['name'],
+        additionalProperties: false,
+      }),
+      execute: async input => callStoryMemoryTool(storyMemory, '/characters/relationships', {
+        method: 'POST',
+        body: input,
+      }, onLog),
+    }),
+  }
+}
+
+async function callStoryMemoryTool(
+  config: StoryMemoryToolConfig | null,
+  path: string,
+  init: { method: 'GET' | 'POST'; body?: unknown },
+  onLog?: (event: unknown) => void,
+) {
+  if (!config) {
+    return {
+      ok: false,
+      error: 'Story memory is not configured. Fill Chat settings: Story service URL and Story book ID, then apply settings/reopen the book.',
+    }
+  }
+  return callStoryMemory(config, path, init, onLog)
+}
+
+async function callStoryMemory(
+  config: StoryMemoryToolConfig,
+  path: string,
+  init: { method: 'GET' | 'POST'; body?: unknown },
+  onLog?: (event: unknown) => void,
+) {
+  const url = storyMemoryUrl(config, path)
+  onLog?.({ url, method: init.method })
+  try {
+    const response = await fetch(url, {
+      method: init.method,
+      headers: init.body ? { 'Content-Type': 'application/json' } : undefined,
+      body: init.body ? JSON.stringify(init.body) : undefined,
+    })
+    const text = await response.text()
+    const data = parseStoryMemoryResponse(text)
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        error: storyMemoryErrorText(data, text),
+      }
+    }
+    return data
+  } catch (error) {
+    return {
+      ok: false,
+      error: formatError(error),
+    }
+  }
+}
+
+function storyMemoryUrl(config: StoryMemoryToolConfig, path: string): string {
+  const base = config.serviceBaseUrl.replace(/\/+$/, '')
+  const suffix = path.startsWith('/') ? path : `/${path}`
+  return `${base}/api/books/${encodeURIComponent(config.bookId)}/story-memory${suffix}`
+}
+
+function parseStoryMemoryResponse(text: string): unknown {
+  if (!text.trim()) return { ok: true }
+  try {
+    return JSON.parse(text)
+  } catch {
+    return { ok: false, raw: text.slice(0, 1200) }
+  }
+}
+
+function storyMemoryErrorText(data: unknown, fallback: string): string {
+  if (isRecord(data) && typeof data.error === 'string') return data.error
+  return fallback.slice(0, 1200)
+}
+
+function compactStoryIndexResponse(data: unknown) {
+  if (!isRecord(data)) return data
+  return {
+    ok: data.ok,
+    bookId: data.bookId,
+    groupId: data.groupId,
+    indexedChunks: data.indexedChunks,
+    count: data.count,
+    error: data.error,
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 const domAdapter = new BrowserDOMAdapter()
 const urlFactory = new BrowserURLFactory()
 const parserOptions = { domAdapter, urlFactory }
@@ -348,6 +616,8 @@ function App() {
   const [chatReferenceOptions, setChatReferenceOptions] = useState<ChatReference[]>([])
   const [chatBusy, setChatBusy] = useState(false)
   const [chatPanelWidth, setChatPanelWidth] = useState(() => clampPanelWidth(config.chatPanelWidth))
+  const [storyUploadBusy, setStoryUploadBusy] = useState(false)
+  const [storyUploadStatus, setStoryUploadStatus] = useState('')
   const [ttsStatus, setTTSStatus] = useState('TTS plugin disabled.')
   const runtimeExtensionLoadKey = useMemo(() => JSON.stringify({
     catalog: config.extensionCatalogJSON,
@@ -654,6 +924,11 @@ function App() {
       if (model) {
         plugins.push(createAIChatExtension({
           model,
+          system: () => buildStoryMemorySystemPrompt(configRef.current),
+          extraTools: () => createStoryMemoryTools(
+            readStoryMemoryToolConfig(configRef.current),
+            event => appendDebug('story memory tool', event),
+          ),
           maxContentChars: () => Number(configRef.current.chatMaxContentChars) || Number(defaultConfig.chatMaxContentChars),
           maxContextChars: () => Math.max(Number(configRef.current.chatMaxContentChars) || Number(defaultConfig.chatMaxContentChars), 20000),
           onDocumentEdit: event => {
@@ -852,6 +1127,54 @@ function App() {
     saveConfig(next)
     setSettingsOpen(false)
     await resetReader(next)
+  }
+
+  const uploadCurrentBookForStoryMemory = async (uploadConfig: DemoConfig) => {
+    const file = currentFileRef.current
+    if (!file) {
+      const message = 'Open a local book file before uploading it to rebook-service.'
+      setStoryUploadStatus(message)
+      throw new Error(message)
+    }
+    const serviceBaseUrl = uploadConfig.professionalServiceBaseUrl.trim()
+    if (!serviceBaseUrl) {
+      const message = 'Fill Story service URL before uploading.'
+      setStoryUploadStatus(message)
+      throw new Error(message)
+    }
+
+    setStoryUploadBusy(true)
+    setStoryUploadStatus(`Uploading ${file.name}...`)
+    try {
+      const form = new FormData()
+      form.append('file', file, file.name)
+      if (bookTitle && bookTitle !== 'rebook Demo') form.append('title', bookTitle)
+      const response = await fetch(`${serviceBaseUrl.replace(/\/+$/, '')}/api/books/upload`, {
+        method: 'POST',
+        body: form,
+      })
+      const text = await response.text()
+      const data = parseStoryMemoryResponse(text)
+      if (!response.ok) {
+        throw new Error(storyMemoryErrorText(data, text) || `HTTP ${response.status}`)
+      }
+      if (!isRecord(data) || typeof data.id !== 'string') {
+        throw new Error('Upload succeeded but response did not include a book id.')
+      }
+      setStoryUploadStatus(`Uploaded. Book ID: ${data.id}. Apply settings to enable story tools.`)
+      appendDebug('story memory upload', { bookId: data.id, title: data.title })
+      return {
+        bookId: data.id,
+        title: typeof data.title === 'string' ? data.title : undefined,
+      }
+    } catch (error) {
+      const message = `Upload failed: ${formatError(error)}`
+      setStoryUploadStatus(message)
+      appendDebug('story memory upload failed', message)
+      throw error
+    } finally {
+      setStoryUploadBusy(false)
+    }
   }
 
   const runSearch = async () => {
@@ -1232,6 +1555,10 @@ function App() {
           config={draftConfig}
           setConfig={setDraftConfig}
           extensionRuntimeStatus={extensionRuntimeStatus}
+          currentBookFileName={currentFileRef.current?.name}
+          storyUploadBusy={storyUploadBusy}
+          storyUploadStatus={storyUploadStatus}
+          onUploadCurrentBook={uploadCurrentBookForStoryMemory}
           onClose={() => setSettingsOpen(false)}
           onApply={() => void applyConfig()}
         />
@@ -2304,6 +2631,10 @@ function SettingsDialog(props: {
   config: DemoConfig
   setConfig(config: DemoConfig): void
   extensionRuntimeStatus: DemoExtensionRuntimeStatus
+  currentBookFileName?: string
+  storyUploadBusy: boolean
+  storyUploadStatus: string
+  onUploadCurrentBook(config: DemoConfig): Promise<{ bookId: string; title?: string }>
   onClose(): void
   onApply(): void
 }) {
@@ -2351,6 +2682,10 @@ function SettingsDialog(props: {
               config={props.config}
               setConfig={props.setConfig}
               extensionRuntimeStatus={props.extensionRuntimeStatus}
+              currentBookFileName={props.currentBookFileName}
+              storyUploadBusy={props.storyUploadBusy}
+              storyUploadStatus={props.storyUploadStatus}
+              onUploadCurrentBook={props.onUploadCurrentBook}
             />
           </div>
           <div className="flex justify-end gap-2 border-t border-slate-200 p-4">
@@ -2369,12 +2704,20 @@ function SettingsSectionForm({
   config,
   setConfig,
   extensionRuntimeStatus,
+  currentBookFileName,
+  storyUploadBusy,
+  storyUploadStatus,
+  onUploadCurrentBook,
 }: {
   section: SettingsSection
   setSection(section: SettingsSection): void
   config: DemoConfig
   setConfig(config: DemoConfig): void
   extensionRuntimeStatus: DemoExtensionRuntimeStatus
+  currentBookFileName?: string
+  storyUploadBusy: boolean
+  storyUploadStatus: string
+  onUploadCurrentBook(config: DemoConfig): Promise<{ bookId: string; title?: string }>
 }) {
   const update = <K extends keyof DemoConfig>(key: K, value: DemoConfig[K]) => setConfig({ ...config, [key]: value })
   if (section === 'reading') {
@@ -2451,6 +2794,34 @@ function SettingsSectionForm({
         <TextField label="API key" value={config.chatAPIKey} type="password" onChange={value => update('chatAPIKey', value)} />
         <TextField label="Model" value={config.chatModel} onChange={value => update('chatModel', value)} placeholder="gpt-4o-mini" />
         <TextField label="Content chars" value={config.chatMaxContentChars} type="number" onChange={value => update('chatMaxContentChars', value)} />
+        <TextField label="Story service URL" value={config.professionalServiceBaseUrl} onChange={value => update('professionalServiceBaseUrl', value)} />
+        <TextField label="Story book ID" value={config.professionalBookId} onChange={value => update('professionalBookId', value)} />
+        <div className="grid gap-2 rounded-lg border border-slate-200 p-3">
+          <div className="text-sm font-medium text-slate-700">
+            Current file: {currentBookFileName || 'none'}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              className="toolbar-button"
+              type="button"
+              disabled={storyUploadBusy || !currentBookFileName}
+              onClick={() => {
+                void onUploadCurrentBook(config)
+                  .then(result => setConfig({ ...config, professionalBookId: result.bookId }))
+                  .catch(() => undefined)
+              }}
+            >
+              {storyUploadBusy ? 'Uploading...' : 'Upload current book'}
+            </button>
+            <span className="text-xs text-slate-500">Uploads to /api/books/upload and fills Story book ID.</span>
+          </div>
+          {storyUploadStatus ? (
+            <p className="text-xs leading-5 text-slate-600">{storyUploadStatus}</p>
+          ) : null}
+        </div>
+        <p className="col-span-full text-xs leading-5 text-slate-500">
+          Story memory tools use the same rebook-service URL and Book ID as professional translation.
+        </p>
       </FormGrid>
     )
   }
