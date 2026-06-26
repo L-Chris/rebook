@@ -357,9 +357,11 @@ export {
     fixedTextRunRect,
 } from './core/fixed-text-provider'
 export {
+    getBlockReflowableTextRange,
     getLineReflowableTextRange,
     markMatchesReflowableRange,
     resolveFixedMarkRects,
+    resolveReflowableBlockMarks,
     resolveReflowableLineMarks,
     type FixedMarkRectOptions,
     type ResolvedMarkRect,
@@ -384,10 +386,17 @@ export {
     type ReflowableViewportMetrics,
 } from './core/reflowable-page-model'
 export {
+    blockMatchesReflowableBookRange,
+    blockToReflowableBookRange,
+    blockToReflowableTextChunkRecord,
+    createReflowableBlockTextProvider,
     createReflowableTextProvider,
+    getReflowableTextBlockText,
     lineMatchesReflowableBookRange,
     lineToReflowableBookRange,
     lineToReflowableTextChunkRecord,
+    type ReflowableBlockTextChunkRecord,
+    type ReflowableBlockTextProviderContext,
     type ReflowableLinePosition,
     type ReflowableTextChunkRecord,
     type ReflowableTextProviderContext,

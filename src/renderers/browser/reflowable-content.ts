@@ -1,7 +1,8 @@
 import type { ContentRenderer } from '../../core/page-surface'
 import type { LayoutMode, RendererStyles } from '../../core/renderer'
 import { parseCSSPixels } from '../../core/renderer-utils'
-import { createReflowableTextProvider } from '../../core/reflowable-text-provider'
+import type { Rect } from '../../core/location'
+import { createReflowableBlockTextProvider } from '../../core/reflowable-text-provider'
 import {
     getReflowableColumnIndexForLeft,
     getReflowableColumnInlinePadding,
@@ -12,7 +13,9 @@ import {
     getVisibleLines,
     type LineRange,
     type PreparedText,
+    type PreparedTextBlock,
     type TextImage,
+    type TextBlock,
     type TextStyle,
     type TextTable,
 } from '../../core/pretext'
@@ -61,10 +64,10 @@ export class BrowserReflowableContentRenderer implements ContentRenderer<Browser
             context.sourceViewportHeight,
             4,
         )
+        const visibleWindow = getVisibleSemanticWindow(context, window.lines)
+        const blockRectEstimates = createEstimatedBlockRects(window.lines, context)
 
-        for (const line of window.lines) {
-            content.appendChild(this.createLineElement(line, context))
-        }
+        content.appendChild(createSemanticContent(context, visibleWindow))
 
         const layers: BrowserPageSurfaceLayer[] = [{
             id: 'content',
@@ -91,272 +94,308 @@ export class BrowserReflowableContentRenderer implements ContentRenderer<Browser
             metadata: {
                 range: window,
                 sectionIndex: context.sectionIndex,
-                lines: window.lines,
+                blocks: visibleWindow.blocks.map(block => block.block),
             },
-            textProvider: createReflowableTextProvider({
+            textProvider: createReflowableBlockTextProvider({
                 sectionIndex: context.sectionIndex,
-                getLinePosition: line => getRenderedReflowableLinePosition(line, context.layout, context.layoutMode),
-            }, window.lines),
+                getBlockRect: block => getSemanticBlockRect(content, block, blockRectEstimates),
+            }, visibleWindow.blocks),
             destroy() {
                 for (const layer of layers) layer.destroy?.()
             },
         }
     }
 
-    private createLineElement(line: LineRange, context: BrowserReflowableContentRenderContext): HTMLElement {
-        const position = getRenderedReflowableLinePosition(line, context.layout, context.layoutMode)
-
-        if (line.kind === 'image' && line.image) {
-            return createImageLine(line, position, context)
-        }
-        if (line.kind === 'table' && line.table) {
-            return createTableLine(line, position, context)
-        }
-        if (line.kind === 'separator') {
-            return createSeparatorLine(line, position, context)
-        }
-        if (line.kind === 'pre') {
-            return createPreBlock(line, position, context)
-        }
-
-        const lineEl = document.createElement('div')
-        const inlineOffset = line.inlineOffset ?? 0
-        const contentLeft = getColumnContentLeft(position, context)
-        const contentWidth = getColumnContentWidth(context, position)
-        lineEl.style.cssText = `
-            position: absolute;
-            top: ${position.top}px;
-            left: ${contentLeft + inlineOffset}px;
-            width: ${Math.max(1, contentWidth - inlineOffset)}px;
-            height: ${line.height}px;
-            line-height: ${line.height}px;
-            white-space: pre;
-            text-align: ${getTextAlign(line.block?.style?.textAlign)};
-        `
-        const block = line.block ?? context.prepared?.blocks.find(item =>
-            item.itemSegmentIndexes.includes(line.start?.segmentIndex ?? -1),
-        )?.block
-        if (block) {
-            lineEl.dataset.blockId = block.id
-            lineEl.dataset.blockType = block.type
-        }
-        lineEl.dataset.rebookLineIndex = String(line.index)
-        lineEl.dataset.sourceTop = String(line.top)
-        lineEl.dataset.sourceHeight = String(line.height)
-
-        for (const fragment of line.segments) {
-            const span = document.createElement('span')
-            if (fragment.gapBefore > 0) span.style.marginLeft = `${fragment.gapBefore}px`
-            if (isInlineImageFragment(fragment)) {
-                const img = document.createElement('img')
-                img.src = fragment.source.attrs.src ?? ''
-                img.alt = fragment.source.attrs.alt ?? ''
-                img.style.cssText = `
-                    display: inline-block;
-                    width: ${parseCSSPixels(fragment.source.attrs['data-rebook-inline-image-width'], 11)}px;
-                    height: ${parseCSSPixels(fragment.source.attrs['data-rebook-inline-image-height'], 11)}px;
-                    max-width: 1em;
-                    max-height: 1em;
-                    vertical-align: super;
-                    object-fit: contain;
-                `
-                span.appendChild(img)
-            } else {
-                span.textContent = fragment.text
-                applyTextStyle(span, { ...context.baseTextStyle, ...fragment.style })
-            }
-            lineEl.appendChild(span)
-        }
-
-        return lineEl
-    }
 }
 
 export const createBrowserReflowableContentRenderer = (): BrowserReflowableContentRenderer =>
     new BrowserReflowableContentRenderer()
 
-function createImageLine(
-    line: LineRange,
-    position: { top: number; left: number },
+interface VisibleSemanticWindow {
+    readonly blocks: readonly PreparedTextBlock[]
+    readonly startTop: number
+}
+
+function createSemanticContent(
     context: BrowserReflowableContentRenderContext,
+    window: VisibleSemanticWindow,
 ): HTMLElement {
-    const image = line.image!
-    const contentLeft = getColumnContentLeft(position, context)
-    const imageLeft = getImageLeft(image, contentLeft, line.width, getColumnContentWidth(context, position))
-    const wrapper = document.createElement('figure')
-    wrapper.style.cssText = `
+    const viewport = document.createElement('div')
+    viewport.dataset.rebookSemanticContent = 'true'
+    viewport.style.cssText = `
         position: absolute;
-        top: ${position.top}px;
-        left: ${imageLeft}px;
-        width: ${line.width}px;
-        height: ${line.height}px;
-        margin: 0;
+        left: 0;
+        top: 0;
+        width: ${context.surfaceWidth}px;
+        height: ${context.surfaceHeight}px;
         overflow: hidden;
     `
-    if (line.block) {
-        wrapper.dataset.blockId = line.block.id
-        wrapper.dataset.blockType = line.block.type
+
+    if (context.layoutMode === 'paginated') {
+        viewport.appendChild(createPaginatedSemanticPage(context, window))
+    } else {
+        viewport.appendChild(createScrolledSemanticFlow(context, window))
     }
-    wrapper.dataset.rebookLineIndex = String(line.index)
-    wrapper.dataset.sourceTop = String(line.top)
-    wrapper.dataset.sourceHeight = String(line.height)
-    if (image.isCover) wrapper.dataset.cover = 'true'
+
+    return viewport
+}
+
+function createPaginatedSemanticPage(
+    context: BrowserReflowableContentRenderContext,
+    window: VisibleSemanticWindow,
+): HTMLElement {
+    const page = document.createElement('div')
+    const layout = context.layout
+    const pageTop = context.pageIndex * layout.pageHeight
+    page.dataset.rebookSemanticPage = 'true'
+    page.dataset.pageIndex = String(context.pageIndex)
+    page.style.cssText = `
+        position: absolute;
+        left: 0;
+        top: ${pageTop}px;
+        width: ${context.surfaceWidth}px;
+        height: ${layout.pageHeight}px;
+        overflow: hidden;
+    `
+
+    const clip = document.createElement('div')
+    clip.style.cssText = `
+        position: absolute;
+        left: 0;
+        top: ${layout.pagePaddingBlockStart ?? layout.pagePaddingBlock}px;
+        width: ${context.surfaceWidth}px;
+        height: ${layout.columnHeight}px;
+        overflow: hidden;
+    `
+
+    const flow = createSemanticFlow(context, window)
+    const columnMetrics = getSemanticColumnMetrics(context)
+    const sourceColumnOffset = context.pageIndex * Math.max(1, layout.columns)
+    flow.style.position = 'absolute'
+    flow.style.left = `${columnMetrics.firstColumnLeft - sourceColumnOffset * columnMetrics.columnStep}px`
+    flow.style.top = '0'
+    flow.style.width = `${columnMetrics.totalFlowWidth}px`
+    flow.style.height = `${layout.columnHeight}px`
+    flow.style.columnWidth = `${columnMetrics.contentWidth}px`
+    flow.style.columnGap = `${columnMetrics.columnGap}px`
+    flow.style.columnFill = 'auto'
+
+    clip.appendChild(flow)
+    page.appendChild(clip)
+    return page
+}
+
+function createScrolledSemanticFlow(
+    context: BrowserReflowableContentRenderContext,
+    window: VisibleSemanticWindow,
+): HTMLElement {
+    const flow = createSemanticFlow(context, window)
+    const position = { left: 0 }
+    flow.style.position = 'absolute'
+    flow.style.left = `${getColumnContentLeft(position, context)}px`
+    flow.style.top = `${context.layout.pagePaddingBlockStart ?? context.layout.pagePaddingBlock}px`
+    flow.style.width = `${getColumnContentWidth(context, position)}px`
+    return flow
+}
+
+function createSemanticFlow(
+    context: BrowserReflowableContentRenderContext,
+    window: VisibleSemanticWindow,
+): HTMLElement {
+    const flow = document.createElement('div')
+    flow.dataset.rebookSemanticFlow = 'true'
+    flow.style.cssText = `
+        box-sizing: border-box;
+        font-family: ${context.styles.fontFamily ?? context.baseTextStyle.fontFamily};
+        font-size: ${context.baseTextStyle.fontSize}px;
+        line-height: ${context.lineHeightPixels}px;
+        color: ${context.styles.color ?? 'inherit'};
+        overflow-wrap: anywhere;
+    `
+
+    if (window.startTop > 0) {
+        flow.appendChild(createSemanticFlowSpacer(window.startTop))
+    }
+
+    for (const block of window.blocks) {
+        flow.appendChild(createSemanticBlock(block, context))
+    }
+
+    return flow
+}
+
+function createSemanticFlowSpacer(height: number): HTMLElement {
+    const spacer = document.createElement('div')
+    spacer.dataset.rebookSemanticSpacer = 'true'
+    spacer.setAttribute('aria-hidden', 'true')
+    spacer.style.cssText = `
+        height: ${height}px;
+        margin: 0;
+        padding: 0;
+        pointer-events: none;
+        user-select: none;
+    `
+    return spacer
+}
+
+function createSemanticBlock(block: PreparedTextBlock, context: BrowserReflowableContentRenderContext): HTMLElement {
+    const source = block.block
+    if (source.type === 'image' && source.image) return createSemanticImageBlock(source.image, block, context)
+    if (source.type === 'table' && source.table) return createSemanticTableBlock(source.table, block, context)
+    if (source.type === 'separator') return createSemanticSeparatorBlock(block)
+    if (source.type === 'break') return createSemanticBreakBlock(block, context)
+    if (source.type === 'pre') return createSemanticPreBlock(block, context)
+
+    const tagName = getSemanticBlockTagName(source.type, source.depth)
+    const element = document.createElement(tagName)
+    applySemanticBlockDataset(element, block)
+    applySemanticBlockStyle(element, block, context)
+
+    for (const segment of source.segments) {
+        element.appendChild(createSemanticInlineSegment(segment, context))
+    }
+
+    return element
+}
+
+function createSemanticInlineSegment(
+    segment: { text: string; style?: TextStyle; source?: { nodeType?: string; attrs?: Readonly<Record<string, string>> } },
+    context: BrowserReflowableContentRenderContext,
+): HTMLElement | Text {
+    if (isInlineImageSegment(segment)) {
+        const img = document.createElement('img')
+        img.src = segment.source.attrs.src ?? ''
+        img.alt = segment.source.attrs.alt ?? ''
+        img.style.cssText = `
+            display: inline-block;
+            width: ${parseCSSPixels(segment.source.attrs['data-rebook-inline-image-width'], 11)}px;
+            height: ${parseCSSPixels(segment.source.attrs['data-rebook-inline-image-height'], 11)}px;
+            max-width: 1em;
+            max-height: 1em;
+            vertical-align: super;
+            object-fit: contain;
+        `
+        return img
+    }
+
+    const span = document.createElement('span')
+    span.textContent = segment.text
+    applyTextStyle(span, { ...context.baseTextStyle, ...segment.style })
+    return span
+}
+
+function createSemanticImageBlock(
+    image: TextImage,
+    block: PreparedTextBlock,
+    context: BrowserReflowableContentRenderContext,
+): HTMLElement {
+    const figure = document.createElement('figure')
+    applySemanticBlockDataset(figure, block)
+    applySemanticBlockStyle(figure, block, context)
+    figure.style.breakInside = 'avoid'
+    figure.style.textAlign = getImageTextAlign(image)
 
     const img = document.createElement('img')
     img.src = image.src
     img.alt = image.alt ?? ''
     if (image.title) img.title = image.title
     img.style.cssText = `
-        display: block;
-        width: 100%;
-        height: auto;
-        max-height: ${line.height}px;
+        display: inline-block;
+        width: ${image.width ? `${image.width}px` : 'auto'};
+        max-width: 100%;
+        max-height: ${image.style?.maxHeight ? `${image.style.maxHeight}px` : 'none'};
         object-fit: ${image.style?.objectFit ?? 'contain'};
     `
-    wrapper.appendChild(img)
-    return wrapper
+    if (image.isCover) figure.dataset.cover = 'true'
+    figure.appendChild(img)
+    return figure
 }
 
-function createPreBlock(
-    line: LineRange,
-    position: { top: number; left: number },
-    context: BrowserReflowableContentRenderContext,
-): HTMLElement {
-    const block = line.block!
-    const preStyle = block.style ?? {}
-    const contentWidth = getColumnContentWidth(context, position)
-    const fontSize = preStyle.fontSize ?? contentWidth * 0.04
-    const inlineOffset = line.inlineOffset ?? 0
-    const preWidth = Math.max(1, contentWidth - inlineOffset)
-    const contentLeft = getColumnContentLeft(position, context)
-
-    const wrapper = document.createElement('pre')
-    wrapper.style.cssText = `
-        position: absolute;
-        top: ${position.top}px;
-        left: ${contentLeft + inlineOffset}px;
-        width: ${preWidth}px;
-        height: ${line.height}px;
-        margin: 0;
-        padding: ${fontSize * 0.75}px ${fontSize}px;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-size: ${fontSize}px;
-        line-height: 1.55;
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        overflow: auto;
-        background: #f5f5f5;
-        border-radius: 6px;
-        border: 1px solid #e0e0e0;
-        color: #333;
-        box-sizing: border-box;
-    `
-    if (block) {
-        wrapper.dataset.blockId = block.id
-        wrapper.dataset.blockType = block.type
-    }
-    wrapper.dataset.rebookLineIndex = String(line.index)
-    wrapper.dataset.sourceTop = String(line.top)
-    wrapper.dataset.sourceHeight = String(line.height)
-
-    wrapper.textContent = line.text
-
-    return wrapper
+function createSemanticPreBlock(block: PreparedTextBlock, context: BrowserReflowableContentRenderContext): HTMLElement {
+    const pre = document.createElement('pre')
+    applySemanticBlockDataset(pre, block)
+    applySemanticBlockStyle(pre, block, context)
+    const fontSize = getBaseFontSize(context)
+    pre.style.whiteSpace = 'pre-wrap'
+    pre.style.overflowWrap = 'anywhere'
+    pre.style.padding = `${fontSize * 0.75}px ${fontSize}px`
+    pre.style.background = '#f5f5f5'
+    pre.style.border = '1px solid #e0e0e0'
+    pre.style.borderRadius = '6px'
+    pre.style.breakInside = 'avoid'
+    pre.textContent = block.block.segments.map(segment => segment.text).join('')
+    return pre
 }
 
-function createSeparatorLine(
-    line: LineRange,
-    position: { top: number; left: number },
-    context: BrowserReflowableContentRenderContext,
-): HTMLElement {
-    const wrapper = document.createElement('div')
-    const contentLeft = getColumnContentLeft(position, context)
-    wrapper.style.cssText = `
-        position: absolute;
-        top: ${position.top}px;
-        left: ${contentLeft}px;
-        width: ${getColumnContentWidth(context, position)}px;
-        height: ${line.height}px;
-        display: flex;
-        align-items: center;
-    `
-    if (line.block) {
-        wrapper.dataset.blockId = line.block.id
-        wrapper.dataset.blockType = line.block.type
-    }
-    wrapper.dataset.rebookLineIndex = String(line.index)
-    wrapper.dataset.sourceTop = String(line.top)
-    wrapper.dataset.sourceHeight = String(line.height)
-
-    const rule = document.createElement('div')
-    rule.style.cssText = `
-        width: 100%;
+function createSemanticSeparatorBlock(block: PreparedTextBlock): HTMLElement {
+    const hr = document.createElement('hr')
+    applySemanticBlockDataset(hr, block)
+    hr.style.cssText = `
+        margin: ${block.block.blockGapBefore ?? 0}px 0 ${block.block.blockGapAfter ?? 0}px;
+        border: 0;
         border-top: 1px solid currentColor;
         opacity: 0.35;
+        break-inside: avoid;
     `
-    wrapper.appendChild(rule)
-    return wrapper
+    return hr
 }
 
-function createTableLine(
-    line: LineRange,
-    position: { top: number; left: number },
+function createSemanticBreakBlock(block: PreparedTextBlock, context: BrowserReflowableContentRenderContext): HTMLElement {
+    const spacer = document.createElement('div')
+    applySemanticBlockDataset(spacer, block)
+    spacer.setAttribute('aria-hidden', 'true')
+    spacer.style.cssText = `
+        height: ${context.lineHeightPixels}px;
+        margin: ${block.block.blockGapBefore ?? 0}px 0 ${block.block.blockGapAfter ?? 0}px;
+    `
+    return spacer
+}
+
+function createSemanticTableBlock(
+    table: TextTable,
+    block: PreparedTextBlock,
     context: BrowserReflowableContentRenderContext,
 ): HTMLElement {
-    const table = line.table!
-    const fontSize = line.block?.style?.fontSize ?? parseCSSPixels(context.styles.fontSize, 16)
-    const lineHeight = getCSSLineHeight(line.block?.style?.lineHeight, fontSize, context.lineHeightPixels)
-    const wrapper = document.createElement('div')
-    const contentLeft = getColumnContentLeft(position, context)
-    wrapper.style.cssText = `
-        position: absolute;
-        top: ${position.top}px;
-        left: ${contentLeft}px;
-        width: ${getColumnContentWidth(context, position)}px;
-        height: ${line.height}px;
-        overflow: hidden;
-        font-family: ${context.styles.fontFamily ?? 'system-ui, -apple-system, Georgia, serif'};
-        font-size: ${fontSize}px;
-        line-height: ${lineHeight}px;
-        color: ${context.styles.color ?? 'inherit'};
-    `
-    wrapper.dataset.blockId = line.block?.id ?? `table-row-${table.rowIndex}`
-    wrapper.dataset.blockType = 'table'
-    wrapper.dataset.rebookLineIndex = String(line.index)
-    wrapper.dataset.sourceTop = String(line.top)
-    wrapper.dataset.sourceHeight = String(line.height)
-    wrapper.setAttribute('role', 'row')
+    const tableEl = document.createElement('table')
+    applySemanticBlockDataset(tableEl, block)
+    applySemanticBlockStyle(tableEl, block, context)
+    tableEl.style.width = '100%'
+    tableEl.style.borderCollapse = 'collapse'
+    tableEl.style.breakInside = 'avoid'
+    tableEl.style.tableLayout = 'fixed'
 
-    const row = document.createElement('div')
-    row.style.cssText = `
-        display: grid;
-        grid-template-columns: ${getTableGridTemplate(table)};
-        width: 100%;
-        min-height: 100%;
-        border-top: ${table.rowIndex === 0 ? '1px solid #8a8a8a' : '0'};
-        border-left: 1px solid #8a8a8a;
-        background: #fff;
-    `
-
-    for (const cell of table.rows[0]?.cells ?? []) {
-        const cellEl = document.createElement(cell.header ? 'strong' : 'span')
-        cellEl.textContent = cell.text
-        cellEl.style.cssText = `
-            display: block;
-            min-width: 0;
-            padding: 4px 6px;
-            border-right: 1px solid #8a8a8a;
-            border-bottom: 1px solid #8a8a8a;
-            white-space: normal;
-            overflow-wrap: anywhere;
-            text-align: ${getTableTextAlign(cell.align)};
-            ${cell.colspan ? `grid-column: span ${cell.colspan};` : ''}
-        `
-        row.appendChild(cellEl)
+    const colgroup = document.createElement('colgroup')
+    const weights = table.columnWeights?.length === table.columnCount
+        ? table.columnWeights
+        : Array.from({ length: table.columnCount }, () => 1)
+    const totalWeight = weights.reduce((sum, weight) => sum + Math.max(0.1, weight), 0)
+    for (const weight of weights) {
+        const col = document.createElement('col')
+        col.style.width = `${Math.max(0.1, weight) / totalWeight * 100}%`
+        colgroup.appendChild(col)
     }
+    tableEl.appendChild(colgroup)
 
-    wrapper.appendChild(row)
-    return wrapper
+    const tbody = document.createElement('tbody')
+    for (const row of table.rows) {
+        const rowEl = document.createElement('tr')
+        for (const cell of row.cells) {
+            const cellEl = document.createElement(cell.header ? 'th' : 'td')
+            cellEl.textContent = cell.text
+            if (cell.colspan) cellEl.colSpan = cell.colspan
+            if (cell.rowspan) cellEl.rowSpan = cell.rowspan
+            cellEl.style.cssText = `
+                padding: 4px 6px;
+                border: 1px solid #8a8a8a;
+                overflow-wrap: anywhere;
+                text-align: ${getTableTextAlign(cell.align)};
+            `
+            rowEl.appendChild(cellEl)
+        }
+        tbody.appendChild(rowEl)
+    }
+    tableEl.appendChild(tbody)
+    return tableEl
 }
 
 function applyTextStyle(element: HTMLElement, style: TextStyle): void {
@@ -371,14 +410,79 @@ function applyTextStyle(element: HTMLElement, style: TextStyle): void {
     if (style.letterSpacing) element.style.letterSpacing = `${style.letterSpacing}px`
 }
 
-function isInlineImageFragment(fragment: { source?: { nodeType?: string; attrs?: Readonly<Record<string, string>> } }): fragment is { source: { nodeType: 'img'; attrs: Readonly<Record<string, string>> } } {
-    return fragment.source?.nodeType === 'img' && Boolean(fragment.source.attrs?.src)
+function applySemanticBlockDataset(element: HTMLElement, block: PreparedTextBlock): void {
+    element.dataset.rebookBlock = 'true'
+    element.dataset.blockId = block.block.id
+    element.dataset.blockType = block.block.type
 }
 
-function getImageLeft(image: TextImage, columnLeft: number, imageWidth: number, columnWidth: number): number {
-    if (image.style?.align === 'start') return columnLeft
-    if (image.style?.align === 'end') return columnLeft + columnWidth - imageWidth
-    return columnLeft + (columnWidth - imageWidth) / 2
+function applySemanticBlockStyle(
+    element: HTMLElement,
+    block: PreparedTextBlock,
+    context: BrowserReflowableContentRenderContext,
+): void {
+    const style = block.block.style ?? {}
+    const fontSize = style.fontSize ?? getBaseFontSize(context)
+    const lineHeight = getCSSLineHeight(style.lineHeight, fontSize, context.lineHeightPixels)
+    element.style.boxSizing = 'border-box'
+    element.style.margin = `${block.block.blockGapBefore ?? 0}px 0 ${block.block.blockGapAfter ?? context.lineHeightPixels * 0.5}px`
+    element.style.padding = '0'
+    element.style.fontFamily = style.fontFamily ?? context.styles.fontFamily ?? context.baseTextStyle.fontFamily ?? 'system-ui, -apple-system, Georgia, serif'
+    element.style.fontSize = `${fontSize}px`
+    element.style.lineHeight = `${lineHeight}px`
+    element.style.textAlign = getTextAlign(style.textAlign)
+    element.style.whiteSpace = block.block.type === 'pre' ? 'pre-wrap' : 'normal'
+    element.style.overflowWrap = 'anywhere'
+    element.style.color = style.color ?? context.styles.color ?? 'inherit'
+    if (style.fontWeight) element.style.fontWeight = style.fontWeight
+    if (style.fontStyle) element.style.fontStyle = style.fontStyle
+    if (style.textDecoration) element.style.textDecoration = style.textDecoration
+}
+
+function getBaseFontSize(context: BrowserReflowableContentRenderContext): number {
+    return context.baseTextStyle.fontSize ?? parseCSSPixels(context.styles.fontSize, 16)
+}
+
+function getSemanticBlockTagName(type: PreparedTextBlock['block']['type'], depth: number | undefined): keyof HTMLElementTagNameMap {
+    if (type === 'heading' || type === 'chapter') {
+        const level = Math.max(1, Math.min(6, Math.round(depth ?? 1)))
+        return `h${level}` as keyof HTMLElementTagNameMap
+    }
+    if (type === 'blockquote') return 'blockquote'
+    if (type === 'listItem') return 'div'
+    if (type === 'container') return 'section'
+    return 'p'
+}
+
+function getSemanticColumnMetrics(context: BrowserReflowableContentRenderContext): {
+    contentWidth: number
+    columnStep: number
+    columnGap: number
+    firstColumnLeft: number
+    totalFlowWidth: number
+} {
+    const position = { left: 0 }
+    const contentWidth = getColumnContentWidth(context, position)
+    const columnStep = context.layout.columnWidth + context.layout.gap
+    const columnGap = Math.max(0, columnStep - contentWidth)
+    const sourceColumnCount = Math.max(1, context.layout.pageCount * Math.max(1, context.layout.columns))
+    return {
+        contentWidth,
+        columnStep,
+        columnGap,
+        firstColumnLeft: getColumnContentLeft(position, context),
+        totalFlowWidth: sourceColumnCount * contentWidth + Math.max(0, sourceColumnCount - 1) * columnGap,
+    }
+}
+
+function isInlineImageSegment(segment: { source?: { nodeType?: string; attrs?: Readonly<Record<string, string>> } }): segment is { text: string; style?: TextStyle; source: { nodeType: 'img'; attrs: Readonly<Record<string, string>> } } {
+    return segment.source?.nodeType === 'img' && Boolean(segment.source.attrs?.src)
+}
+
+function getImageTextAlign(image: TextImage): string {
+    if (image.style?.align === 'start') return 'left'
+    if (image.style?.align === 'end') return 'right'
+    return 'center'
 }
 
 function getColumnContentLeft(position: { left: number }, context: BrowserReflowableContentRenderContext): number {
@@ -402,13 +506,6 @@ function getColumnContentPadding(
     )
 }
 
-function getTableGridTemplate(table: TextTable): string {
-    const weights = table.columnWeights?.length === table.columnCount
-        ? table.columnWeights
-        : Array.from({ length: table.columnCount }, () => 1)
-    return weights.map(weight => `minmax(0, ${Math.max(0.1, weight)}fr)`).join(' ')
-}
-
 function getTableTextAlign(align: 'start' | 'center' | 'end' | undefined): string {
     if (align === 'center') return 'center'
     if (align === 'end') return 'right'
@@ -426,4 +523,112 @@ function getCSSLineHeight(value: number | undefined, fontSize: number, fallback:
     return typeof value === 'number' && Number.isFinite(value) && value > 0
         ? fontSize * value
         : fallback
+}
+
+function getVisibleSemanticWindow(
+    context: BrowserReflowableContentRenderContext,
+    lines: readonly LineRange[],
+): VisibleSemanticWindow {
+    const byId = new Map<string, PreparedTextBlock>()
+    for (const block of context.prepared?.blocks ?? []) {
+        byId.set(block.block.id, block)
+    }
+    const blockStartTops = getBlockStartTops(context.lines)
+
+    const output: PreparedTextBlock[] = []
+    const seen = new Set<string>()
+    let startTop = Number.POSITIVE_INFINITY
+    for (const line of lines) {
+        const block = line.block
+        if (!block || seen.has(block.id)) continue
+        seen.add(block.id)
+        output.push(byId.get(block.id) ?? lineToPreparedBlock(line, block))
+        startTop = Math.min(startTop, blockStartTops.get(block.id) ?? line.top)
+    }
+    return {
+        blocks: output,
+        startTop: Number.isFinite(startTop) ? Math.max(0, startTop) : 0,
+    }
+}
+
+function lineToPreparedBlock(line: LineRange, block: TextBlock): PreparedTextBlock {
+    return {
+        block,
+        itemSegmentIndexes: line.segments.map(segment => segment.segmentIndex),
+    }
+}
+
+function getBlockStartTops(lines: readonly LineRange[]): Map<string, number> {
+    const tops = new Map<string, number>()
+    for (const line of lines) {
+        const blockId = line.block?.id
+        if (!blockId) continue
+        const existing = tops.get(blockId)
+        if (existing == null || line.top < existing) tops.set(blockId, line.top)
+    }
+    return tops
+}
+
+function createEstimatedBlockRects(
+    lines: readonly LineRange[],
+    context: BrowserReflowableContentRenderContext,
+): Map<string, Rect> {
+    const rects = new Map<string, Rect>()
+    for (const line of lines) {
+        const blockId = line.block?.id
+        if (!blockId) continue
+        const position = getRenderedReflowableLinePosition(line, context.layout, context.layoutMode)
+        const rect: Rect = {
+            x: getColumnContentLeft(position, context) + (line.inlineOffset ?? 0),
+            y: position.top,
+            width: Math.max(1, line.width),
+            height: Math.max(1, line.height),
+        }
+        const existing = rects.get(blockId)
+        rects.set(blockId, existing ? unionRect(existing, rect) : rect)
+    }
+    return rects
+}
+
+function getSemanticBlockRect(
+    content: HTMLElement,
+    block: PreparedTextBlock,
+    estimates: ReadonlyMap<string, Rect>,
+): Rect | null {
+    const element = findSemanticBlockElement(content, block.block.id)
+    const rect = element ? getElementRectRelativeToContent(element, content) : null
+    return rect ?? estimates.get(block.block.id) ?? null
+}
+
+function findSemanticBlockElement(content: HTMLElement, blockId: string): HTMLElement | null {
+    const blocks = content.querySelectorAll<HTMLElement>('[data-rebook-block="true"]')
+    for (const block of blocks) {
+        if (block.dataset.blockId === blockId) return block
+    }
+    return null
+}
+
+function getElementRectRelativeToContent(element: HTMLElement, content: HTMLElement): Rect | null {
+    const rect = element.getBoundingClientRect()
+    if (rect.width <= 0 && rect.height <= 0) return null
+    const origin = content.getBoundingClientRect()
+    return {
+        x: rect.left - origin.left,
+        y: rect.top - origin.top,
+        width: Math.max(1, rect.width),
+        height: Math.max(1, rect.height),
+    }
+}
+
+function unionRect(left: Rect, right: Rect): Rect {
+    const x = Math.min(left.x, right.x)
+    const y = Math.min(left.y, right.y)
+    const maxX = Math.max(left.x + left.width, right.x + right.width)
+    const maxY = Math.max(left.y + left.height, right.y + right.height)
+    return {
+        x,
+        y,
+        width: Math.max(1, maxX - x),
+        height: Math.max(1, maxY - y),
+    }
 }

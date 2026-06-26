@@ -1,7 +1,7 @@
-import { resolveReflowableLineMarks } from '../../core/mark-resolver'
+import { resolveReflowableBlockMarks } from '../../core/mark-resolver'
 import type { PageSurfaceDecorator } from '../../core/page-surface'
 import type { ReaderMark } from '../../core/renderer'
-import type { LineRange } from '../../core/pretext'
+import type { TextBlock } from '../../core/pretext'
 import type { BrowserPageSurface } from './compositor'
 import {
     applyBrowserMarkDataset,
@@ -14,7 +14,7 @@ export interface BrowserReflowableMarkLayerDecoratorConfig {
 
 export interface BrowserReflowableSurfaceMetadata extends Readonly<Record<string, unknown>> {
     readonly sectionIndex: number
-    readonly lines: readonly LineRange[]
+    readonly blocks: readonly TextBlock[]
 }
 
 export class BrowserReflowableMarkLayerDecorator implements PageSurfaceDecorator<BrowserPageSurface> {
@@ -31,10 +31,10 @@ export class BrowserReflowableMarkLayerDecorator implements PageSurfaceDecorator
         const content = surface.layers.find(layer => layer.id === 'content')?.content
         if (!(content instanceof HTMLElement)) return surface
 
-        for (const line of metadata.lines) {
-            const element = content.querySelector(`[data-rebook-line-index="${String(line.index)}"]`) as HTMLElement | null
+        for (const block of metadata.blocks) {
+            const element = findBlockElement(content, block.id)
             if (!element) continue
-            applyLineMarks(element, line, metadata.sectionIndex, this.getMarks())
+            applyBlockMarks(element, block, metadata.sectionIndex, this.getMarks())
         }
         return surface
     }
@@ -43,17 +43,17 @@ export class BrowserReflowableMarkLayerDecorator implements PageSurfaceDecorator
 function getReflowableMetadata(surface: BrowserPageSurface): BrowserReflowableSurfaceMetadata | null {
     const metadata = surface.metadata
     if (!metadata) return null
-    if (typeof metadata.sectionIndex !== 'number' || !Array.isArray(metadata.lines)) return null
+    if (typeof metadata.sectionIndex !== 'number' || !Array.isArray(metadata.blocks)) return null
     return metadata as BrowserReflowableSurfaceMetadata
 }
 
-function applyLineMarks(
+function applyBlockMarks(
     element: HTMLElement,
-    line: LineRange,
+    block: TextBlock,
     sectionIndex: number,
     marks: readonly ReaderMark[],
 ): void {
-    const matching = resolveReflowableLineMarks(marks, line, sectionIndex)
+    const matching = resolveReflowableBlockMarks(marks, block, sectionIndex)
     if (!matching.length) return
     element.dataset.markIds = matching.map(mark => mark.id).join(' ')
     element.dataset.markKinds = matching.map(mark => mark.kind).filter(Boolean).join(' ')
@@ -61,6 +61,14 @@ function applyLineMarks(
         element.classList.add(...getBrowserMarkClassNames(mark))
         applyBrowserMarkDataset(element, mark)
     }
+}
+
+function findBlockElement(content: HTMLElement, blockId: string): HTMLElement | null {
+    const elements = content.querySelectorAll<HTMLElement>('[data-rebook-block="true"]')
+    for (const element of elements) {
+        if (element.dataset.blockId === blockId) return element
+    }
+    return null
 }
 
 export const createBrowserReflowableMarkLayerDecorator = (

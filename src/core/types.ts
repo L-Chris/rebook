@@ -307,7 +307,7 @@ export interface Section {
     /**
      * Optional: return text/style segments for pre-measured layout engines.
      * This is useful for renderers that avoid full chapter DOM layout and
-     * instead render visible line ranges or paint text on Canvas.
+     * instead render measured text windows or paint text on Canvas.
      */
     getSegments?(): Promise<TextSegment[]> | TextSegment[]
     /**

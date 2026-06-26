@@ -1,7 +1,7 @@
 /**
  * Browser renderer backed by the Pretext adapter.
  *
- * This renderer keeps the DOM small by rendering only visible line ranges.
+ * This renderer keeps the DOM small by rendering semantic block flow for the current window.
  */
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
@@ -170,7 +170,7 @@ export class BrowserRenderer implements BrowserContentEngine {
         })
 
         this.scroller.addEventListener('scroll', () => {
-            this.renderVisibleLines()
+            this.renderVisibleContent()
             if (this.suppressNextScrollRelocate) {
                 this.suppressNextScrollRelocate = false
                 return
@@ -302,7 +302,7 @@ export class BrowserRenderer implements BrowserContentEngine {
             this.getViewportMetrics(),
             sectionFraction,
         )
-        this.renderVisibleLines()
+        this.renderVisibleContent()
         this.emitRelocate('fraction')
         this.emitBlockWindow('fraction')
     }
@@ -342,17 +342,17 @@ export class BrowserRenderer implements BrowserContentEngine {
 
     setMark(mark: ReaderMark): void {
         this.surfacePipeline.setMark(mark)
-        this.renderVisibleLines()
+        this.renderVisibleContent()
     }
 
     removeMark(id: string): void {
         this.surfacePipeline.removeMark(id)
-        this.renderVisibleLines()
+        this.renderVisibleContent()
     }
 
     clearMarks(kind?: string): void {
         this.surfacePipeline.clearMarks(kind)
-        this.renderVisibleLines()
+        this.renderVisibleContent()
     }
 
     getMarks(): ReaderMark[] {
@@ -433,7 +433,7 @@ export class BrowserRenderer implements BrowserContentEngine {
             this.scroller.scrollTop = targetScrollTop
         }
 
-        this.renderVisibleLines()
+        this.renderVisibleContent()
         this.emit('load', { doc: { lines: this.lines, segments }, index })
         this.emitBlockWindow('load')
         this.emitRelocate('snap')
@@ -532,10 +532,10 @@ export class BrowserRenderer implements BrowserContentEngine {
         this.content.style.right = 'auto'
         this.content.style.width = `${contentWidth}px`
         this.rebuildTOCPositions()
-        this.renderVisibleLines()
+        this.renderVisibleContent()
     }
 
-    private renderVisibleLines(): void {
+    private renderVisibleContent(): void {
         const layout = this.columnLayout
         if (!this.prepared || this.currentIndex < 0) {
             this.surfacePipeline.clear()
@@ -844,7 +844,7 @@ export class BrowserRenderer implements BrowserContentEngine {
             this.suppressNextScrollRelocate = true
             this.scroller.scrollTop = getReflowablePageScrollTop(this.columnLayout, this.pageIndex)
         }
-        this.renderVisibleLines()
+        this.renderVisibleContent()
         this.emitRelocate(reason)
         this.emitBlockWindow(reason)
     }
@@ -882,7 +882,7 @@ export class BrowserRenderer implements BrowserContentEngine {
             this.suppressNextScrollRelocate = true
             this.scroller.scrollTop = this.scrollTopForFraction(safe)
         }
-        this.renderVisibleLines()
+        this.renderVisibleContent()
     }
 
     private scrollTopForFraction(fraction: number): number {

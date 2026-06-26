@@ -1,13 +1,51 @@
 import { describe, expect, it } from 'vitest'
 import {
+    blockMatchesReflowableBookRange,
+    blockToReflowableBookRange,
+    blockToReflowableTextChunkRecord,
+    createReflowableBlockTextProvider,
     createReflowableTextProvider,
     lineMatchesReflowableBookRange,
     lineToReflowableBookRange,
     lineToReflowableTextChunkRecord,
 } from '../../src/core/reflowable-text-provider'
-import type { LineRange, TextBlock } from '../../src/core/pretext'
+import type { LineRange, PreparedTextBlock, TextBlock } from '../../src/core/pretext'
 
 describe('reflowable text provider', () => {
+    it('maps semantic blocks to text chunks, ranges, and rendered rects', () => {
+        const block = createPreparedBlock('p1', 'Hello block flow')
+        const record = blockToReflowableTextChunkRecord(block, {
+            sectionIndex: 3,
+            getBlockRect: () => ({ x: 12, y: 24, width: 160, height: 48 }),
+        })
+
+        expect(record?.range).toEqual(blockToReflowableBookRange(block.block, 3))
+        expect(record?.chunk).toMatchObject({
+            id: 'reflowable:3:block:p1',
+            text: 'Hello block flow',
+            location: { type: 'reflowable', sectionIndex: 3, blockId: 'p1', offset: 0 },
+            rects: [{ x: 12, y: 24, width: 160, height: 48 }],
+        })
+    })
+
+    it('filters and searches blocks with the shared BookRange model', () => {
+        const first = createPreparedBlock('p1', 'Alpha block')
+        const second = createPreparedBlock('p2', 'Beta block')
+        const provider = createReflowableBlockTextProvider({ sectionIndex: 2 }, [first, second])
+        const range = {
+            start: { type: 'reflowable' as const, sectionIndex: 2, blockId: 'p2', offset: 0 },
+            end: { type: 'reflowable' as const, sectionIndex: 2, blockId: 'p2', offset: 10 },
+        }
+
+        expect(blockMatchesReflowableBookRange(second, 2, range)).toBe(true)
+        expect(provider.getText(range)).toMatchObject([{ text: 'Beta block' }])
+        expect(provider.search?.('beta', range)).toMatchObject([{
+            chunk: { text: 'Beta block' },
+            range,
+            score: 1,
+        }])
+    })
+
     it('maps layout lines to text chunks, ranges, and rendered rects', () => {
         const line = createLine({
             index: 3,
@@ -73,6 +111,17 @@ describe('reflowable text provider', () => {
         }])
     })
 })
+
+function createPreparedBlock(id: string, text: string): PreparedTextBlock {
+    return {
+        block: {
+            id,
+            type: 'paragraph',
+            segments: [{ text }],
+        },
+        itemSegmentIndexes: [0],
+    }
+}
 
 function createLine(options: {
     index: number

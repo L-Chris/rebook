@@ -4025,8 +4025,8 @@ function createReflowDebugSnapshot(root: HTMLElement | null): ReflowDebugSnapsho
   const scope = root ?? document.body
   const frame = scope.querySelector<HTMLElement>('[data-page-index]')
   const frameRect = frame?.getBoundingClientRect()
-  const lines = Array.from(scope.querySelectorAll<HTMLElement>('[data-rebook-line-index]'))
-    .map(readReflowDebugLine)
+  const lines = Array.from(scope.querySelectorAll<HTMLElement>('[data-rebook-block="true"]'))
+    .map((element, index) => readReflowDebugLine(element, index))
     .sort((a, b) => a.lineIndex - b.lineIndex)
   const captions = lines.filter(isReflowDebugCaption)
   const images = lines.filter(line => line.blockType === 'image')
@@ -4057,15 +4057,15 @@ function createReflowDebugSnapshot(root: HTMLElement | null): ReflowDebugSnapsho
   }
 }
 
-function readReflowDebugLine(element: HTMLElement): ReflowDebugLine {
+function readReflowDebugLine(element: HTMLElement, index: number): ReflowDebugLine {
   const rect = element.getBoundingClientRect()
   const style = getComputedStyle(element)
   return {
-    lineIndex: parseNullableNumber(element.dataset.rebookLineIndex) ?? -1,
+    lineIndex: index,
     blockId: element.dataset.blockId ?? null,
     blockType: element.dataset.blockType ?? null,
-    sourceTop: parseNullableNumber(element.dataset.sourceTop),
-    sourceHeight: parseNullableNumber(element.dataset.sourceHeight),
+    sourceTop: null,
+    sourceHeight: null,
     styleTop: parseCSSPixelValue(style.top),
     styleLeft: parseCSSPixelValue(style.left),
     rect: {

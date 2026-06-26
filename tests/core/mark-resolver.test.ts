@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+    getBlockReflowableTextRange,
     getLineReflowableTextRange,
     markMatchesReflowableRange,
     resolveFixedMarkRects,
+    resolveReflowableBlockMarks,
     resolveReflowableLineMarks,
 } from '../../src/core/mark-resolver'
 import type { LineRange, TextBlock } from '../../src/core/pretext'
@@ -74,6 +76,38 @@ describe('mark resolver', () => {
         })
         expect(markMatchesReflowableRange(marks[0], range)).toBe(true)
         expect(resolveReflowableLineMarks(marks, line, 1).map(mark => mark.id)).toEqual(['inside-line'])
+    })
+
+    it('resolves reflowable block marks from the shared location model', () => {
+        const block: TextBlock = {
+            id: 'p1',
+            type: 'paragraph',
+            segments: [{ text: 'Block text' }],
+        }
+        const marks: ReaderMark[] = [
+            {
+                id: 'inside-block',
+                location: {
+                    start: { type: 'reflowable', sectionIndex: 1, blockId: 'p1', offset: 2 },
+                    end: { type: 'reflowable', sectionIndex: 1, blockId: 'p1', offset: 7 },
+                },
+            },
+            {
+                id: 'other-block',
+                location: { type: 'reflowable', sectionIndex: 1, blockId: 'p2' },
+            },
+        ]
+        const range = getBlockReflowableTextRange(block, 1)
+
+        expect(range).toMatchObject({
+            sectionIndex: 1,
+            blockId: 'p1',
+            startOffset: 0,
+            endOffset: 10,
+            offsetsReliable: true,
+        })
+        expect(markMatchesReflowableRange(marks[0], range)).toBe(true)
+        expect(resolveReflowableBlockMarks(marks, block, 1).map(mark => mark.id)).toEqual(['inside-block'])
     })
 })
 

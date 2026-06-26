@@ -4,7 +4,8 @@ import {
     type Rect,
     type ReflowableTextRange,
 } from './location'
-import type { LineRange } from './pretext'
+import type { LineRange, TextBlock } from './pretext'
+import { getReflowableTextBlockText } from './reflowable-text-provider'
 import type { ReaderMark } from './renderer'
 
 export interface ResolvedMarkRect {
@@ -43,6 +44,16 @@ export function getLineReflowableTextRange(line: LineRange, sectionIndex: number
     }
 }
 
+export function getBlockReflowableTextRange(block: TextBlock, sectionIndex: number): ReflowableTextRange {
+    return {
+        sectionIndex,
+        blockId: block.id,
+        startOffset: 0,
+        endOffset: Array.from(getReflowableTextBlockText(block)).length,
+        offsetsReliable: true,
+    }
+}
+
 export function markMatchesReflowableRange(mark: ReaderMark, range: ReflowableTextRange): boolean {
     return bookPositionMatchesReflowableRange(mark.location, range)
 }
@@ -53,5 +64,14 @@ export function resolveReflowableLineMarks(
     sectionIndex: number,
 ): ReaderMark[] {
     const range = getLineReflowableTextRange(line, sectionIndex)
+    return marks.filter(mark => markMatchesReflowableRange(mark, range))
+}
+
+export function resolveReflowableBlockMarks(
+    marks: readonly ReaderMark[],
+    block: TextBlock,
+    sectionIndex: number,
+): ReaderMark[] {
+    const range = getBlockReflowableTextRange(block, sectionIndex)
     return marks.filter(mark => markMatchesReflowableRange(mark, range))
 }

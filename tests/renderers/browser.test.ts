@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Book, RelocateEvent } from '../../src/core/types'
 import type { EventListener, LayoutMode, ReaderMark, Renderer, RendererStyles } from '../../src/core/renderer'
 import type { TOCViewItem } from '../../src/core/reader'
-import type { LineRange } from '../../src/core/pretext'
+import { prepareBlocks, type LineRange } from '../../src/core/pretext'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import { epub } from '../../src/parsers/epub'
 import { mobi } from '../../src/parsers/mobi'
@@ -421,7 +421,9 @@ describe('BrowserRenderer', () => {
                 pageCount: 1,
             },
             lines: [line],
-            prepared: null,
+            prepared: prepareBlocks([line.block!], {
+                baseStyle: { fontFamily: 'serif', fontSize: 16, lineHeight: 1.5 },
+            }),
             styles: {},
             baseTextStyle: { fontFamily: 'serif', fontSize: 16, lineHeight: 1.5 },
             lineHeightPixels: 24,
@@ -439,7 +441,7 @@ describe('BrowserRenderer', () => {
         const results = await surface.textProvider!.search!('core')
 
         expect(chunks[0]).toMatchObject({
-            id: 'reflowable:2:line:0',
+            id: 'reflowable:2:block:p1',
             text: 'Reader core text provider',
             location: { type: 'reflowable', sectionIndex: 2, blockId: 'p1', offset: 0 },
         })
@@ -447,13 +449,14 @@ describe('BrowserRenderer', () => {
         expect(scoped).toHaveLength(1)
         expect(results[0].range.start).toMatchObject({ type: 'reflowable', sectionIndex: 2, blockId: 'p1' })
         expect(surface.metadata?.sectionIndex).toBe(2)
-        expect((surface.metadata?.lines as readonly LineRange[] | undefined)?.[0]).toBe(line)
-        expect((surface.layers[0].content as HTMLElement).querySelector('[data-rebook-line-index="0"]')).toBeTruthy()
+        expect((surface.metadata?.blocks as readonly { id: string }[] | undefined)?.[0]?.id).toBe('p1')
+        expect((surface.layers[0].content as HTMLElement).querySelector('[data-rebook-block="true"][data-block-id="p1"]')).toBeTruthy()
+        expect((surface.layers[0].content as HTMLElement).querySelector('[data-rebook-line-index]')).toBeNull()
 
         surface.destroy?.()
     })
 
-    it('renders only visible Pretext line ranges into minimal DOM rows', async () => {
+    it('renders semantic blocks without line metadata DOM', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
         container.setAttribute('data-height', '72')
@@ -489,16 +492,17 @@ describe('BrowserRenderer', () => {
         expect(container.querySelector('[data-rebook-page-surface="true"]')).toBeTruthy()
         expect(container.querySelector('[data-rebook-surface-kind="reflowable-page"]')).toBeTruthy()
         expect(container.querySelector('[data-rebook-reflowable-content-layer="true"]')).toBeTruthy()
-        const renderedRows = container.querySelectorAll('span').length
+        const semanticBlock = container.querySelector('[data-rebook-block="true"][data-block-type="paragraph"]') as HTMLElement
         expect(loadedLines).toBeGreaterThan(5)
-        expect(renderedRows).toBeGreaterThan(0)
-        expect(renderedRows).toBeLessThan(loadedLines)
-        expect(container.textContent).toContain('word0')
+        expect(semanticBlock.tagName).toBe('P')
+        expect(semanticBlock.textContent).toContain('word0')
+        expect(container.querySelector('[data-rebook-line-metadata="true"]')).toBeNull()
+        expect(container.querySelector('[data-rebook-line-index]')).toBeNull()
 
         renderer.destroy()
     })
 
-    it('renders reader marks as classes on matching browser lines', async () => {
+    it('renders reader marks as classes on matching browser blocks', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
         container.setAttribute('data-height', '96')
@@ -1260,6 +1264,12 @@ describe('BrowserRenderer', () => {
         expect(blockIds.length).toBeLessThan(blocks.length)
         expect(blockIds[0]).toBe('b0')
         expect(blockIds).not.toContain('b9')
+        const renderedBlockIds = Array.from(container.querySelectorAll<HTMLElement>('[data-rebook-block="true"]'))
+            .map(element => element.dataset.blockId)
+        expect(renderedBlockIds.length).toBeGreaterThan(0)
+        expect(renderedBlockIds.length).toBeLessThan(blocks.length)
+        expect(renderedBlockIds[0]).toBe('b0')
+        expect(renderedBlockIds).not.toContain('b9')
 
         renderer.destroy()
     })
@@ -1327,21 +1337,23 @@ describe('BrowserRenderer', () => {
         await renderer.open(book)
         await renderer.goTo(0)
 
-        const rows = Array.from(container.querySelectorAll('[data-block-type="paragraph"]')) as HTMLElement[]
-        const lefts = new Set(rows.map(row => row.style.left))
-        expect(lefts.size).toBeGreaterThan(1)
-        expect(rows.some(row => row.style.left === '344px')).toBe(true)
-        const layer = rows[0].closest('[data-rebook-reflowable-content-layer="true"]') as HTMLElement
+        const flow = container.querySelector('[data-rebook-semantic-flow="true"]') as HTMLElement
+        expect(flow.style.left).toBe('24px')
+        expect(flow.style.columnWidth).toBe('272px')
+        expect(flow.style.columnGap).toBe('48px')
+        const layer = flow.closest('[data-rebook-reflowable-content-layer="true"]') as HTMLElement
         const frame = layer.parentElement as HTMLElement
         const contentHost = frame.parentElement as HTMLElement
         expect(contentHost.style.left).toBe('80px')
         expect(frame.style.width).toBe('640px')
+        expect(container.querySelector('[data-rebook-line-metadata]')).toBeNull()
 
         renderer.setSpread(1)
-        const singleColumnRows = Array.from(container.querySelectorAll('[data-block-type="paragraph"]')) as HTMLElement[]
-        const singleColumnLefts = new Set(singleColumnRows.map(row => row.style.left))
-        expect(singleColumnLefts).toEqual(new Set(['24px']))
-        const singleColumnLayer = singleColumnRows[0].closest('[data-rebook-reflowable-content-layer="true"]') as HTMLElement
+        const singleColumnFlow = container.querySelector('[data-rebook-semantic-flow="true"]') as HTMLElement
+        expect(singleColumnFlow.style.left).toBe('24px')
+        expect(singleColumnFlow.style.columnWidth).toBe('272px')
+        expect(singleColumnFlow.style.columnGap).toBe('48px')
+        const singleColumnLayer = singleColumnFlow.closest('[data-rebook-reflowable-content-layer="true"]') as HTMLElement
         const singleColumnFrame = singleColumnLayer.parentElement as HTMLElement
         const singleColumnContentHost = singleColumnFrame.parentElement as HTMLElement
         expect(singleColumnContentHost.style.left).toBe('240px')
@@ -1382,9 +1394,12 @@ describe('BrowserRenderer', () => {
         await renderer.goTo(0)
 
         const scroller = container.firstElementChild as HTMLElement
-        const firstRow = container.querySelector('[data-block-type="paragraph"]') as HTMLElement
+        const paragraph = container.querySelector('[data-rebook-block="true"][data-block-type="paragraph"]') as HTMLElement
+        const semanticPage = paragraph.closest('[data-rebook-semantic-page="true"]') as HTMLElement
         expect(scroller.style.overflow).toBe('hidden')
-        expect(parseFloat(firstRow.style.top)).toBeGreaterThan(0)
+        expect(semanticPage?.dataset.pageIndex).toBe('0')
+        expect(paragraph.tagName).toBe('P')
+        expect(container.querySelector('[data-rebook-line-metadata]')).toBeNull()
 
         await renderer.next()
         expect(scroller.scrollTop).toBe(120)
@@ -1569,12 +1584,12 @@ describe('BrowserRenderer', () => {
         await renderer.open(book)
         await renderer.goTo(0)
 
-        const figure = container.querySelector('[data-block-type="image"]') as HTMLElement
+        const figure = container.querySelector('[data-rebook-block="true"][data-block-type="image"]') as HTMLElement
         const img = container.querySelector('img') as HTMLImageElement
         expect(figure.dataset.cover).toBe('true')
         expect(img.src).toBe('test://cover.png')
         expect(img.alt).toBe('Cover')
-        expect(parseFloat(figure.style.height)).toBeLessThanOrEqual(120)
+        expect(img.style.maxWidth).toBe('100%')
 
         renderer.destroy()
     })
@@ -1621,14 +1636,14 @@ describe('BrowserRenderer', () => {
         await renderer.open(book)
         await renderer.goTo(0)
 
-        const tableRow = container.querySelector('[data-block-type="table"]') as HTMLElement
+        const tableRow = container.querySelector('[data-rebook-block="true"][data-block-type="table"]') as HTMLTableElement
         expect(tableRow).toBeTruthy()
         expect(tableRow.textContent).toContain('Figure 1.1')
         expect(tableRow.textContent).toContain('Terms in a synonym ring')
         expect(tableRow.style.fontSize).toBe('12.8px')
         expect(tableRow.style.lineHeight).toBe('16px')
-        expect((tableRow.firstElementChild as HTMLElement).style.gridTemplateColumns).toContain('20fr')
-        expect((tableRow.firstElementChild as HTMLElement).style.gridTemplateColumns).toContain('80fr')
+        expect(tableRow.querySelectorAll('col')[0].style.width).toBe('20%')
+        expect(tableRow.querySelectorAll('col')[1].style.width).toBe('80%')
 
         renderer.destroy()
     })
@@ -1674,13 +1689,12 @@ describe('BrowserRenderer', () => {
         await renderer.goTo(0)
 
         const pre = container.querySelector('pre[data-block-type="pre"]') as HTMLElement
-        expect(pre.style.width).toBe('212px')
-        expect(pre.style.overflow).toBe('auto')
+        expect(pre.dataset.rebookBlock).toBe('true')
+        expect(pre.closest('[data-rebook-semantic-flow="true"]')).toBeTruthy()
         expect(pre.style.whiteSpace).toBe('pre-wrap')
         expect(pre.style.overflowWrap).toBe('anywhere')
         expect(pre.textContent).toContain('<li>')
         expect(pre.textContent).toMatch(/Spot\s+with\s+a\s+deliberately/)
-        expect(pre.textContent!.split('\n').length).toBeGreaterThan(code.split('\n').length)
 
         renderer.destroy()
     })
