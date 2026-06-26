@@ -51,10 +51,12 @@ import {
   type RebookExtensionCatalogItem,
   type RebookExtensionInstallation,
   type RebookExtensionManifest,
+  type RendererStyles,
   parseRebookExtensionCatalogEntries,
 } from '../../src/index.ts'
 import { createBrowserTTSAudioPlayer } from '../../src/plugins/tts.ts'
 
+type ReflowablePageFitMode = NonNullable<RendererStyles['reflowablePageFit']>
 type Panel = 'search' | 'chat' | null
 type SettingsSection = 'reading' | 'extensions' | 'translation' | 'tts' | 'chat' | 'trial' | 'debug'
 type DemoExtensionInstallations = Record<string, RebookExtensionInstallation>
@@ -64,6 +66,7 @@ interface DemoConfig {
   layout: 'paginated' | 'scrolled'
   spread: string
   fixedPainter: string
+  reflowablePageFit: ReflowablePageFitMode
   fontSize: string
   theme: BuiltInReaderThemeName
   hyphenate: boolean
@@ -307,6 +310,7 @@ const defaultConfig: DemoConfig = {
   layout: 'paginated',
   spread: '2',
   fixedPainter: 'canvas',
+  reflowablePageFit: 'viewport',
   fontSize: '16px',
   theme: 'normal',
   hyphenate: true,
@@ -2725,6 +2729,7 @@ function SettingsSectionForm({
       <FormGrid>
         <SelectField label="Layout" value={config.layout} onChange={value => update('layout', value as DemoConfig['layout'])} options={[['paginated', 'Paginated'], ['scrolled', 'Scrolled']]} />
         <SelectField label="Spread" value={config.spread} onChange={value => update('spread', value)} options={[['2', 'Auto spread'], ['1', 'Single page']]} />
+        <SelectField label="Page fit" value={config.reflowablePageFit} onChange={value => update('reflowablePageFit', value as ReflowablePageFitMode)} options={[['viewport', 'Viewport'], ['paper', 'Paper page'], ['auto', 'Auto']]} />
         <SelectField label="Fixed painter" value={config.fixedPainter} onChange={value => update('fixedPainter', value)} options={[['auto', 'Auto'], ['canvas', 'Canvas 2D'], ['webgpu', 'WebGPU']]} />
         <SelectField label="Font size" value={config.fontSize} onChange={value => update('fontSize', value)} options={[['14px', 'Small'], ['16px', 'Medium'], ['18px', 'Large'], ['20px', 'X-Large']]} />
         <SelectField label="Theme" value={config.theme} onChange={value => update('theme', value as DemoConfig['theme'])} options={[['normal', 'Normal'], ['night', 'Night']]} />
@@ -3206,6 +3211,7 @@ function normalizeConfig(value: Partial<DemoConfig> = {}): DemoConfig {
   const config: DemoConfig = {
     ...defaultConfig,
     ...value,
+    reflowablePageFit: normalizeReflowablePageFit(value.reflowablePageFit),
     extensionInstallations: normalizeDemoExtensionInstallations(value.extensionInstallations),
   }
   const manager = createDemoExtensionManager(config)
@@ -3245,6 +3251,11 @@ function normalizeDemoExtensionInstallations(value: unknown): DemoExtensionInsta
     }
   }
   return installations
+}
+
+function normalizeReflowablePageFit(value: unknown): ReflowablePageFitMode {
+  if (value === 'auto' || value === 'paper' || value === 'viewport') return value
+  return defaultConfig.reflowablePageFit
 }
 
 function isDemoExtensionFeatureControlled(manifest: RebookExtensionManifest): boolean {
@@ -3809,6 +3820,7 @@ function getReaderStyles(config: DemoConfig) {
     minColumnWidth: '360px',
     maxColumnWidth: '960px',
     margin: '36px',
+    reflowablePageFit: config.reflowablePageFit,
   }
 }
 
