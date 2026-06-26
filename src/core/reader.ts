@@ -104,15 +104,14 @@ export class ReaderSession {
      * Open a book from a file, URL, Blob, or ArrayBuffer.
      */
     async open(input: ParserInput): Promise<Book> {
-        this.close()
-        this.resetRenderer()
-
         const book = await applyRebookPlugins(
             await registry.open(input, this.getParserOptions()),
             this.pluginEntries,
             this.extensionHost,
         )
 
+        this.close()
+        this.resetRenderer()
         this.book = book
         await this.renderer.open(book)
         return book

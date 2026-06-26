@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import { ReaderSession, type TOCViewItem } from '../../src/core/reader'
+import { UnsupportedFormatError } from '../../src/core/errors'
 import type { BlockWindowEvent, Book, RelocateEvent } from '../../src/core/types'
 import type { LayoutMode, ReaderMark, Renderer, RendererStyles } from '../../src/core/renderer'
 import type { PageSurface } from '../../src/core/page-surface'
@@ -49,6 +50,10 @@ class FakeRenderer implements Renderer {
 
     setLocation(location: RelocateEvent): void {
         this.location = location
+    }
+
+    getBookForTest(): Book | null {
+        return this.book
     }
 
     setSurface(surface: PageSurface | null): void {
@@ -245,6 +250,28 @@ describe('ReaderSession', () => {
         renderer.setSurface(null)
         expect(await reader.getCurrentText()).toEqual([])
         expect(await reader.searchCurrentText('provider')).toEqual([])
+    })
+
+    it('keeps the current book when opening unsupported input fails', async () => {
+        const renderer = new FakeRenderer()
+        const reader = new ReaderSession({ createRenderer: () => renderer })
+        const book: Book = {
+            sections: [{
+                id: 'old.xhtml',
+                size: 12,
+                load: () => '<p>Old book</p>',
+            }],
+            metadata: { title: 'Old book' },
+        }
+
+        await reader.openBook(book)
+
+        await expect(reader.open(new Blob(['not a book'], { type: 'image/png' })))
+            .rejects.toThrow(UnsupportedFormatError)
+
+        expect(reader.getBook()).toBe(book)
+        expect(renderer.getBookForTest()).toBe(book)
+        expect(renderer.getLocation()).toEqual({ index: 0, fraction: 0, totalFraction: 0 })
     })
 
     it('lists extension manifests installed through reader config', async () => {

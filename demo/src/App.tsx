@@ -599,8 +599,55 @@ const domAdapter = new BrowserDOMAdapter()
 const urlFactory = new BrowserURLFactory()
 const parserOptions = { domAdapter, urlFactory }
 const builtInExtensionCatalog = createBuiltInRebookExtensionCatalog()
+const supportedBookFileExtensions = ['.epub', '.mobi', '.azw', '.azw3', '.fb2', '.cbz', '.pdf'] as const
+const supportedBookFileAccept = supportedBookFileExtensions.join(',')
+const supportedBookMimeTypes = new Set([
+  'application/epub+zip',
+  'application/pdf',
+  'application/vnd.amazon.ebook',
+  'application/x-fictionbook+xml',
+  'application/x-mobipocket-ebook',
+  'application/vnd.comicbook+zip',
+  'application/x-cbz',
+])
+const potentialBookDragMimeTypes = new Set([
+  ...supportedBookMimeTypes,
+  'application/octet-stream',
+  'application/xml',
+  'application/zip',
+  'application/x-zip-compressed',
+  'text/xml',
+])
 
 registerBuiltInParsers(registry)
+
+function isSupportedBookFile(file: File): boolean {
+  const name = file.name.toLowerCase()
+  if (supportedBookFileExtensions.some(extension => name.endsWith(extension))) return true
+  return supportedBookMimeTypes.has(normalizeMimeType(file.type))
+}
+
+function hasFileTransfer(dataTransfer: DataTransfer): boolean {
+  if (dataTransfer.files.length > 0) return true
+  return Array.from(dataTransfer.items).some(item => item.kind === 'file')
+}
+
+function isPotentialBookFileTransfer(dataTransfer: DataTransfer): boolean {
+  const files = Array.from(dataTransfer.files)
+  if (files.length > 0) return files.some(isSupportedBookFile)
+
+  const fileItems = Array.from(dataTransfer.items).filter(item => item.kind === 'file')
+  if (!fileItems.length) return false
+
+  return fileItems.some(item => {
+    const type = normalizeMimeType(item.type)
+    return !type || potentialBookDragMimeTypes.has(type)
+  })
+}
+
+function normalizeMimeType(value: string): string {
+  return value.split(';', 1)[0]?.trim().toLowerCase() ?? ''
+}
 
 function App() {
   const viewerRef = useRef<HTMLDivElement | null>(null)
@@ -1064,12 +1111,13 @@ function App() {
 
   const openFileWithReader = async (file: File, targetReader = readerRef.current, options: { preserveFile?: boolean } = {}) => {
     if (!targetReader) return
+    const previousFile = currentFileRef.current
     setBusy(true)
     setStatus(`Opening ${file.name}...`)
     try {
-      if (!options.preserveFile) currentFileRef.current = file
       const started = performance.now()
       const openedBook = await targetReader.open(file)
+      if (!options.preserveFile) currentFileRef.current = file
       bookRef.current = openedBook
       setBook(openedBook)
       setBookTitle(formatLanguageMap(openedBook.metadata?.title) || file.name || 'Untitled')
@@ -1093,17 +1141,25 @@ function App() {
           ? `Error (${error.code}): ${error.message}`
           : formatError(error)
       setStatus(`Failed to open file: ${detail}`)
-      setBook(null)
-      bookRef.current = null
+      if (!options.preserveFile) currentFileRef.current = previousFile
+      if (!bookRef.current) setBook(null)
       appendDebug('open failed', detail)
     } finally {
       setBusy(false)
     }
   }
 
-  const openPickedFiles = (files: FileList | File[]) => {
-    const file = Array.from(files).find(Boolean)
-    if (file) void openFileWithReader(file)
+  const openPickedFiles = (files: FileList | File[], options: { silentUnsupported?: boolean } = {}) => {
+    const pickedFiles = Array.from(files).filter(Boolean)
+    const file = pickedFiles.find(isSupportedBookFile)
+    if (file) {
+      void openFileWithReader(file)
+      return true
+    }
+    if (pickedFiles.length && !options.silentUnsupported) {
+      setStatus(`Unsupported file type. Please open ${supportedBookFileExtensions.join(', ')}.`)
+    }
+    return false
   }
 
   const openURLWithReader = async (url: string, targetReader = readerRef.current) => {
@@ -1452,13 +1508,15 @@ function App() {
       data-reader-theme={config.theme}
       onDragOver={event => {
         event.preventDefault()
-        setDragging(true)
+        setDragging(isPotentialBookFileTransfer(event.dataTransfer))
       }}
       onDragLeave={() => setDragging(false)}
       onDrop={event => {
         event.preventDefault()
         setDragging(false)
-        openPickedFiles(event.dataTransfer.files)
+        if (!hasFileTransfer(event.dataTransfer)) return
+        const shouldReportUnsupported = isPotentialBookFileTransfer(event.dataTransfer)
+        openPickedFiles(event.dataTransfer.files, { silentUnsupported: !shouldReportUnsupported })
       }}
     >
       <Header
@@ -1478,7 +1536,7 @@ function App() {
         ref={fileInputRef}
         hidden
         type="file"
-        accept=".epub,.mobi,.azw,.azw3,.fb2,.cbz,.pdf"
+        accept={supportedBookFileAccept}
         onChange={event => {
           if (event.target.files) openPickedFiles(event.target.files)
           event.currentTarget.value = ''

@@ -31,6 +31,35 @@ textarea {
   font: inherit;
 }
 
+button:not(:disabled),
+a[href],
+select:not(:disabled),
+summary,
+label[for],
+[role='button']:not([aria-disabled='true']),
+input[type='button']:not(:disabled),
+input[type='checkbox']:not(:disabled),
+input[type='file']:not(:disabled),
+input[type='radio']:not(:disabled),
+input[type='range']:not(:disabled),
+input[type='reset']:not(:disabled),
+input[type='submit']:not(:disabled) {
+  cursor: pointer;
+}
+
+button:disabled,
+select:disabled,
+[role='button'][aria-disabled='true'],
+input[type='button']:disabled,
+input[type='checkbox']:disabled,
+input[type='file']:disabled,
+input[type='radio']:disabled,
+input[type='range']:disabled,
+input[type='reset']:disabled,
+input[type='submit']:disabled {
+  cursor: not-allowed;
+}
+
 .reader-shell {
   --ui-bg: #eef1f5;
   --ui-bg-soft: #f8fafc;
