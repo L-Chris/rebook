@@ -3,6 +3,8 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   ArrowUp,
+  ChevronDown,
+  ChevronRight,
   ExternalLink,
   Loader2,
   Maximize2,
@@ -52,6 +54,8 @@ import {
   type RebookExtensionInstallation,
   type RebookExtensionManifest,
   type RendererStyles,
+  type TOCItem,
+  type TOCViewItem,
   parseRebookExtensionCatalogEntries,
 } from '../../src/index.ts'
 import { createBrowserTTSAudioPlayer } from '../../src/plugins/tts.ts'
@@ -144,8 +148,23 @@ interface SearchItem {
   unitTitle?: string
   sectionIndex?: number
   pageIndex?: number
+  blockId?: string
+  blockType?: string
+  start: number
+  end: number
+  before: string
   excerpt: string
   match: string
+  after: string
+}
+
+type DemoTOCItem = (TOCViewItem | TOCItem) & {
+  id?: string
+  target?: string
+  disabled?: boolean
+  active?: boolean
+  children?: readonly DemoTOCItem[]
+  subitems?: readonly DemoTOCItem[]
 }
 
 interface ReflowDebugLine {
@@ -602,7 +621,7 @@ function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('reading')
   const [book, setBook] = useState<any>(null)
   const [bookTitle, setBookTitle] = useState('rebook Demo')
-  const [tocItems, setTocItems] = useState<any[]>([])
+  const [tocItems, setTocItems] = useState<TOCViewItem[]>([])
   const [location, setLocation] = useState<any>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [activePanel, setActivePanel] = useState<Panel>('chat')
@@ -1193,6 +1212,7 @@ function App() {
       return
     }
     setSearchStatus('Searching...')
+    reader.clearMarks?.('search')
     const results = await reader.search(query, {
       scope: searchScope === 'unit' ? 'unit' : 'book',
       unitIndex: location?.index ?? 0,
@@ -1204,11 +1224,25 @@ function App() {
   }
 
   const goToSearchResult = async (item: SearchItem) => {
-    if (!readerRef.current?.canGoTo?.(item.unitIndex)) {
+    const reader = readerRef.current
+    if (!reader?.canGoTo?.(item.unitIndex)) {
       setStatus('Trial limit reached.')
       return
     }
-    await readerRef.current.goTo(item.unitIndex)
+    const target = item.blockId ? `${item.unitIndex}#${item.blockId}` : item.unitIndex
+    await reader.goTo(target)
+    reader.clearMarks?.('search')
+    if (item.blockId && item.sectionIndex != null) {
+      reader.setMark?.({
+        id: 'search-current',
+        kind: 'search',
+        location: {
+          start: { type: 'reflowable', sectionIndex: item.sectionIndex, blockId: item.blockId, offset: item.start },
+          end: { type: 'reflowable', sectionIndex: item.sectionIndex, blockId: item.blockId, offset: item.end },
+        },
+        className: 'rebook-search-current',
+      })
+    }
   }
 
   const sendChatMessage = async () => {
@@ -1517,6 +1551,7 @@ function App() {
                 results={searchResults}
                 onRun={() => void runSearch()}
                 onClear={() => {
+                  readerRef.current?.clearMarks?.('search')
                   setSearchQuery('')
                   setSearchResults([])
                   setSearchStatus(bookRef.current ? 'Enter a search term.' : 'Open a book to search.')
@@ -1605,7 +1640,45 @@ function Header(props: {
   )
 }
 
-function TOCSidebar({ items, onNavigate }: { items: any[]; onNavigate(target: string): void }) {
+function TOCSidebar({ items, onNavigate }: { items: readonly DemoTOCItem[]; onNavigate(target: string): void }) {
+  const activePath = useMemo(() => findActiveTOCPath(items), [items])
+  const activePathKey = activePath.join('\u0000')
+  const activeBranchIds = useMemo(() => new Set(activePath), [activePathKey])
+  const lastAutoExpandedPathKeyRef = useRef<string | null>(null)
+  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set())
+
+  useEffect(() => {
+    const validIds = collectTOCItemIds(items)
+    const shouldAutoExpandActivePath = Boolean(activePathKey) && lastAutoExpandedPathKeyRef.current !== activePathKey
+    if (shouldAutoExpandActivePath) lastAutoExpandedPathKeyRef.current = activePathKey
+    setExpandedIds(current => {
+      const next = new Set<string>()
+      let changed = false
+      for (const id of current) {
+        if (validIds.has(id)) next.add(id)
+        else changed = true
+      }
+      if (shouldAutoExpandActivePath) {
+        for (const id of activePath) {
+          if (!next.has(id)) {
+            next.add(id)
+            changed = true
+          }
+        }
+      }
+      return changed ? next : current
+    })
+  }, [items, activePathKey])
+
+  const toggleItem = useCallback((id: string) => {
+    setExpandedIds(current => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
   return (
     <aside className="w-72 shrink-0 overflow-hidden border-r border-slate-200 bg-white/84">
       <div className="border-b border-slate-200 px-4 py-3">
@@ -1613,7 +1686,14 @@ function TOCSidebar({ items, onNavigate }: { items: any[]; onNavigate(target: st
       </div>
       <div className="h-full overflow-auto pb-16">
         {items.length ? (
-          <TOCTree items={items} onNavigate={onNavigate} depth={0} />
+          <TOCTree
+            items={items}
+            onNavigate={onNavigate}
+            depth={0}
+            expandedIds={expandedIds}
+            activeBranchIds={activeBranchIds}
+            onToggle={toggleItem}
+          />
         ) : (
           <p className="px-4 py-5 text-sm text-slate-500">Open a book to show its contents.</p>
         )}
@@ -1622,30 +1702,141 @@ function TOCSidebar({ items, onNavigate }: { items: any[]; onNavigate(target: st
   )
 }
 
-function TOCTree({ items, onNavigate, depth }: { items: any[]; onNavigate(target: string): void; depth: number }) {
+function TOCTree({
+  items,
+  onNavigate,
+  depth,
+  parentPath = '',
+  expandedIds,
+  activeBranchIds,
+  onToggle,
+}: {
+  items: readonly DemoTOCItem[]
+  onNavigate(target: string): void
+  depth: number
+  parentPath?: string
+  expandedIds: ReadonlySet<string>
+  activeBranchIds: ReadonlySet<string>
+  onToggle(id: string): void
+}) {
   return (
-    <ul>
-      {items.map(item => (
-        <li key={item.id || item.target}>
-          <button
-            type="button"
-            disabled={item.disabled}
-            onClick={() => onNavigate(item.target)}
-            className={[
-              'block w-full truncate px-3 py-1.5 text-left text-sm transition',
-              item.active ? 'bg-blue-50 text-blue-700' : 'text-slate-700 hover:bg-slate-100',
-              item.disabled ? 'cursor-not-allowed opacity-40' : '',
-            ].join(' ')}
-            style={{ paddingLeft: 12 + depth * 16 }}
-            title={item.label}
-          >
-            {item.label}
-          </button>
-          {item.children?.length ? <TOCTree items={item.children} onNavigate={onNavigate} depth={depth + 1} /> : null}
-        </li>
-      ))}
+    <ul className={depth === 0 ? 'py-2' : ''}>
+      {items.map((item, index) => {
+        const itemPath = parentPath ? `${parentPath}/${index}` : `${index}`
+        const itemId = getDemoTOCItemId(item, itemPath)
+        const children = getDemoTOCItemChildren(item)
+        const target = getDemoTOCItemTarget(item)
+        const disabled = isDemoTOCItemDisabled(item) || !target
+        const hasChildren = children.length > 0
+        const expanded = hasChildren && expandedIds.has(itemId)
+        const branchActive = activeBranchIds.has(itemId)
+        return (
+          <li key={itemId} data-toc-depth={depth} data-toc-expanded={hasChildren ? String(expanded) : undefined}>
+            <div
+              className={[
+                'group flex min-w-0 items-center gap-1 pr-2 text-sm transition',
+                isDemoTOCItemActive(item) ? 'bg-blue-50 text-blue-700' : branchActive ? 'bg-slate-50 text-blue-700' : 'text-slate-700 hover:bg-slate-100',
+                disabled ? 'opacity-45' : '',
+              ].join(' ')}
+              style={{ paddingLeft: 8 + depth * 14 }}
+            >
+              {hasChildren ? (
+                <button
+                  type="button"
+                  className="grid h-7 w-6 shrink-0 place-items-center text-slate-400 transition hover:text-slate-700"
+                  onClick={() => onToggle(itemId)}
+                  aria-expanded={expanded}
+                  title={expanded ? 'Collapse section' : 'Expand section'}
+                >
+                  {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                </button>
+              ) : (
+                <span className="h-7 w-6 shrink-0" />
+              )}
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => target ? onNavigate(target) : undefined}
+                className={[
+                  'min-w-0 flex-1 truncate py-1.5 text-left transition',
+                  disabled ? 'cursor-not-allowed' : '',
+                ].join(' ')}
+                title={getDemoTOCItemLabel(item)}
+              >
+                {getDemoTOCItemLabel(item)}
+              </button>
+            </div>
+            {hasChildren && expanded ? (
+              <TOCTree
+                items={children}
+                onNavigate={onNavigate}
+                depth={depth + 1}
+                parentPath={itemPath}
+                expandedIds={expandedIds}
+                activeBranchIds={activeBranchIds}
+                onToggle={onToggle}
+              />
+            ) : null}
+          </li>
+        )
+      })}
     </ul>
   )
+}
+
+function findActiveTOCPath(items: readonly DemoTOCItem[], parents: readonly string[] = [], parentPath = ''): string[] {
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]
+    const itemPath = parentPath ? `${parentPath}/${index}` : `${index}`
+    const itemId = getDemoTOCItemId(item, itemPath)
+    const path = [...parents, itemId]
+    if (isDemoTOCItemActive(item)) return path
+    const children = getDemoTOCItemChildren(item)
+    const childPath = children.length ? findActiveTOCPath(children, path, itemPath) : []
+    if (childPath.length) return childPath
+  }
+  return []
+}
+
+function collectTOCItemIds(items: readonly DemoTOCItem[]): Set<string> {
+  const ids = new Set<string>()
+  const visit = (tocItems: readonly DemoTOCItem[], parentPath = '') => {
+    tocItems.forEach((item, index) => {
+      const itemPath = parentPath ? `${parentPath}/${index}` : `${index}`
+      ids.add(getDemoTOCItemId(item, itemPath))
+      const children = getDemoTOCItemChildren(item)
+      if (children.length) visit(children, itemPath)
+    })
+  }
+  visit(items)
+  return ids
+}
+
+function getDemoTOCItemChildren(item: DemoTOCItem): readonly DemoTOCItem[] {
+  return item.children?.length ? item.children : item.subitems ?? []
+}
+
+function getDemoTOCItemId(item: DemoTOCItem, path: string): string {
+  if (item.id) return item.id
+  return `${path}:${getDemoTOCItemTarget(item) || getDemoTOCItemLabel(item)}`
+}
+
+function getDemoTOCItemTarget(item: DemoTOCItem): string {
+  if (typeof item.target === 'string') return item.target
+  if ('href' in item && typeof item.href === 'string') return item.href
+  return ''
+}
+
+function getDemoTOCItemLabel(item: DemoTOCItem): string {
+  return item.label || 'Untitled'
+}
+
+function isDemoTOCItemActive(item: DemoTOCItem): boolean {
+  return item.active === true
+}
+
+function isDemoTOCItemDisabled(item: DemoTOCItem): boolean {
+  return item.disabled === true
 }
 
 function RightPanel(props: {
@@ -1742,11 +1933,23 @@ function SearchPanel(props: {
               <span>#{index + 1}</span>
               <span className="truncate">{item.unitTitle || `${item.unitKind} ${item.unitIndex + 1}`}</span>
             </div>
-            <p className="line-clamp-4 text-slate-700">{item.excerpt}</p>
+            <p className="line-clamp-4 text-slate-700">{renderSearchExcerpt(item)}</p>
           </button>
         ))}
       </div>
     </div>
+  )
+}
+
+function renderSearchExcerpt(item: SearchItem): ReactNode {
+  return (
+    <>
+      {item.excerpt.startsWith('...') && <span>...</span>}
+      <span>{item.before}</span>
+      <mark className="rounded bg-yellow-200 px-0.5 text-slate-900">{item.match}</mark>
+      <span>{item.after}</span>
+      {item.excerpt.endsWith('...') && <span>...</span>}
+    </>
   )
 }
 

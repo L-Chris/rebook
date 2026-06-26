@@ -58,11 +58,30 @@ describe('Pretext pipeline', () => {
         expect(blocks.map(block => block.type)).toEqual(['chapter', 'paragraph', 'blockquote'])
         expect(blocks[0].id).toBe('chapter-1')
         expect(blocks[0].style?.fontWeight).toBe('700')
+        expect(blocks[1].blockGapBefore).toBe(18 * 0.75)
+        expect(blocks[1].blockGapAfter).toBe(18 * 0.75)
         expect(blocks[1].segments.map(segment => segment.text).join('')).toBe('中文段落 bold')
         expect(blocks[1].segments.some(segment => segment.style?.fontWeight === '700')).toBe(true)
 
         const prepared = prepareBlocks(blocks, { baseStyle: { fontSize: 18, lineHeight: 1.8 } })
         expect(prepared.blocks[0].block.type).toBe('chapter')
+    })
+
+    it('applies paragraph gaps before and after ordinary paragraphs', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('p', {}, [textNode('First paragraph')]),
+            elementNode('p', {}, [textNode('Second paragraph')]),
+        ], { fontSize: 16, lineHeight: 1.5 })
+
+        expect(blocks[0].blockGapBefore).toBe(12)
+        expect(blocks[0].blockGapAfter).toBe(12)
+
+        const lines = layout(prepareBlocks(blocks, { baseStyle: { fontSize: 16, lineHeight: 1.5 } }), {
+            inlineSize: 320,
+            lineHeight: 24,
+        })
+        expect(lines[0].top).toBe(0)
+        expect(lines[1].top).toBe(48)
     })
 
     it('preserves block text alignment from inline styles', () => {
@@ -73,18 +92,33 @@ describe('Pretext pipeline', () => {
             elementNode('p', { style: 'text-align: right' }, [
                 textNode('Right signature'),
             ]),
+            elementNode('p', { align: 'right' }, [
+                textNode('Right attribute'),
+            ]),
+            elementNode('blockquote', { height: '0pt' }, [
+                elementNode('blockquote', { width: '2em', align: 'justify' }, [
+                    textNode('Nested quote'),
+                ]),
+            ]),
         ])
 
-        expect(blocks.map(block => block.style?.textAlign)).toEqual(['center', 'end'])
+        expect(blocks.map(block => block.style?.textAlign)).toEqual(['center', 'end', 'end', 'justify'])
         expect(blocks[0].style?.fontSize).toBe(20)
         expect(blocks[0].segments[0].style?.textAlign).toBe('center')
         expect(blocks[0].segments[0].style?.fontSize).toBe(20)
+        expect(blocks[3].type).toBe('blockquote')
+        expect(blocks[3].attrs?.width).toBe('2em')
+        expect(blocks[3].blockGapBefore).toBe(0)
+        expect(blocks[3].blockGapAfter).toBe(0)
 
         const lines = layout(prepareBlocks(blocks, { baseStyle: { fontSize: 16, lineHeight: 1.5 } }), {
             inlineSize: 320,
         })
         expect(lines[0].block?.style?.textAlign).toBe('center')
         expect(lines.find(line => line.text.includes('Right signature'))?.block?.style?.textAlign).toBe('end')
+        expect(lines.find(line => line.text.includes('Right attribute'))?.block?.style?.textAlign).toBe('end')
+        expect(lines.find(line => line.text.includes('Nested quote'))?.block?.style?.textAlign).toBe('justify')
+        expect(lines.find(line => line.text.includes('Nested quote'))?.inlineOffset).toBe(32)
     })
 
     it('keeps anchors inside inline-only containers as link segments', () => {
@@ -146,6 +180,37 @@ describe('Pretext pipeline', () => {
         expect(lines.map(line => line.kind)).toEqual(['text', 'separator'])
         expect(lines[0].height).toBe(20)
         expect(lines[1].width).toBe(100)
+    })
+
+    it('preserves inline br elements inside text blocks', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('p', {}, [
+                textNode('献词'),
+                elementNode('br'),
+                textNode('献给世界的复杂性'),
+            ]),
+        ])
+
+        expect(blocks).toHaveLength(1)
+        expect(blocks[0].type).toBe('paragraph')
+        expect(blocks[0].segments.map(segment => segment.text).join('')).toBe('献词\n献给世界的复杂性')
+        expect(blocks[0].segments.some(segment => segment.source?.nodeType === 'br')).toBe(true)
+    })
+
+    it('trims structural newlines from nested block containers', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('blockquote', {}, [
+                elementNode('blockquote', {}, [
+                    elementNode('blockquote', {}, [
+                        textNode('戴安娜·莱特'),
+                    ]),
+                ]),
+            ]),
+        ])
+
+        expect(blocks).toHaveLength(1)
+        expect(blocks[0].type).toBe('blockquote')
+        expect(blocks[0].segments.map(segment => segment.text).join('')).toBe('戴安娜·莱特')
     })
 
     it('applies superscript and subscript inline styles', () => {

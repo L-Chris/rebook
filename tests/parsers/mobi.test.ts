@@ -8,6 +8,7 @@ import { MOBIParser, mobi } from '../../src/parsers/mobi'
 import { createTestMOBI, createTestMOBIBlob } from '../fixtures/mobi-fixture'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 import type { ParserOptions } from '../../src/core/parser'
+import type { TOCItem } from '../../src/core/types'
 
 describe('MOBIParser', () => {
     let parser: MOBIParser
@@ -102,6 +103,90 @@ describe('MOBIParser', () => {
             expect(book.sections.length).toBeGreaterThan(0)
             const firstBlocks = await book.sections[0].getBlocks?.()
             expect(firstBlocks?.some(block => block.segments.some(segment => segment.text.trim()))).toBe(true)
+        })
+
+        it('preserves MOBI blockquote and align attributes in system beauty chapter opening', async () => {
+            const data = await readFile('data/系统之美.mobi')
+            const book = await parser.parse(data.buffer.slice(
+                data.byteOffset,
+                data.byteOffset + data.byteLength,
+            ), options)
+
+            const item = findTOCItem(book.toc, '第1章 系统之基础')
+            expect(item).toBeDefined()
+            const resolved = book.resolveHref?.(item!.href)
+            expect(resolved?.index).toBeTypeOf('number')
+
+            const blocks = await book.sections[resolved!.index].getBlocks?.() ?? []
+            expect(blocks[0]).toMatchObject({
+                type: 'paragraph',
+                style: { textAlign: 'center' },
+            })
+            expect(blocks[0]?.segments.map(segment => segment.text).join('')).toContain('系统之基础')
+            expect(blocks.slice(2, 5).map(block => block.type)).toEqual(['blockquote', 'blockquote', 'blockquote'])
+            expect(blocks.slice(2, 5).every(block => block.style?.textAlign === 'justify')).toBe(true)
+            expect(blocks.slice(2, 5).every(block => block.attrs?.width === '2em')).toBe(true)
+            expect(blocks[5]).toMatchObject({
+                type: 'paragraph',
+                style: { textAlign: 'end' },
+            })
+            expect(blocks[5]?.segments.map(segment => segment.text).join('')).toBe('」')
+
+            book.destroy?.()
+        })
+
+        it('preserves structural MOBI6 TOC nesting from system beauty contents', async () => {
+            const data = await readFile('data/系统之美.mobi')
+            const book = await parser.parse(data.buffer.slice(
+                data.byteOffset,
+                data.byteOffset + data.byteLength,
+            ), options)
+
+            const part = book.toc?.find(entry => entry.label === '第一部分 系统的结构和行为')
+            expect(part).toBeDefined()
+            expect(part?.subitems?.map(item => item.label)).toEqual([
+                '第1章 系统之基础',
+                '第2章 系统大观园',
+            ])
+            expect(part?.subitems?.[0]?.subitems?.map(item => item.label)).toContain('反馈：系统是如何运作的')
+
+            const intro = book.toc?.find(entry => entry.label === '引言 系统多棱镜')
+            expect(intro?.subitems?.map(item => item.label)).toEqual([
+                '无处不在的系统',
+                '重塑系统，发现更大的世界',
+                '找到属于你的系统之美',
+            ])
+
+            book.destroy?.()
+        })
+
+        it('preserves MOBI br elements in system beauty dedication opening', async () => {
+            const data = await readFile('data/系统之美.mobi')
+            const book = await parser.parse(data.buffer.slice(
+                data.byteOffset,
+                data.byteOffset + data.byteLength,
+            ), options)
+
+            const item = book.toc?.find(entry => entry.label === '献词 献给世界的复杂性')
+            expect(item).toBeDefined()
+            const resolved = book.resolveHref?.(item!.href)
+            expect(resolved?.index).toBeTypeOf('number')
+
+            const blocks = await book.sections[resolved!.index].getBlocks?.() ?? []
+            const title = blocks[0]
+            expect(title).toMatchObject({
+                type: 'paragraph',
+                style: { textAlign: 'center' },
+            })
+            expect(title?.segments.map(segment => segment.text).join('')).toBe('献词\n献给世界的复杂性')
+            expect(title?.segments.some(segment => segment.source?.nodeType === 'br')).toBe(true)
+
+            const author = blocks.find(block => block.segments.map(segment => segment.text).join('').includes('戴安娜·莱特'))
+            expect(author).toBeDefined()
+            expect(author?.type).toBe('blockquote')
+            expect(author?.segments.map(segment => segment.text).join('')).toBe('戴安娜·莱特')
+
+            book.destroy?.()
         })
 
         it('does not expose KF8 navigation page lists as reading sections', async () => {
@@ -369,3 +454,12 @@ describe('MOBIParser', () => {
         })
     })
 })
+
+function findTOCItem(items: readonly TOCItem[] | undefined, label: string): TOCItem | undefined {
+    for (const item of items ?? []) {
+        if (item.label === label) return item
+        const child = findTOCItem(item.subitems, label)
+        if (child) return child
+    }
+    return undefined
+}

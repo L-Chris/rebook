@@ -6,6 +6,7 @@ import type { BrowserPageSurface } from './compositor'
 import {
     applyBrowserMarkDataset,
     getBrowserMarkClassNames,
+    getBrowserMarkColor,
 } from './mark-style'
 
 export interface BrowserReflowableMarkLayerDecoratorConfig {
@@ -57,6 +58,8 @@ function applyBlockMarks(
     if (!matching.length) return
     element.dataset.markIds = matching.map(mark => mark.id).join(' ')
     element.dataset.markKinds = matching.map(mark => mark.kind).filter(Boolean).join(' ')
+    element.style.backgroundColor = getBrowserMarkColor(matching[0]!)
+    element.style.borderRadius = '4px'
     for (const mark of matching) {
         element.classList.add(...getBrowserMarkClassNames(mark))
         applyBrowserMarkDataset(element, mark)

@@ -502,6 +502,47 @@ describe('BrowserRenderer', () => {
         renderer.destroy()
     })
 
+    it('renders inline br segments as semantic line breaks', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '96')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [{
+                id: 'dedication.xhtml',
+                size: 24,
+                format: 'xhtml',
+                load: () => '',
+                getBlocks: () => [{
+                    id: 'dedication-title',
+                    type: 'paragraph',
+                    style: { textAlign: 'center' },
+                    segments: [
+                        { text: '献词' },
+                        { text: '\n', source: { nodeType: 'br' } },
+                        { text: '献给世界的复杂性' },
+                    ],
+                }],
+            }],
+        }
+
+        const renderer = new BrowserRenderer({
+            container,
+            styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '260px' },
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+
+        const title = container.querySelector('[data-rebook-block="true"][data-block-id="dedication-title"]') as HTMLElement | null
+        expect(title?.querySelectorAll('br')).toHaveLength(1)
+        expect(title?.textContent).toContain('献词')
+        expect(title?.textContent).toContain('献给世界的复杂性')
+
+        renderer.destroy()
+    })
+
     it('renders reader marks as classes on matching browser blocks', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
@@ -548,6 +589,93 @@ describe('BrowserRenderer', () => {
 
         renderer.removeMark('current')
         expect(container.querySelector('.is-current')).toBeNull()
+
+        renderer.destroy()
+    })
+
+    it('renders reflowable marks with a default visible background', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '96')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 48,
+                format: 'xhtml',
+                load: () => '',
+                getBlocks: () => [{
+                    id: 'p1',
+                    type: 'paragraph',
+                    segments: [{ text: 'Marked text should be visibly highlighted.' }],
+                }],
+            }],
+        }
+
+        const renderer = new BrowserRenderer({
+            container,
+            styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '260px' },
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+        renderer.setMark({
+            id: 'generic-highlight',
+            kind: 'highlight',
+            location: {
+                start: { type: 'reflowable', sectionIndex: 0, blockId: 'p1', offset: 0 },
+                end: { type: 'reflowable', sectionIndex: 0, blockId: 'p1', offset: 12 },
+            },
+        })
+
+        const markedBlock = container.querySelector('.rebook-mark-highlight') as HTMLElement | null
+        expect(markedBlock?.dataset.blockId).toBe('p1')
+        expect(markedBlock?.style.backgroundColor).toContain('255')
+        expect(markedBlock?.style.borderRadius).toBe('4px')
+
+        renderer.destroy()
+    })
+
+    it('renders blockquote blocks with semantic indentation and alignment', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '160')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 64,
+                format: 'xhtml',
+                load: () => '',
+                getBlocks: () => [{
+                    id: 'quote',
+                    type: 'blockquote',
+                    attrs: { width: '2em', align: 'right' },
+                    style: { textAlign: 'end' },
+                    segments: [{ text: 'Indented quote' }],
+                }],
+            }],
+        }
+
+        const renderer = new BrowserRenderer({
+            container,
+            styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '260px' },
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+
+        const quote = container.querySelector('[data-rebook-block="true"][data-block-type="blockquote"]') as HTMLElement | null
+        expect(quote?.tagName).toBe('BLOCKQUOTE')
+        expect(quote?.style.textAlign).toBe('right')
+        expect(quote?.style.paddingInlineStart).toBe('32px')
+        expect(quote?.style.paddingInlineEnd).toBe('0px')
+        expect(quote?.style.margin).toBe('0px 0 0px')
+        expect(quote?.style.backgroundColor).toContain('148')
+        expect(quote?.style.borderInlineStart).toBeUndefined()
+        expect(quote?.style.borderRadius).toBeUndefined()
 
         renderer.destroy()
     })

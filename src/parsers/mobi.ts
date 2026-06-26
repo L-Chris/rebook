@@ -15,7 +15,7 @@
 
 import type { Book, BookMetadata, Section, TOCItem, Landmark, Rendition, SectionDocument, DocumentNode } from '../core/types'
 import type { Parser, ParserInput, ParserOptions } from '../core/parser'
-import type { DOMAdapter } from '../core/dom-adapter'
+import type { DOMAdapter, XMLDocument, XMLElement } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
 import { replaceSeries, unescapeHTML } from '../core/utils'
 import { UnsupportedInputError, ParseError, CorruptedFileError, AdapterRequiredError } from '../core/errors'
@@ -852,6 +852,50 @@ function wrapMOBI6Fragment(str: string): string {
     return `<!DOCTYPE html><html><head><meta charset="utf-8"/></head><body>${str}</body></html>`
 }
 
+interface MutableTOCItem {
+    label: string
+    href: string
+    subitems?: MutableTOCItem[]
+}
+
+function extractMOBI6TOC(doc: XMLDocument): TOCItem[] {
+    const roots: MutableTOCItem[] = []
+    const stack: Array<{ depth: number; item: MutableTOCItem }> = []
+    for (const link of doc.querySelectorAll('a[filepos]')) {
+        const filepos = link.getAttribute('filepos')
+        if (!filepos) continue
+        const label = (link.textContent || '').trim()
+        if (!label) continue
+        const depth = getMOBI6TOCLinkDepth(link)
+        const item: MutableTOCItem = { label, href: `filepos:${filepos}` }
+
+        while (stack.length && depth <= stack[stack.length - 1]!.depth) stack.pop()
+        const parent = stack[stack.length - 1]?.item
+        if (parent) {
+            parent.subitems = parent.subitems ?? []
+            parent.subitems.push(item)
+        } else {
+            roots.push(item)
+        }
+        stack.push({ depth, item })
+    }
+    return roots
+}
+
+function getMOBI6TOCLinkDepth(link: XMLElement): number {
+    let depth = 0
+    let current = link.parentNode
+    while (current) {
+        if (isMOBI6TOCDepthContainer(current)) depth += 1
+        current = current.parentNode
+    }
+    return depth
+}
+
+function isMOBI6TOCDepthContainer(element: XMLElement): boolean {
+    return ['blockquote', 'ol', 'ul', 'menu', 'dl'].includes(element.localName.toLowerCase())
+}
+
 interface MOBI6Section {
     book: MOBI6
     raw: Uint8Array
@@ -949,17 +993,7 @@ class MOBI6 {
                 // Parse the document to extract TOC links
                 if (this.#domAdapter) {
                     const doc = this.#domAdapter.parseHTML(wrapMOBI6Fragment(docStr), MIME_HTML)
-                    const links = doc.querySelectorAll('a[filepos]')
-                    this.toc = []
-                    for (const a of links) {
-                        const filepos = a.getAttribute('filepos')
-                        if (filepos) {
-                            this.toc.push({
-                                label: (a.textContent || '').trim(),
-                                href: `filepos:${filepos}`,
-                            })
-                        }
-                    }
+                    this.toc = extractMOBI6TOC(doc)
                 }
             }
         } catch (e) {

@@ -249,8 +249,8 @@ export function extractDocumentBlocks(
         const normalized = type === 'pre' ? normalizePreSegments(segments) : normalizeSegments(segments)
         if (!normalized.some(segment => segment.text.trim())) return
         const preset = getBlockPreset(type, baseStyle, depth)
-        const blockStyle = { ...preset.style, ...parseInlineStyle(node.attrs?.style) }
         const attrs = getBlockAttrs(node)
+        const blockStyle = { ...preset.style, ...parseNodeTextStyle(attrs) }
         const id = attrs?.id ?? `${type}-${nextId++}`
         blocks.push({
             id,
@@ -1582,8 +1582,8 @@ function getBlockPreset(
                 lineHeight,
                 color: baseStyle.color,
             },
-            blockGapBefore: fontSize * 0.5,
-            blockGapAfter: fontSize * 0.5,
+            blockGapBefore: 0,
+            blockGapAfter: 0,
         }
     }
 
@@ -1618,6 +1618,14 @@ function getBlockPreset(
         }
     }
 
+    if (type === 'paragraph') {
+        return {
+            style: { fontSize, lineHeight },
+            blockGapBefore: fontSize * 0.75,
+            blockGapAfter: fontSize * 0.75,
+        }
+    }
+
     return {
         style: { fontSize, lineHeight },
         blockGapBefore: 0,
@@ -1626,8 +1634,9 @@ function getBlockPreset(
 }
 
 function getBlockInlineOffset(block: TextBlock, fontSize: number): number {
-    if (block.type !== 'listItem') return 0
-    return Math.max(0, block.depth ?? 0) * fontSize * 1.65
+    if (block.type === 'listItem') return Math.max(0, block.depth ?? 0) * fontSize * 1.65
+    if (block.type === 'blockquote') return parseBlockInlineOffset(block.attrs?.width, fontSize) ?? fontSize * 1.5
+    return 0
 }
 
 function getBlockLineHeight(block: TextBlock, fallbackFontSize: number, fallbackLineHeight: number): number {
@@ -1651,7 +1660,36 @@ function getBlockAnchorAttrs(node: DocumentNode): Readonly<Record<string, string
 }
 
 function getBlockAttrs(node: DocumentNode): Readonly<Record<string, string>> | undefined {
-    return mergeSourceAttrs(getBlockAnchorAttrs(node), getSemanticDataAttrs(node))
+    return mergeSourceAttrs(getBlockPresentationAttrs(node), getBlockAnchorAttrs(node), getSemanticDataAttrs(node))
+}
+
+function getBlockPresentationAttrs(node: DocumentNode): Readonly<Record<string, string>> | undefined {
+    if (isTextNode(node)) return undefined
+    const own = pickPresentationAttrs(node.attrs)
+    const descendant = findDescendantPresentationAttrs(node)
+    return mergeSourceAttrs(descendant, own)
+}
+
+function findDescendantPresentationAttrs(node: DocumentNode): Readonly<Record<string, string>> | undefined {
+    if (isTextNode(node)) return undefined
+    for (const child of node.children ?? []) {
+        if (isTextNode(child)) continue
+        const attrs = pickPresentationAttrs(child.attrs)
+        if (attrs) return attrs
+        const nested = findDescendantPresentationAttrs(child)
+        if (nested) return nested
+    }
+    return undefined
+}
+
+function pickPresentationAttrs(attrs: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> | undefined {
+    if (!attrs) return undefined
+    const output: Record<string, string> = {}
+    for (const key of ['style', 'align', 'class', 'width', 'height']) {
+        const value = attrs[key]
+        if (value != null) output[key] = value
+    }
+    return Object.keys(output).length > 0 ? output : undefined
 }
 
 function mergeSourceAttrs(
@@ -1821,9 +1859,23 @@ function normalizeSegments(segments: TextSegment[]): TextSegment[] {
             normalized.push({ ...segment, text })
         }
     }
-    while (normalized[0]?.text === '\n') normalized.shift()
-    while (normalized[normalized.length - 1]?.text === '\n') normalized.pop()
+    trimBoundaryNewlines(normalized, 'start')
+    trimBoundaryNewlines(normalized, 'end')
     return normalized
+}
+
+function trimBoundaryNewlines(segments: TextSegment[], edge: 'start' | 'end'): void {
+    while (segments.length > 0) {
+        const index = edge === 'start' ? 0 : segments.length - 1
+        const text = segments[index]?.text ?? ''
+        const nextText = edge === 'start'
+            ? text.replace(/^\n+/, '')
+            : text.replace(/\n+$/, '')
+        if (nextText === text) return
+        if (nextText) segments[index] = { ...segments[index], text: nextText }
+        else if (edge === 'start') segments.shift()
+        else segments.pop()
+    }
 }
 
 function normalizePreSegments(segments: TextSegment[]): TextSegment[] {
@@ -1900,7 +1952,7 @@ function applyNodeStyle(
     inherited: TextStyle,
     attrs?: Readonly<Record<string, string>>,
 ): TextStyle {
-    const style = { ...inherited, ...parseInlineStyle(attrs?.style) }
+    const style = { ...inherited, ...parseNodeTextStyle(attrs) }
     if (type === 'strong' || type === 'b') style.fontWeight = '700'
     if (type === 'em' || type === 'i' || type === 'cite') style.fontStyle = 'italic'
     if (type === 'code' || type === 'kbd' || type === 'samp' || type === 'tt') {
@@ -1918,6 +1970,22 @@ function applyNodeStyle(
         const level = Number(type[1])
         style.fontWeight = '700'
         style.fontSize = (inherited.fontSize ?? DEFAULT_STYLE.fontSize) * (1.5 - level * 0.08)
+    }
+    return style
+}
+
+function parseNodeTextStyle(attrs?: Readonly<Record<string, string>>): TextStyle {
+    const style = parseInlineStyle(attrs?.style)
+    if (!style.textAlign) {
+        const align = attrs?.align?.toLowerCase()
+        if (align) style.textAlign = parseTextAlign(align)
+    }
+    if (!style.textAlign) {
+        const classes = attrs?.class?.toLowerCase().split(/\s+/).filter(Boolean) ?? []
+        if (classes.includes('center') || classes.includes('centered')) style.textAlign = 'center'
+        else if (classes.includes('right') || classes.includes('right-align') || classes.includes('align-right')) {
+            style.textAlign = 'end'
+        }
     }
     return style
 }
@@ -1971,6 +2039,17 @@ function parseTextAlignFromStyle(style?: string): ImageStyle['align'] | undefine
     return textAlign ? parseBoxAlign(textAlign) : undefined
 }
 
+function parseBlockInlineOffset(value: string | undefined, fontSize: number): number | undefined {
+    if (!value) return undefined
+    const match = value.trim().match(/^([\d.]+)(px|pt|em|rem)?$/)
+    if (!match) return undefined
+    const amount = Number(match[1])
+    if (!Number.isFinite(amount) || amount <= 0) return 0
+    const unit = match[2] ?? 'px'
+    if (unit === 'em' || unit === 'rem') return amount * fontSize
+    if (unit === 'pt') return amount * 96 / 72
+    return amount
+}
 
 function parseCSSPixels(value: string): number | undefined {
     const match = value.match(/^([\d.]+)(px|em|rem)?$/)

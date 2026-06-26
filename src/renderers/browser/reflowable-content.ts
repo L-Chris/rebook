@@ -14,6 +14,7 @@ import {
     type LineRange,
     type PreparedText,
     type PreparedTextBlock,
+    type TextSegment,
     type TextImage,
     type TextBlock,
     type TextStyle,
@@ -259,9 +260,9 @@ function createSemanticBlock(block: PreparedTextBlock, context: BrowserReflowabl
 }
 
 function createSemanticInlineSegment(
-    segment: { text: string; style?: TextStyle; source?: { nodeType?: string; attrs?: Readonly<Record<string, string>> } },
+    segment: TextSegment,
     context: BrowserReflowableContentRenderContext,
-): HTMLElement | Text {
+): Node {
     if (isInlineImageSegment(segment)) {
         const img = document.createElement('img')
         img.src = segment.source.attrs.src ?? ''
@@ -278,9 +279,32 @@ function createSemanticInlineSegment(
         return img
     }
 
+    if (segment.source?.nodeType === 'br' || segment.text.includes('\n')) {
+        return createSemanticLineBreakFragment(segment, context)
+    }
+
+    return createSemanticTextSpan(segment.text, { ...context.baseTextStyle, ...segment.style })
+}
+
+function createSemanticLineBreakFragment(
+    segment: TextSegment,
+    context: BrowserReflowableContentRenderContext,
+): DocumentFragment {
+    const fragment = document.createDocumentFragment()
+    const parts = segment.text.split('\n')
+    parts.forEach((part, index) => {
+        if (index > 0) fragment.appendChild(document.createElement('br'))
+        if (part) {
+            fragment.appendChild(createSemanticTextSpan(part, { ...context.baseTextStyle, ...segment.style }))
+        }
+    })
+    return fragment
+}
+
+function createSemanticTextSpan(text: string, style: TextStyle): HTMLSpanElement {
     const span = document.createElement('span')
-    span.textContent = segment.text
-    applyTextStyle(span, { ...context.baseTextStyle, ...segment.style })
+    span.textContent = text
+    applyTextStyle(span, style)
     return span
 }
 
@@ -424,8 +448,9 @@ function applySemanticBlockStyle(
     const style = block.block.style ?? {}
     const fontSize = style.fontSize ?? getBaseFontSize(context)
     const lineHeight = getCSSLineHeight(style.lineHeight, fontSize, context.lineHeightPixels)
+    const fallbackGapAfter = getSemanticBlockFallbackGapAfter(block.block.type, context.lineHeightPixels)
     element.style.boxSizing = 'border-box'
-    element.style.margin = `${block.block.blockGapBefore ?? 0}px 0 ${block.block.blockGapAfter ?? context.lineHeightPixels * 0.5}px`
+    element.style.margin = `${block.block.blockGapBefore ?? 0}px 0 ${block.block.blockGapAfter ?? fallbackGapAfter}px`
     element.style.padding = '0'
     element.style.fontFamily = style.fontFamily ?? context.styles.fontFamily ?? context.baseTextStyle.fontFamily ?? 'system-ui, -apple-system, Georgia, serif'
     element.style.fontSize = `${fontSize}px`
@@ -434,6 +459,12 @@ function applySemanticBlockStyle(
     element.style.whiteSpace = block.block.type === 'pre' ? 'pre-wrap' : 'normal'
     element.style.overflowWrap = 'anywhere'
     element.style.color = style.color ?? context.styles.color ?? 'inherit'
+    if (block.block.type === 'blockquote') {
+        const inset = parseBlockquoteInset(block.block.attrs?.width, fontSize) ?? fontSize * 1.5
+        element.style.paddingInlineStart = `${inset}px`
+        element.style.paddingInlineEnd = '0px'
+        element.style.backgroundColor = 'rgba(148, 163, 184, 0.14)'
+    }
     if (style.fontWeight) element.style.fontWeight = style.fontWeight
     if (style.fontStyle) element.style.fontStyle = style.fontStyle
     if (style.textDecoration) element.style.textDecoration = style.textDecoration
@@ -441,6 +472,13 @@ function applySemanticBlockStyle(
 
 function getBaseFontSize(context: BrowserReflowableContentRenderContext): number {
     return context.baseTextStyle.fontSize ?? parseCSSPixels(context.styles.fontSize, 16)
+}
+
+function getSemanticBlockFallbackGapAfter(type: TextBlock['type'], lineHeightPixels: number): number {
+    if (type === 'paragraph' || type === 'heading' || type === 'chapter' || type === 'listItem') {
+        return lineHeightPixels * 0.5
+    }
+    return 0
 }
 
 function getSemanticBlockTagName(type: PreparedTextBlock['block']['type'], depth: number | undefined): keyof HTMLElementTagNameMap {
@@ -523,6 +561,18 @@ function getCSSLineHeight(value: number | undefined, fontSize: number, fallback:
     return typeof value === 'number' && Number.isFinite(value) && value > 0
         ? fontSize * value
         : fallback
+}
+
+function parseBlockquoteInset(value: string | undefined, fontSize: number): number | undefined {
+    if (!value) return undefined
+    const match = value.trim().match(/^([\d.]+)(px|pt|em|rem)?$/)
+    if (!match) return undefined
+    const amount = Number(match[1])
+    if (!Number.isFinite(amount) || amount <= 0) return 0
+    const unit = match[2] ?? 'px'
+    if (unit === 'em' || unit === 'rem') return amount * fontSize
+    if (unit === 'pt') return amount * 96 / 72
+    return amount
 }
 
 function getVisibleSemanticWindow(
