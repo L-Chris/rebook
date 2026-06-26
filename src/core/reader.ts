@@ -10,8 +10,9 @@ import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, TOCIt
 import type { ParserInput, ParserOptions } from './parser'
 import type { BookRange, TextChunk, TextProvider, TextSearchResult } from './location'
 import type { PageSurface } from './page-surface'
-import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from './renderer'
+import type { EventListener, LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from './renderer'
 import type { ReaderThemeInput } from './theme'
+import { getBlockWindowConsumers } from './block-window'
 import {
     createRebookExtensionHost,
     createRebookExtensionRegistry,
@@ -88,11 +89,15 @@ export class ReaderSession {
         listener: (e: any) => void
         wrappedListener: (e: any) => void
     }> = []
+    private readonly blockWindowListener = (event: BlockWindowEvent) => {
+        this.dispatchBlockWindow(event)
+    }
 
     constructor(config: ReaderSessionConfig) {
         this.config = config
         for (const plugin of config.plugins ?? []) this.addPluginEntry(plugin)
         this.renderer = this.createRenderer()
+        this.bindInternalRendererListeners()
     }
 
     /**
@@ -653,8 +658,23 @@ export class ReaderSession {
     private resetRenderer(): void {
         this.renderer.destroy()
         this.renderer = this.createRenderer()
+        this.bindInternalRendererListeners()
         for (const item of this.registeredListeners) {
             this.renderer.on(item.event, item.wrappedListener)
+        }
+    }
+
+    private bindInternalRendererListeners(): void {
+        this.renderer.on('block-window', this.blockWindowListener as EventListener)
+    }
+
+    private dispatchBlockWindow(event: BlockWindowEvent): void {
+        for (const consumer of getBlockWindowConsumers(this.book)) {
+            try {
+                consumer.onBlockWindow(event)
+            } catch (error) {
+                console.error('Block window consumer failed:', error)
+            }
         }
     }
 

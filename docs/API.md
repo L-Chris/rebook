@@ -396,8 +396,11 @@ await reader.openBook(book)
 `withTranslation()` keeps the lightweight local mode. It translates
 renderer-requested text blocks lazily with the supplied AI SDK `LanguageModel`.
 Browser and Mini Program renderers emit block-window events for the current
-viewport plus configured prefetch pages, so translation work follows reading
-progress instead of translating the whole book up front.
+viewport plus configured prefetch pages. `ReaderSession` forwards those windows
+to book-level `blockWindowConsumers`, so translation work follows reading
+progress instead of translating the whole book up front. Apps can still listen
+to `block-window` for diagnostics, but they do not need to call translation
+plugin methods to start block translation.
 
 ```typescript
 import { createOpenAI } from '@ai-sdk/openai'

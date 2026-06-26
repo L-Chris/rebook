@@ -30,12 +30,17 @@ export {
 } from './theme'
 export { ReaderSession, type ReaderSessionConfig, type TOCViewItem, type TOCViewOptions } from './reader'
 export {
+    appendBlockWindowConsumer,
+    getBlockWindowConsumers,
+    getBlockWindowPrefetchPageCount,
+    normalizeBlockWindowPageCount,
+} from './block-window'
+export {
     getAnchorIds,
     getColumnCount,
     getLineHeightMultiplier,
     getLinePageIndex,
     getPagePaddingBlock,
-    getPluginPrefetchPageCount,
     getReadablePageCount,
     parseCSSPixels,
 } from './renderer-utils'

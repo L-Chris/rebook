@@ -116,8 +116,8 @@ describe('WechatMiniProgramRenderer', () => {
             type: 'paragraph' as const,
             segments: [{ text: `Block ${index} contains enough words to wrap across the reader viewport.` }],
         }))
-        const book: Book & { translationPrefetchPageCount: number } = {
-            translationPrefetchPageCount: 1,
+        const book: Book = {
+            blockWindowConsumers: [{ pageCount: 1, onBlockWindow() {} }],
             sections: [{
                 id: 'chapter.xhtml',
                 size: 500,

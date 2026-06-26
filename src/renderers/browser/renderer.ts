@@ -8,6 +8,7 @@ import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, Resol
 import type { LayoutMode, NavigationDirection, ReaderMark, RendererConfig, RendererStyles } from '../../core/renderer'
 import { mergeRendererStyles, resolveRendererStyles, type ReaderThemeInput } from '../../core/theme'
 import { debugRebook } from '../../core/debug'
+import { getBlockWindowPrefetchPageCount } from '../../core/block-window'
 import { RendererEventDispatcher } from '../../core/renderer-state'
 import { flattenTOC } from '../../core/toc'
 import { SectionProgress } from '../../utils/progress'
@@ -16,7 +17,6 @@ import {
     getLineHeightMultiplier,
     getPagePaddingBlock,
     getPagePaddingInline,
-    getPluginPrefetchPageCount,
     getReadablePageCount,
     parseCSSPixels,
 } from '../../core/renderer-utils'
@@ -209,7 +209,7 @@ export class BrowserRenderer implements BrowserContentEngine {
         this.surfacePipeline.clear()
         this.host.resetScrollExtent()
         this.scroller.scrollTop = 0
-        this.prefetchPageCount = getPluginPrefetchPageCount(book)
+        this.prefetchPageCount = getBlockWindowPrefetchPageCount(book)
     }
 
     async goTo(target: number | string): Promise<void> {

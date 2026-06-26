@@ -40,6 +40,8 @@ export type {
     LoadEvent,
     RelocateEvent,
     LinkEvent,
+    BlockWindowEvent,
+    BlockWindowConsumer,
     RebookPlugin,
     // Document Model
     DocumentNode,
@@ -177,6 +179,12 @@ export type {
     TOCViewItem,
     TOCViewOptions,
 } from './core/reader'
+export {
+    appendBlockWindowConsumer,
+    getBlockWindowConsumers,
+    getBlockWindowPrefetchPageCount,
+    normalizeBlockWindowPageCount,
+} from './core/block-window'
 
 export type {
     Loader,

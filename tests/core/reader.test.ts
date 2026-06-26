@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import { ReaderSession, type TOCViewItem } from '../../src/core/reader'
-import type { Book, RelocateEvent } from '../../src/core/types'
+import type { BlockWindowEvent, Book, RelocateEvent } from '../../src/core/types'
 import type { LayoutMode, ReaderMark, Renderer, RendererStyles } from '../../src/core/renderer'
 import type { PageSurface } from '../../src/core/page-surface'
 import { defineRebookExtension, defineRebookPlugin } from '../../src/core/extensions'
@@ -13,6 +13,7 @@ class FakeRenderer implements Renderer {
     private book: Book | null = null
     private location: RelocateEvent | null = null
     private surface: PageSurface | null = null
+    private readonly listeners = new Map<string, Set<(event: any) => void>>()
 
     async open(book: Book): Promise<void> {
         this.book = book
@@ -36,8 +37,14 @@ class FakeRenderer implements Renderer {
         const count = this.book?.sections.length ?? 0
         return Array.from({ length: count + 1 }, (_, index) => count > 0 ? index / count : 0)
     }
-    on(): void {}
-    off(): void {}
+    on(event: string, listener: (event: any) => void): void {
+        const listeners = this.listeners.get(event) ?? new Set()
+        listeners.add(listener)
+        this.listeners.set(event, listeners)
+    }
+    off(event: string, listener: (event: any) => void): void {
+        this.listeners.get(event)?.delete(listener)
+    }
     destroy(): void {}
 
     setLocation(location: RelocateEvent): void {
@@ -47,9 +54,38 @@ class FakeRenderer implements Renderer {
     setSurface(surface: PageSurface | null): void {
         this.surface = surface
     }
+
+    emit(event: 'block-window', payload: BlockWindowEvent): void
+    emit(event: string, payload: unknown): void {
+        for (const listener of this.listeners.get(event) ?? []) {
+            listener(payload)
+        }
+    }
 }
 
 describe('ReaderSession', () => {
+    it('dispatches renderer block windows to book consumers', async () => {
+        const renderer = new FakeRenderer()
+        const receivedByConsumer: BlockWindowEvent[] = []
+        const receivedByListener: BlockWindowEvent[] = []
+        const book: Book = {
+            blockWindowConsumers: [{
+                pageCount: 1,
+                onBlockWindow: event => receivedByConsumer.push(event),
+            }],
+            sections: [],
+        }
+        const reader = new ReaderSession({ createRenderer: () => renderer })
+        reader.on('block-window', event => receivedByListener.push(event))
+        await reader.openBook(book)
+
+        const event: BlockWindowEvent = { index: 0, blockIds: ['b1'], pageCount: 1, reason: 'test' }
+        renderer.emit('block-window', event)
+
+        expect(receivedByConsumer).toEqual([event])
+        expect(receivedByListener).toEqual([event])
+    })
+
     it('resolves active TOC items efficiently for books with many sections', async () => {
         const renderer = new FakeRenderer()
         const sectionCount = 2_050

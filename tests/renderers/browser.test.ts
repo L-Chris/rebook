@@ -1231,8 +1231,8 @@ describe('BrowserRenderer', () => {
             type: 'paragraph' as const,
             segments: [{ text: `Block ${index} has enough text to translate.` }],
         }))
-        const book: Book & { translationPrefetchPageCount: number } = {
-            translationPrefetchPageCount: 1,
+        const book: Book = {
+            blockWindowConsumers: [{ pageCount: 1, onBlockWindow() {} }],
             sections: [{
                 id: 'chapter.xhtml',
                 size: 300,

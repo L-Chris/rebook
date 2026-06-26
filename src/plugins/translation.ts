@@ -1,5 +1,6 @@
 import { generateText, jsonSchema, Output, type LanguageModel } from 'ai'
-import type { Book, RebookPlugin, TextBlock, TextSegment, TextTable, TextTableCell } from '../core/types'
+import { appendBlockWindowConsumer } from '../core/block-window'
+import type { BlockWindowConsumer, Book, RebookPlugin, TextBlock, TextSegment, TextTable, TextTableCell } from '../core/types'
 
 const MAX_TRANSLATION_ATTEMPTS = 2
 const TRANSLATION_REQUEST_DEBOUNCE_MS = 300
@@ -46,8 +47,6 @@ type BackendSectionTranslation = {
 }
 type TranslationBook = Book & {
     refreshTranslatedTOC?: () => void
-    requestBlockTranslations?: (sectionIndex: number, blockIds: readonly string[]) => void
-    readonly translationPrefetchPageCount?: number
     readonly professionalTranslationStatus?: ProfessionalTranslationStatus
 }
 
@@ -380,18 +379,22 @@ export function withProfessionalTranslation(
 
         void ensureStarted()
 
-        const translatedBook: TranslationBook = {
-            ...book,
-            requestBlockTranslations(sectionIndex: number) {
-                void ensureStarted()
-                if (!sectionTranslations.has(sectionIndex)) void refreshFromBackend()
-            },
-            get translationPrefetchPageCount() {
+        const blockWindowConsumer: BlockWindowConsumer = {
+            get pageCount() {
                 return getSafePageCount(prefetchPages)
             },
+            onBlockWindow(event) {
+                void ensureStarted()
+                if (!sectionTranslations.has(event.index)) void refreshFromBackend()
+            },
+        }
+
+        const translatedBook: TranslationBook = {
+            ...book,
             get professionalTranslationStatus() {
                 return professionalStatus
             },
+            blockWindowConsumers: appendBlockWindowConsumer(book, blockWindowConsumer),
             sections: wrappedSections,
         }
 
@@ -564,6 +567,15 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
 
         startTOCTranslation()
 
+        const blockWindowConsumer: BlockWindowConsumer = {
+            get pageCount() {
+                return getSafePageCount(prefetchPages)
+            },
+            onBlockWindow(event) {
+                sectionTranslators.get(event.index)?.(event.blockIds)
+            },
+        }
+
         const translatedBook: TranslationBook = {
             ...book,
             get toc() {
@@ -574,12 +586,7 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                 startTOCTranslation()
                 onTOCUpdate?.(getTOC())
             },
-            requestBlockTranslations(sectionIndex: number, blockIds: readonly string[]) {
-                sectionTranslators.get(sectionIndex)?.(blockIds)
-            },
-            get translationPrefetchPageCount() {
-                return getSafePageCount(prefetchPages)
-            },
+            blockWindowConsumers: appendBlockWindowConsumer(book, blockWindowConsumer),
             sections: wrappedSections
         }
 

@@ -8,6 +8,7 @@
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from '../../core/renderer'
 import { mergeRendererStyles, resolveRendererStyles, type ReaderThemeInput } from '../../core/theme'
+import { getBlockWindowPrefetchPageCount } from '../../core/block-window'
 import { resolveReflowableLineMarks } from '../../core/mark-resolver'
 import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
 import { flattenTOC } from '../../core/toc'
@@ -18,7 +19,6 @@ import {
     getLinePageIndex,
     getPagePaddingBlock,
     getPagePaddingInline,
-    getPluginPrefetchPageCount,
     getReadablePageCount,
     getSourceColumnPosition,
     parseCSSPixels,
@@ -228,7 +228,7 @@ export class WechatMiniProgramRenderer implements Renderer {
         this.book = book
         this.sections = book.sections
         this.progress = new SectionProgress(this.sections)
-        this.prefetchPageCount = getPluginPrefetchPageCount(book)
+        this.prefetchPageCount = getBlockWindowPrefetchPageCount(book)
         this.tocPositions = []
         this.pendingTOCItem = null
         this.currentIndex = -1

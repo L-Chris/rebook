@@ -399,6 +399,14 @@ export interface Book {
     readonly rendition?: Rendition
 
     /**
+     * Consumers interested in renderer-reported block windows.
+     * Plugins can use this to lazily schedule block-level work near the
+     * current viewport without exposing plugin-specific methods to apps or
+     * renderer implementations.
+     */
+    readonly blockWindowConsumers?: readonly BlockWindowConsumer[]
+
+    /**
      * Optional page-native payload for fixed-layout formats such as PDF.
      * Renderers that support fixed documents use this instead of converting
      * pages into the reflowable Section text pipeline.
@@ -501,6 +509,16 @@ export interface BlockWindowEvent {
     pageCount?: number
     /** Reason for the window update */
     reason?: string
+}
+
+/**
+ * Book-level consumer for renderer block windows.
+ */
+export interface BlockWindowConsumer {
+    /** Number of pages ahead to include after the current viewport. */
+    readonly pageCount?: number
+    /** Called by ReaderSession when a renderer reports a new block window. */
+    onBlockWindow(event: BlockWindowEvent): void
 }
 
 // ============================================================================

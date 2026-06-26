@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { withProfessionalTranslation, withTranslation } from '../../src/plugins/translation'
+import { getBlockWindowConsumers } from '../../src/core/block-window'
 import type { Book, Section, TextBlock } from '../../src/core/types'
 
 type TestTranslationBook = Book & {
-    requestBlockTranslations?: (sectionIndex: number, blockIds: readonly string[]) => void
     refreshTranslatedTOC?: () => void
     professionalTranslationStatus?: { phase: string, message: string }
 }
@@ -55,6 +55,12 @@ const waitWithTimeout = async <T>(promise: Promise<T>, message: () => string, ms
     promise,
     new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message())), ms)),
 ])
+
+const requestBlockWindow = (book: Book, sectionIndex: number, blockIds: readonly string[]) => {
+    for (const consumer of getBlockWindowConsumers(book)) {
+        consumer.onBlockWindow({ index: sectionIndex, blockIds: [...blockIds] })
+    }
+}
 
 describe('Translation Plugin', () => {
     beforeEach(() => {
@@ -111,7 +117,7 @@ describe('Translation Plugin', () => {
         expect(initialBlocks[0].id).toBe('b1')
         expect(initialBlocks[0].segments[0].text).toBe('Hello world.')
 
-        translationBook.requestBlockTranslations?.(0, ['b1', 'b3'])
+        requestBlockWindow(translationBook, 0, ['b1', 'b3'])
         await update.promise
         const translatedBlocks = await wrappedSection.getBlocks!()
 
@@ -158,7 +164,7 @@ describe('Translation Plugin', () => {
         expect(initialBlocks).toHaveLength(3)
         expect(initialBlocks[0].segments[0].text).toBe('Hello world.')
 
-        translationBook.requestBlockTranslations?.(0, ['b1', 'b3'])
+        requestBlockWindow(translationBook, 0, ['b1', 'b3'])
         await update.promise
         const translatedBlocks = await wrappedSection.getBlocks!()
 
@@ -196,7 +202,7 @@ describe('Translation Plugin', () => {
         expect(initialBlocks).toHaveLength(1)
         expect(initialBlocks[0].id).toBe('b4')
 
-        translationBook.requestBlockTranslations?.(0, ['b4'])
+        requestBlockWindow(translationBook, 0, ['b4'])
         await new Promise(resolve => setTimeout(resolve, 0))
         const translatedBlocks = await wrappedBook.sections[0].getBlocks!()
 
@@ -225,7 +231,7 @@ describe('Translation Plugin', () => {
 
         const wrappedBook = await plugin({ sections: [section] })
         await wrappedBook.sections[0].getBlocks!()
-        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, nonTextBlocks.map(block => block.id))
+        requestBlockWindow(wrappedBook as TestTranslationBook, 0, nonTextBlocks.map(block => block.id))
         await new Promise(resolve => setTimeout(resolve, 0))
 
         expect(generateTextMock).not.toHaveBeenCalled()
@@ -249,7 +255,7 @@ describe('Translation Plugin', () => {
 
         const wrappedBook = await plugin(mockBook)
         await wrappedBook.sections[0].getBlocks!()
-        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1', 'b3'])
+        requestBlockWindow(wrappedBook as TestTranslationBook, 0, ['b1', 'b3'])
         await update.promise
         const translatedBlocks = await wrappedBook.sections[0].getBlocks!()
 
@@ -271,7 +277,7 @@ describe('Translation Plugin', () => {
 
         const wrappedBook = await plugin(mockBook)
         await wrappedBook.sections[0].getBlocks!()
-        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1', 'b3'])
+        requestBlockWindow(wrappedBook as TestTranslationBook, 0, ['b1', 'b3'])
         await update.promise
         const translatedBlocks = await wrappedBook.sections[0].getBlocks!()
 
@@ -295,7 +301,7 @@ describe('Translation Plugin', () => {
 
         const wrappedBook = await plugin(mockBook)
         await wrappedBook.sections[0].getBlocks!()
-        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1', 'b3'])
+        requestBlockWindow(wrappedBook as TestTranslationBook, 0, ['b1', 'b3'])
         await update.promise
         const translatedBlocks = await wrappedBook.sections[0].getBlocks!()
 
@@ -341,7 +347,7 @@ describe('Translation Plugin', () => {
 
         const wrappedBook = await plugin({ sections: [section] })
         await wrappedBook.sections[0].getBlocks!()
-        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['tbl'])
+        requestBlockWindow(wrappedBook as TestTranslationBook, 0, ['tbl'])
         await update.promise
         const translatedBlocks = await wrappedBook.sections[0].getBlocks!()
 
@@ -374,7 +380,7 @@ describe('Translation Plugin', () => {
 
         const wrappedBook = await plugin(mockBook)
         await wrappedBook.sections[0].getBlocks!()
-        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1', 'b3'])
+        requestBlockWindow(wrappedBook as TestTranslationBook, 0, ['b1', 'b3'])
         await updatesPromise
 
         expect(generateTextMock).toHaveBeenCalledTimes(2)
@@ -397,7 +403,7 @@ describe('Translation Plugin', () => {
         const wrappedSection = wrappedBook.sections[0]
         await wrappedSection.getBlocks!()
 
-        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1'])
+        requestBlockWindow(wrappedBook as TestTranslationBook, 0, ['b1'])
         await update.promise
         const translatedBlocks = await wrappedSection.getBlocks!()
 
@@ -419,8 +425,8 @@ describe('Translation Plugin', () => {
         const translationBook = wrappedBook as TestTranslationBook
         await wrappedBook.sections[0].getBlocks!()
 
-        translationBook.requestBlockTranslations?.(0, ['b1'])
-        translationBook.requestBlockTranslations?.(0, ['b3'])
+        requestBlockWindow(translationBook, 0, ['b1'])
+        requestBlockWindow(translationBook, 0, ['b3'])
         await update.promise
 
         expect(generateTextMock).toHaveBeenCalledTimes(1)
@@ -442,7 +448,7 @@ describe('Translation Plugin', () => {
         const wrappedBook = await plugin(mockBook)
         const wrappedSection = wrappedBook.sections[0]
         await wrappedSection.getBlocks!()
-        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1', 'b3'])
+        requestBlockWindow(wrappedBook as TestTranslationBook, 0, ['b1', 'b3'])
         await update.promise
 
         const bilingualBlocks = await wrappedSection.getBlocks!()
@@ -620,7 +626,7 @@ describe('Translation Plugin', () => {
         const wrappedBook = await plugin(professionalBook)
         await wrappedBook.sections[0].getBlocks!()
         await waitWithTimeout(startedPromise, () => `backend job did not start; statuses=${JSON.stringify(statuses)} calls=${JSON.stringify(fetcher.mock.calls)}`)
-        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['api'])
+        requestBlockWindow(wrappedBook as TestTranslationBook, 0, ['api'])
         const updateEvent = await waitWithTimeout(update.promise, () => `backend chunks did not update; statuses=${JSON.stringify(statuses)} calls=${JSON.stringify(fetcher.mock.calls)}`)
         const replaceBlocks = await wrappedBook.sections[0].getBlocks!()
 
@@ -681,7 +687,7 @@ describe('Translation Plugin', () => {
 
         const wrappedBook = await plugin(mockBook)
         await wrappedBook.sections[0].getBlocks!()
-        ;(wrappedBook as TestTranslationBook).requestBlockTranslations?.(0, ['b1'])
+        requestBlockWindow(wrappedBook as TestTranslationBook, 0, ['b1'])
         await waitWithTimeout(update.promise, () => `existing backend job did not update; calls=${JSON.stringify(fetcher.mock.calls)}`)
         const blocks = await wrappedBook.sections[0].getBlocks!()
 

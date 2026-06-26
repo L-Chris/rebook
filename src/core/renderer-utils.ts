@@ -1,13 +1,6 @@
 import type { LayoutMode, RendererStyles } from './renderer'
 import type { LineRange } from './pretext'
 
-export function getPluginPrefetchPageCount(book: unknown): number {
-    const value = (book as { translationPrefetchPageCount?: unknown }).translationPrefetchPageCount
-    return typeof value === 'number' && Number.isFinite(value)
-        ? Math.max(0, Math.floor(value))
-        : 0
-}
-
 export function parseCSSPixels(value: string | number | undefined, fallback: number): number {
     if (!value) return fallback
     if (typeof value === 'number') return Number.isFinite(value) ? value : fallback
