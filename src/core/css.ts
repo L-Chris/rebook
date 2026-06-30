@@ -19,8 +19,15 @@ interface SimpleClassRuleBucket {
     mergedByTagName: Map<string, readonly SimpleClassRule[]>
 }
 
+const MAX_STYLE_CACHE_ENTRIES = 4096
+const parsedStyleDeclarationCache = new Map<string, Array<[string, string]>>()
+const mergedStyleDeclarationCache = new Map<string, string>()
+
 export function parseStyleDeclarations(style?: string): Array<[string, string]> {
     if (!style) return []
+    const cached = parsedStyleDeclarationCache.get(style)
+    if (cached) return cached
+
     try {
         const ast = csstree.parse(style, { context: 'declarationList' })
         const result: Array<[string, string]> = []
@@ -31,8 +38,10 @@ export function parseStyleDeclarations(style?: string): Array<[string, string]> 
                 if (name && value) result.push([name, value])
             }
         })
+        setBoundedCache(parsedStyleDeclarationCache, style, result)
         return result
     } catch {
+        setBoundedCache(parsedStyleDeclarationCache, style, [])
         return []
     }
 }
@@ -44,10 +53,24 @@ export function normalizeStyleDeclarations(style: string): string {
 }
 
 export function mergeStyleDeclarations(base: string, override: string): string {
+    const cacheKey = `${base}\u0000${override}`
+    const cached = mergedStyleDeclarationCache.get(cacheKey)
+    if (cached !== undefined) return cached
+
     const merged = new Map<string, string>()
     for (const [name, value] of parseStyleDeclarations(base)) merged.set(name, value)
     for (const [name, value] of parseStyleDeclarations(override)) merged.set(name, value)
-    return [...merged.entries()].map(([name, value]) => `${name}: ${value}`).join('; ')
+    const result = [...merged.entries()].map(([name, value]) => `${name}: ${value}`).join('; ')
+    setBoundedCache(mergedStyleDeclarationCache, cacheKey, result)
+    return result
+}
+
+function setBoundedCache<T>(cache: Map<string, T>, key: string, value: T): void {
+    if (cache.size >= MAX_STYLE_CACHE_ENTRIES && !cache.has(key)) {
+        const oldest = cache.keys().next().value
+        if (oldest !== undefined) cache.delete(oldest)
+    }
+    cache.set(key, value)
 }
 
 export function parseSimpleClassRules(css: string): SimpleClassRule[] {

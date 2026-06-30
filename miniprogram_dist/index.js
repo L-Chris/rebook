@@ -11643,8 +11643,13 @@ const {
   fromPlainObject,
   fork
 } = syntax;
+const MAX_STYLE_CACHE_ENTRIES = 4096;
+const parsedStyleDeclarationCache = /* @__PURE__ */ new Map();
+const mergedStyleDeclarationCache = /* @__PURE__ */ new Map();
 function parseStyleDeclarations(style) {
   if (!style) return [];
+  const cached = parsedStyleDeclarationCache.get(style);
+  if (cached) return cached;
   try {
     const ast = parse(style, { context: "declarationList" });
     const result = [];
@@ -11655,8 +11660,10 @@ function parseStyleDeclarations(style) {
         if (name2 && value2) result.push([name2, value2]);
       }
     });
+    setBoundedCache(parsedStyleDeclarationCache, style, result);
     return result;
   } catch (e) {
+    setBoundedCache(parsedStyleDeclarationCache, style, []);
     return [];
   }
 }
@@ -11664,10 +11671,22 @@ function normalizeStyleDeclarations(style) {
   return parseStyleDeclarations(style).map(([name2, value2]) => `${name2}: ${value2}`).join("; ");
 }
 function mergeStyleDeclarations(base, override) {
+  const cacheKey = `${base}\0${override}`;
+  const cached = mergedStyleDeclarationCache.get(cacheKey);
+  if (cached !== void 0) return cached;
   const merged = /* @__PURE__ */ new Map();
   for (const [name2, value2] of parseStyleDeclarations(base)) merged.set(name2, value2);
   for (const [name2, value2] of parseStyleDeclarations(override)) merged.set(name2, value2);
-  return [...merged.entries()].map(([name2, value2]) => `${name2}: ${value2}`).join("; ");
+  const result = [...merged.entries()].map(([name2, value2]) => `${name2}: ${value2}`).join("; ");
+  setBoundedCache(mergedStyleDeclarationCache, cacheKey, result);
+  return result;
+}
+function setBoundedCache(cache, key, value2) {
+  if (cache.size >= MAX_STYLE_CACHE_ENTRIES && !cache.has(key)) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== void 0) cache.delete(oldest);
+  }
+  cache.set(key, value2);
 }
 function parseSimpleClassRules(css) {
   const rules = [];
@@ -16522,22 +16541,48 @@ function materializeRichInlineLineRange(prepared, line) {
   );
 }
 function maybePrepareSimpleRichInline(items) {
-  if (items.length !== 1) return null;
-  const item = items[0];
-  if (!item || !item.text || item.text.includes("\n")) return null;
-  if (item.break === "never" || item.letterSpacing || item.extraWidth) return null;
-  if (!isCJKHeavyText(item.text)) return null;
-  const graphemes = Array.from(item.text);
-  const prefixWidths = new Array(graphemes.length + 1);
+  var _a2, _b2;
+  if (items.length === 0) return null;
+  const pendingUnits = [];
+  const itemGraphemes = [];
+  let measurableText = "";
+  for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+    const item = items[itemIndex];
+    if (!item || !item.text || item.text.includes("\n")) return null;
+    if (item.letterSpacing) return null;
+    const inlineObject = isSimpleInlineObject(item);
+    if (item.break === "never" && !inlineObject) return null;
+    if (item.extraWidth && !inlineObject) return null;
+    const graphemes = Array.from(item.text);
+    itemGraphemes[itemIndex] = graphemes;
+    if (inlineObject && graphemes.length !== 1) return null;
+    const widths = inlineObject ? [Math.max(1, (_a2 = item.extraWidth) != null ? _a2 : 1)] : measureSimpleTextGraphemes(item.font, graphemes);
+    for (let graphemeIndex = 0; graphemeIndex < graphemes.length; graphemeIndex++) {
+      const text = graphemes[graphemeIndex];
+      pendingUnits.push({
+        itemIndex,
+        graphemeIndex,
+        text,
+        width: (_b2 = widths[graphemeIndex]) != null ? _b2 : 1
+      });
+      if (!inlineObject) measurableText += text;
+    }
+  }
+  if (pendingUnits.length === 0 || !isCJKHeavyText(measurableText)) return null;
+  const units2 = pendingUnits.map((unit, index) => ({
+    ...unit,
+    breakAfter: index < pendingUnits.length - 1 ? canBreakSimpleUnitAfter(items, unit, pendingUnits[index + 1]) : false
+  }));
+  const prefixWidths = new Array(units2.length + 1);
   prefixWidths[0] = 0;
-  for (let index = 0; index < graphemes.length; index++) {
-    prefixWidths[index + 1] = prefixWidths[index] + measureSimpleTextGrapheme(item.font, graphemes[index]);
+  for (let index = 0; index < units2.length; index++) {
+    prefixWidths[index + 1] = prefixWidths[index] + units2[index].width;
   }
   return {
     kind: "simple",
-    item,
-    text: item.text,
-    graphemes,
+    items,
+    itemGraphemes,
+    units: units2,
     prefixWidths
   };
 }
@@ -16545,75 +16590,109 @@ function isSimplePreparedRichInline(value2) {
   return value2.kind === "simple";
 }
 function walkSimpleRichInlineLineRanges(prepared, maxWidth, onLine) {
+  var _a2, _b2;
   const limit = Math.max(1, maxWidth);
-  const graphemes = prepared.graphemes;
-  let start = skipBreakWhitespace(graphemes, 0);
+  const units2 = prepared.units;
+  let start = skipBreakWhitespaceUnits(units2, 0);
   let lines = 0;
-  while (start < graphemes.length) {
+  while (start < units2.length) {
     let end = start + 1;
     let lastBreak = -1;
-    while (end <= graphemes.length && getSimpleRangeWidth(prepared, start, end) <= limit) {
-      if (end < graphemes.length && canBreakSimpleTextAfter(graphemes[end - 1], graphemes[end])) {
+    while (end <= units2.length && getSimpleRangeWidth(prepared, start, end) <= limit) {
+      if (end < units2.length && units2[end - 1].breakAfter) {
         lastBreak = end;
       }
       end++;
     }
     let lineEnd = end - 1;
     if (lineEnd <= start) lineEnd = start + 1;
-    else if (lineEnd < graphemes.length && lastBreak > start) lineEnd = trimBreakWhitespaceEnd(graphemes, lastBreak);
+    else if (lineEnd < units2.length && lastBreak > start) {
+      const trimmedEnd = trimBreakWhitespaceUnitsEnd(units2, lastBreak);
+      if (trimmedEnd > start) lineEnd = trimmedEnd;
+    }
     const width = getSimpleRangeWidth(prepared, start, lineEnd);
+    const fragments = createSimpleRichInlineFragments(prepared, start, lineEnd);
+    const lastFragment = fragments[fragments.length - 1];
     onLine({
-      fragments: [{
-        itemIndex: 0,
-        gapBefore: 0,
-        occupiedWidth: width,
-        start: { segmentIndex: 0, graphemeIndex: start },
-        end: { segmentIndex: 0, graphemeIndex: lineEnd }
-      }],
+      fragments,
       width,
       end: {
-        itemIndex: 0,
+        itemIndex: (_a2 = lastFragment == null ? void 0 : lastFragment.itemIndex) != null ? _a2 : 0,
         segmentIndex: 0,
-        graphemeIndex: lineEnd
+        graphemeIndex: (_b2 = lastFragment == null ? void 0 : lastFragment.end.graphemeIndex) != null ? _b2 : 0
       }
     });
     lines++;
-    start = skipBreakWhitespace(graphemes, Math.max(lineEnd, start + 1));
+    start = skipBreakWhitespaceUnits(units2, Math.max(lineEnd, start + 1));
   }
   return lines;
 }
 function materializeSimpleRichInlineLineRange(prepared, line) {
-  var _a2, _b2;
-  const fragment = line.fragments[0];
-  const start = (_a2 = fragment == null ? void 0 : fragment.start.graphemeIndex) != null ? _a2 : 0;
-  const end = (_b2 = fragment == null ? void 0 : fragment.end.graphemeIndex) != null ? _b2 : start;
-  const text = prepared.graphemes.slice(start, end).join("");
-  const occupiedWidth = getSimpleRangeWidth(prepared, start, end);
   return {
-    fragments: [{
-      itemIndex: 0,
-      text,
-      gapBefore: 0,
-      occupiedWidth
-    }],
-    width: occupiedWidth
+    fragments: line.fragments.map((fragment) => ({
+      itemIndex: fragment.itemIndex,
+      text: materializeSimpleItemText(prepared, fragment.itemIndex, fragment.start.graphemeIndex, fragment.end.graphemeIndex),
+      gapBefore: fragment.gapBefore,
+      occupiedWidth: fragment.occupiedWidth
+    })),
+    width: line.width
   };
 }
+function isSimpleInlineObject(item) {
+  return item.text === "￼" && typeof item.extraWidth === "number" && Number.isFinite(item.extraWidth) && item.extraWidth > 0;
+}
+function canBreakSimpleUnitAfter(items, current, next) {
+  var _a2, _b2;
+  if (((_a2 = items[current.itemIndex]) == null ? void 0 : _a2.break) === "never") return false;
+  if (((_b2 = items[next.itemIndex]) == null ? void 0 : _b2.break) === "never") return false;
+  return canBreakSimpleTextAfter(current.text, next.text);
+}
+function createSimpleRichInlineFragments(prepared, start, end) {
+  const fragments = [];
+  let index = start;
+  while (index < end) {
+    const unit = prepared.units[index];
+    const itemIndex = unit.itemIndex;
+    const rangeStart = index;
+    const localStart = unit.graphemeIndex;
+    let localEnd = unit.graphemeIndex + 1;
+    index++;
+    while (index < end && prepared.units[index].itemIndex === itemIndex && prepared.units[index].graphemeIndex === localEnd) {
+      localEnd = prepared.units[index].graphemeIndex + 1;
+      index++;
+    }
+    fragments.push({
+      itemIndex,
+      gapBefore: 0,
+      occupiedWidth: getSimpleRangeWidth(prepared, rangeStart, index),
+      start: { segmentIndex: 0, graphemeIndex: localStart },
+      end: { segmentIndex: 0, graphemeIndex: localEnd }
+    });
+  }
+  return fragments;
+}
+function materializeSimpleItemText(prepared, itemIndex, start, end) {
+  var _a2, _b2;
+  return (_b2 = (_a2 = prepared.itemGraphemes[itemIndex]) == null ? void 0 : _a2.slice(start, end).join("")) != null ? _b2 : "";
+}
 function getSimpleRangeWidth(prepared, start, end) {
-  return prepared.prefixWidths[Math.max(0, end)] - prepared.prefixWidths[Math.max(0, start)];
+  const maxIndex = prepared.prefixWidths.length - 1;
+  const safeStart = Math.min(maxIndex, Math.max(0, start));
+  const safeEnd = Math.min(maxIndex, Math.max(safeStart, end));
+  return prepared.prefixWidths[safeEnd] - prepared.prefixWidths[safeStart];
 }
 function canBreakSimpleTextAfter(current, next) {
   if (isBreakWhitespace(current) || isBreakWhitespace(next)) return true;
   return isCJKGrapheme(current) || isCJKGrapheme(next);
 }
-function skipBreakWhitespace(graphemes, start) {
+function skipBreakWhitespaceUnits(units2, start) {
   let index = start;
-  while (index < graphemes.length && isBreakWhitespace(graphemes[index])) index++;
+  while (index < units2.length && isBreakWhitespace(units2[index].text)) index++;
   return index;
 }
-function trimBreakWhitespaceEnd(graphemes, end) {
+function trimBreakWhitespaceUnitsEnd(units2, end) {
   let index = end;
-  while (index > 0 && isBreakWhitespace(graphemes[index - 1])) index--;
+  while (index > 0 && isBreakWhitespace(units2[index - 1].text)) index--;
   return index;
 }
 function isBreakWhitespace(value2) {
@@ -16627,26 +16706,59 @@ function isCJKHeavyText(text) {
     nonSpace++;
     if (isCJKGrapheme(char)) cjk++;
   }
-  return nonSpace >= 12 && cjk / nonSpace >= 0.35;
+  return nonSpace >= 4 && cjk / nonSpace >= 0.35;
 }
 function isCJKGrapheme(value2) {
   return /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(value2);
 }
 const simpleTextMeasureCache = /* @__PURE__ */ new Map();
+const simpleIdeographWidthCache = /* @__PURE__ */ new Map();
 let simpleTextMeasureContext;
-function measureSimpleTextGrapheme(font, grapheme) {
+function measureSimpleTextGraphemes(font, graphemes) {
   let fontCache = simpleTextMeasureCache.get(font);
   if (!fontCache) {
     fontCache = /* @__PURE__ */ new Map();
     simpleTextMeasureCache.set(font, fontCache);
   }
-  const cached = fontCache.get(grapheme);
+  const widths = new Array(graphemes.length);
+  let context;
+  let ideographWidth;
+  for (let index = 0; index < graphemes.length; index++) {
+    const grapheme = graphemes[index];
+    if (isCJKIdeographGrapheme(grapheme)) {
+      ideographWidth != null ? ideographWidth : ideographWidth = getSimpleIdeographWidth(font);
+      if (ideographWidth != null) {
+        widths[index] = ideographWidth;
+        continue;
+      }
+    }
+    const cached = fontCache.get(grapheme);
+    if (cached !== void 0) {
+      widths[index] = cached;
+      continue;
+    }
+    context != null ? context : context = getSimpleTextMeasureContext();
+    if (context.font !== font) context.font = font;
+    const width = context.measureText(grapheme).width;
+    fontCache.set(grapheme, width);
+    widths[index] = width;
+  }
+  return widths;
+}
+function getSimpleIdeographWidth(font) {
+  const cached = simpleIdeographWidthCache.get(font);
   if (cached !== void 0) return cached;
   const context = getSimpleTextMeasureContext();
-  context.font = font;
-  const width = context.measureText(grapheme).width;
-  fontCache.set(grapheme, width);
+  if (context.font !== font) context.font = font;
+  const widthA = context.measureText("汉").width;
+  const widthB = context.measureText("國").width;
+  const width = Math.abs(widthA - widthB) < 0.01 ? widthA : null;
+  simpleIdeographWidthCache.set(font, width);
   return width;
+}
+function isCJKIdeographGrapheme(value2) {
+  const codePoint = value2.codePointAt(0);
+  return codePoint !== void 0 && value2.length === 1 && (codePoint >= 13312 && codePoint <= 40959 || codePoint >= 63744 && codePoint <= 64255);
 }
 function getSimpleTextMeasureContext() {
   if (simpleTextMeasureContext) return simpleTextMeasureContext;

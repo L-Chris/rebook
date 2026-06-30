@@ -46,10 +46,18 @@ export interface PreparedRichInline {
 
 interface SimplePreparedRichInline extends PreparedRichInline {
     readonly kind: 'simple'
-    readonly item: RichInlineItem
-    readonly text: string
-    readonly graphemes: readonly string[]
+    readonly items: readonly RichInlineItem[]
+    readonly itemGraphemes: readonly (readonly string[])[]
+    readonly units: readonly SimpleInlineUnit[]
     readonly prefixWidths: readonly number[]
+}
+
+interface SimpleInlineUnit {
+    readonly itemIndex: number
+    readonly graphemeIndex: number
+    readonly text: string
+    readonly width: number
+    readonly breakAfter: boolean
 }
 
 export interface RichInlineFragmentRange {
@@ -822,24 +830,59 @@ function materializeRichInlineLineRange(
 }
 
 function maybePrepareSimpleRichInline(items: RichInlineItem[]): SimplePreparedRichInline | null {
-    if (items.length !== 1) return null
-    const item = items[0]
-    if (!item || !item.text || item.text.includes('\n')) return null
-    if (item.break === 'never' || item.letterSpacing || item.extraWidth) return null
-    if (!isCJKHeavyText(item.text)) return null
+    if (items.length === 0) return null
 
-    const graphemes = Array.from(item.text)
-    const prefixWidths = new Array<number>(graphemes.length + 1)
+    const pendingUnits: Array<Omit<SimpleInlineUnit, 'breakAfter'>> = []
+    const itemGraphemes: string[][] = []
+    let measurableText = ''
+
+    for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+        const item = items[itemIndex]
+        if (!item || !item.text || item.text.includes('\n')) return null
+        if (item.letterSpacing) return null
+
+        const inlineObject = isSimpleInlineObject(item)
+        if (item.break === 'never' && !inlineObject) return null
+        if (item.extraWidth && !inlineObject) return null
+
+        const graphemes = Array.from(item.text)
+        itemGraphemes[itemIndex] = graphemes
+        if (inlineObject && graphemes.length !== 1) return null
+        const widths = inlineObject
+            ? [Math.max(1, item.extraWidth ?? 1)]
+            : measureSimpleTextGraphemes(item.font, graphemes)
+
+        for (let graphemeIndex = 0; graphemeIndex < graphemes.length; graphemeIndex++) {
+            const text = graphemes[graphemeIndex]!
+            pendingUnits.push({
+                itemIndex,
+                graphemeIndex,
+                text,
+                width: widths[graphemeIndex] ?? 1,
+            })
+            if (!inlineObject) measurableText += text
+        }
+    }
+
+    if (pendingUnits.length === 0 || !isCJKHeavyText(measurableText)) return null
+
+    const units = pendingUnits.map((unit, index): SimpleInlineUnit => ({
+        ...unit,
+        breakAfter: index < pendingUnits.length - 1
+            ? canBreakSimpleUnitAfter(items, unit, pendingUnits[index + 1]!)
+            : false,
+    }))
+    const prefixWidths = new Array<number>(units.length + 1)
     prefixWidths[0] = 0
-    for (let index = 0; index < graphemes.length; index++) {
-        prefixWidths[index + 1] = prefixWidths[index] + measureSimpleTextGrapheme(item.font, graphemes[index])
+    for (let index = 0; index < units.length; index++) {
+        prefixWidths[index + 1] = prefixWidths[index] + units[index]!.width
     }
 
     return {
         kind: 'simple',
-        item,
-        text: item.text,
-        graphemes,
+        items,
+        itemGraphemes,
+        units,
         prefixWidths,
     }
 }
@@ -854,15 +897,15 @@ function walkSimpleRichInlineLineRanges(
     onLine: (line: RichInlineLineRange) => void,
 ): number {
     const limit = Math.max(1, maxWidth)
-    const graphemes = prepared.graphemes
-    let start = skipBreakWhitespace(graphemes, 0)
+    const units = prepared.units
+    let start = skipBreakWhitespaceUnits(units, 0)
     let lines = 0
 
-    while (start < graphemes.length) {
+    while (start < units.length) {
         let end = start + 1
         let lastBreak = -1
-        while (end <= graphemes.length && getSimpleRangeWidth(prepared, start, end) <= limit) {
-            if (end < graphemes.length && canBreakSimpleTextAfter(graphemes[end - 1], graphemes[end])) {
+        while (end <= units.length && getSimpleRangeWidth(prepared, start, end) <= limit) {
+            if (end < units.length && units[end - 1]!.breakAfter) {
                 lastBreak = end
             }
             end++
@@ -870,26 +913,25 @@ function walkSimpleRichInlineLineRanges(
 
         let lineEnd = end - 1
         if (lineEnd <= start) lineEnd = start + 1
-        else if (lineEnd < graphemes.length && lastBreak > start) lineEnd = trimBreakWhitespaceEnd(graphemes, lastBreak)
+        else if (lineEnd < units.length && lastBreak > start) {
+            const trimmedEnd = trimBreakWhitespaceUnitsEnd(units, lastBreak)
+            if (trimmedEnd > start) lineEnd = trimmedEnd
+        }
 
         const width = getSimpleRangeWidth(prepared, start, lineEnd)
+        const fragments = createSimpleRichInlineFragments(prepared, start, lineEnd)
+        const lastFragment = fragments[fragments.length - 1]
         onLine({
-            fragments: [{
-                itemIndex: 0,
-                gapBefore: 0,
-                occupiedWidth: width,
-                start: { segmentIndex: 0, graphemeIndex: start },
-                end: { segmentIndex: 0, graphemeIndex: lineEnd },
-            }],
+            fragments,
             width,
             end: {
-                itemIndex: 0,
+                itemIndex: lastFragment?.itemIndex ?? 0,
                 segmentIndex: 0,
-                graphemeIndex: lineEnd,
+                graphemeIndex: lastFragment?.end.graphemeIndex ?? 0,
             },
         })
         lines++
-        start = skipBreakWhitespace(graphemes, Math.max(lineEnd, start + 1))
+        start = skipBreakWhitespaceUnits(units, Math.max(lineEnd, start + 1))
     }
 
     return lines
@@ -899,24 +941,76 @@ function materializeSimpleRichInlineLineRange(
     prepared: SimplePreparedRichInline,
     line: RichInlineLineRange,
 ) {
-    const fragment = line.fragments[0]
-    const start = fragment?.start.graphemeIndex ?? 0
-    const end = fragment?.end.graphemeIndex ?? start
-    const text = prepared.graphemes.slice(start, end).join('')
-    const occupiedWidth = getSimpleRangeWidth(prepared, start, end)
     return {
-        fragments: [{
-            itemIndex: 0,
-            text,
-            gapBefore: 0,
-            occupiedWidth,
-        }],
-        width: occupiedWidth,
+        fragments: line.fragments.map(fragment => ({
+            itemIndex: fragment.itemIndex,
+            text: materializeSimpleItemText(prepared, fragment.itemIndex, fragment.start.graphemeIndex, fragment.end.graphemeIndex),
+            gapBefore: fragment.gapBefore,
+            occupiedWidth: fragment.occupiedWidth,
+        })),
+        width: line.width,
     }
 }
 
+function isSimpleInlineObject(item: RichInlineItem): boolean {
+    return item.text === '\uFFFC'
+        && typeof item.extraWidth === 'number'
+        && Number.isFinite(item.extraWidth)
+        && item.extraWidth > 0
+}
+
+function canBreakSimpleUnitAfter(
+    items: readonly RichInlineItem[],
+    current: Pick<SimpleInlineUnit, 'itemIndex' | 'text'>,
+    next: Pick<SimpleInlineUnit, 'itemIndex' | 'text'>,
+): boolean {
+    if (items[current.itemIndex]?.break === 'never') return false
+    if (items[next.itemIndex]?.break === 'never') return false
+    return canBreakSimpleTextAfter(current.text, next.text)
+}
+
+function createSimpleRichInlineFragments(
+    prepared: SimplePreparedRichInline,
+    start: number,
+    end: number,
+): RichInlineFragmentRange[] {
+    const fragments: RichInlineFragmentRange[] = []
+    let index = start
+    while (index < end) {
+        const unit = prepared.units[index]!
+        const itemIndex = unit.itemIndex
+        const rangeStart = index
+        const localStart = unit.graphemeIndex
+        let localEnd = unit.graphemeIndex + 1
+        index++
+        while (
+            index < end
+            && prepared.units[index]!.itemIndex === itemIndex
+            && prepared.units[index]!.graphemeIndex === localEnd
+        ) {
+            localEnd = prepared.units[index]!.graphemeIndex + 1
+            index++
+        }
+        fragments.push({
+            itemIndex,
+            gapBefore: 0,
+            occupiedWidth: getSimpleRangeWidth(prepared, rangeStart, index),
+            start: { segmentIndex: 0, graphemeIndex: localStart },
+            end: { segmentIndex: 0, graphemeIndex: localEnd },
+        })
+    }
+    return fragments
+}
+
+function materializeSimpleItemText(prepared: SimplePreparedRichInline, itemIndex: number, start: number, end: number): string {
+    return prepared.itemGraphemes[itemIndex]?.slice(start, end).join('') ?? ''
+}
+
 function getSimpleRangeWidth(prepared: SimplePreparedRichInline, start: number, end: number): number {
-    return prepared.prefixWidths[Math.max(0, end)] - prepared.prefixWidths[Math.max(0, start)]
+    const maxIndex = prepared.prefixWidths.length - 1
+    const safeStart = Math.min(maxIndex, Math.max(0, start))
+    const safeEnd = Math.min(maxIndex, Math.max(safeStart, end))
+    return prepared.prefixWidths[safeEnd]! - prepared.prefixWidths[safeStart]!
 }
 
 function canBreakSimpleTextAfter(current: string, next: string): boolean {
@@ -924,15 +1018,15 @@ function canBreakSimpleTextAfter(current: string, next: string): boolean {
     return isCJKGrapheme(current) || isCJKGrapheme(next)
 }
 
-function skipBreakWhitespace(graphemes: readonly string[], start: number): number {
+function skipBreakWhitespaceUnits(units: readonly SimpleInlineUnit[], start: number): number {
     let index = start
-    while (index < graphemes.length && isBreakWhitespace(graphemes[index])) index++
+    while (index < units.length && isBreakWhitespace(units[index]!.text)) index++
     return index
 }
 
-function trimBreakWhitespaceEnd(graphemes: readonly string[], end: number): number {
+function trimBreakWhitespaceUnitsEnd(units: readonly SimpleInlineUnit[], end: number): number {
     let index = end
-    while (index > 0 && isBreakWhitespace(graphemes[index - 1])) index--
+    while (index > 0 && isBreakWhitespace(units[index - 1]!.text)) index--
     return index
 }
 
@@ -948,7 +1042,7 @@ function isCJKHeavyText(text: string): boolean {
         nonSpace++
         if (isCJKGrapheme(char)) cjk++
     }
-    return nonSpace >= 12 && cjk / nonSpace >= 0.35
+    return nonSpace >= 4 && cjk / nonSpace >= 0.35
 }
 
 function isCJKGrapheme(value: string): boolean {
@@ -956,22 +1050,63 @@ function isCJKGrapheme(value: string): boolean {
 }
 
 const simpleTextMeasureCache = new Map<string, Map<string, number>>()
+const simpleIdeographWidthCache = new Map<string, number | null>()
 let simpleTextMeasureContext: PretextMeasureContext | null | undefined
 
-function measureSimpleTextGrapheme(font: string, grapheme: string): number {
+function measureSimpleTextGraphemes(font: string, graphemes: readonly string[]): number[] {
     let fontCache = simpleTextMeasureCache.get(font)
     if (!fontCache) {
         fontCache = new Map()
         simpleTextMeasureCache.set(font, fontCache)
     }
-    const cached = fontCache.get(grapheme)
+
+    const widths = new Array<number>(graphemes.length)
+    let context: PretextMeasureContext | undefined
+    let ideographWidth: number | null | undefined
+    for (let index = 0; index < graphemes.length; index++) {
+        const grapheme = graphemes[index]!
+        if (isCJKIdeographGrapheme(grapheme)) {
+            ideographWidth ??= getSimpleIdeographWidth(font)
+            if (ideographWidth != null) {
+                widths[index] = ideographWidth
+                continue
+            }
+        }
+        const cached = fontCache.get(grapheme)
+        if (cached !== undefined) {
+            widths[index] = cached
+            continue
+        }
+        context ??= getSimpleTextMeasureContext()
+        if (context.font !== font) context.font = font
+        const width = context.measureText(grapheme).width
+        fontCache.set(grapheme, width)
+        widths[index] = width
+    }
+    return widths
+}
+
+function getSimpleIdeographWidth(font: string): number | null {
+    const cached = simpleIdeographWidthCache.get(font)
     if (cached !== undefined) return cached
 
     const context = getSimpleTextMeasureContext()
-    context.font = font
-    const width = context.measureText(grapheme).width
-    fontCache.set(grapheme, width)
+    if (context.font !== font) context.font = font
+    const widthA = context.measureText('汉').width
+    const widthB = context.measureText('國').width
+    const width = Math.abs(widthA - widthB) < 0.01 ? widthA : null
+    simpleIdeographWidthCache.set(font, width)
     return width
+}
+
+function isCJKIdeographGrapheme(value: string): boolean {
+    const codePoint = value.codePointAt(0)
+    return codePoint !== undefined
+        && value.length === 1
+        && (
+            (codePoint >= 0x3400 && codePoint <= 0x9fff)
+            || (codePoint >= 0xf900 && codePoint <= 0xfaff)
+        )
 }
 
 function getSimpleTextMeasureContext(): PretextMeasureContext {

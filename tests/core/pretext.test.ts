@@ -521,6 +521,28 @@ describe('Pretext pipeline', () => {
         expect(lines[0].segments[0].text).toContain('这是一个')
     })
 
+    it('keeps multi-segment CJK paragraphs on the simple layout path', () => {
+        const blocks = [{
+            id: 'mixed-cjk',
+            type: 'paragraph' as const,
+            segments: [
+                { text: '这是包含多个样式片段的中文段落，', style: {} },
+                { text: '加粗内容', style: { fontWeight: '700' } },
+                { text: '\uFFFC', style: {}, break: 'never' as const, extraWidth: 8, source: { nodeType: 'img' } },
+                { text: '后面还有正文用于验证换行和来源。', style: {} },
+            ],
+        }]
+
+        const prepared = prepareBlocks(blocks, { baseStyle: { fontSize: 16, lineHeight: 1.7 } })
+        const lines = layout(prepared, { inlineSize: 128, lineHeight: 27.2 })
+        const lineSegments = lines.flatMap(line => line.segments)
+
+        expect((prepared.blocks[0].prepared as { kind?: string }).kind).toBe('simple')
+        expect(lines.map(line => line.text).join('')).toContain('加粗内容\uFFFC后面还有正文')
+        expect(lineSegments.some(segment => segment.style.fontWeight === '700')).toBe(true)
+        expect(lineSegments.find(segment => segment.text === '\uFFFC')?.occupiedWidth).toBe(8)
+    })
+
     it('preserves preformatted newlines and indentation during layout', () => {
         const blocks = extractDocumentBlocks([
             elementNode('pre', { class: 'programlisting' }, [
