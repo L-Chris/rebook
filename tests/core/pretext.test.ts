@@ -121,6 +121,23 @@ describe('Pretext pipeline', () => {
         expect(lines.find(line => line.text.includes('Nested quote'))?.inlineOffset).toBe(32)
     })
 
+    it('inherits relative inline font sizes from styled heading blocks', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('h1', { style: 'font-size: 2em; font-weight: bold; line-height: 1.2' }, [
+                elementNode('span', { style: 'display: block; font-size: 1em; text-align: center' }, [
+                    elementNode('b', {}, [textNode('中文版序言')]),
+                ]),
+            ]),
+        ], { fontSize: 16, lineHeight: 1.6 })
+
+        expect(blocks).toHaveLength(1)
+        expect(blocks[0].type).toBe('chapter')
+        expect(blocks[0].style?.fontSize).toBe(32)
+        expect(blocks[0].style?.textAlign).toBe('center')
+        expect(blocks[0].segments[0].style?.fontSize).toBe(32)
+        expect(blocks[0].segments[0].style?.textAlign).toBe('center')
+    })
+
     it('keeps anchors inside inline-only containers as link segments', () => {
         const blocks = extractDocumentBlocks([
             elementNode('div', { class: 'calibre3' }, [

@@ -240,17 +240,31 @@ export function extractDocumentBlocks(
     let nextId = 0
     const coverImageSrcs = new Set((options.coverImageSrcs ?? []).map(normalizeResourceRef))
 
+    const resolveBlockTextStyle = (
+        type: TextBlockType,
+        node: DocumentNode,
+        depth: number | undefined,
+        inherited: TextStyle,
+    ): TextStyle => {
+        const preset = getBlockPreset(type, baseStyle, depth)
+        const attrs = getBlockAttrs(node)
+        return { ...preset.style, ...parseNodeTextStyle(attrs, inherited) }
+    }
+
     const pushBlock = (
         type: TextBlockType,
         node: DocumentNode,
         segments: TextSegment[],
         depth?: number,
+        resolvedBlockStyle?: TextStyle,
     ) => {
         const normalized = type === 'pre' ? normalizePreSegments(segments) : normalizeSegments(segments)
         if (!normalized.some(segment => segment.text.trim())) return
         const preset = getBlockPreset(type, baseStyle, depth)
         const attrs = getBlockAttrs(node)
-        const blockStyle = { ...preset.style, ...parseNodeTextStyle(attrs) }
+        const blockStyle = { ...(resolvedBlockStyle ?? { ...preset.style, ...parseNodeTextStyle(attrs, baseStyle) }) }
+        const segmentTextAlign = getConsistentSegmentTextAlign(normalized)
+        if (!blockStyle.textAlign && segmentTextAlign) blockStyle.textAlign = segmentTextAlign
         const id = attrs?.id ?? `${type}-${nextId++}`
         blocks.push({
             id,
@@ -382,13 +396,16 @@ export function extractDocumentBlocks(
 
         if (/^h[1-6]$/.test(type)) {
             const depth = Number(type[1])
-            pushBlock(depth === 1 ? 'chapter' : 'heading', node, collectInlineSegments(node, inherited), depth)
+            const blockType = depth === 1 ? 'chapter' : 'heading'
+            const blockStyle = resolveBlockTextStyle(blockType, node, depth, inherited)
+            pushBlock(blockType, node, collectInlineSegments(node, blockStyle), depth, blockStyle)
             return
         }
 
         if (type === 'p') {
-            const segments = collectInlineSegments(node, inherited)
-            pushBlock('paragraph', node, segments)
+            const blockStyle = resolveBlockTextStyle('paragraph', node, undefined, inherited)
+            const segments = collectInlineSegments(node, blockStyle)
+            pushBlock('paragraph', node, segments, undefined, blockStyle)
             if (!segments.some(segment => segment.text.trim()) && segments.some(segment => segment.text.includes('\n'))) {
                 pushBreakBlock(node)
             }
@@ -397,60 +414,67 @@ export function extractDocumentBlocks(
         }
 
         if (type === 'li' || type === 'dt') {
+            const blockStyle = resolveBlockTextStyle('listItem', node, listDepth, inherited)
             const marker = listMarker ? `${listMarker} ` : ''
             pushBlock('listItem', node, [
-                ...(marker ? [{ text: marker, style: inherited, source: { nodeType: 'marker' } }] : []),
-                ...collectInlineSegments(node, inherited, { skipNestedLists: true }),
-            ], listDepth)
+                ...(marker ? [{ text: marker, style: blockStyle, source: { nodeType: 'marker' } }] : []),
+                ...collectInlineSegments(node, blockStyle, { skipNestedLists: true }),
+            ], listDepth, blockStyle)
 
             for (const child of node.children ?? []) {
                 if (!isTextNode(child) && LIST_CONTAINER_TAGS.has(child.type.toLowerCase())) {
-                    walkBlock(child, inherited, listDepth + 1)
+                    walkBlock(child, blockStyle, listDepth + 1)
                 }
             }
             return
         }
 
         if (type === 'dd') {
-            for (const child of node.children ?? []) walkBlock(child, inherited, listDepth + 1)
+            const blockStyle = applyNodeStyle(type, inherited, node.attrs)
+            for (const child of node.children ?? []) walkBlock(child, blockStyle, listDepth + 1)
             return
         }
 
         if (LIST_CONTAINER_TAGS.has(type)) {
+            const listStyle = applyNodeStyle(type, inherited, node.attrs)
             let ordinal = getOrderedListStart(node)
             for (const child of node.children ?? []) {
                 if (isTextNode(child)) continue
                 const childType = child.type.toLowerCase()
                 if (type === 'ol' && childType === 'li') {
-                    walkBlock(child, inherited, listDepth, formatOrderedListMarker(ordinal++, node.attrs?.type))
+                    walkBlock(child, listStyle, listDepth, formatOrderedListMarker(ordinal++, node.attrs?.type))
                 } else if (type === 'ul' && childType === 'li') {
-                    walkBlock(child, inherited, listDepth, '•')
+                    walkBlock(child, listStyle, listDepth, '•')
                 } else {
-                    walkBlock(child, inherited, listDepth)
+                    walkBlock(child, listStyle, listDepth)
                 }
             }
             return
         }
 
         if (type === 'blockquote') {
-            pushBlock('blockquote', node, collectInlineSegments(node, inherited))
+            const blockStyle = resolveBlockTextStyle('blockquote', node, undefined, inherited)
+            pushBlock('blockquote', node, collectInlineSegments(node, blockStyle), undefined, blockStyle)
             for (const image of collectBlockImageNodes(node)) pushImageBlock(image)
             return
         }
 
         if (type === 'pre') {
-            pushBlock('pre', node, collectInlineSegments(node, inherited), undefined)
+            const blockStyle = resolveBlockTextStyle('pre', node, undefined, inherited)
+            pushBlock('pre', node, collectInlineSegments(node, blockStyle), undefined, blockStyle)
             return
         }
 
         if (isInlineOnlyContainer(node)) {
-            const segments = collectInlineSegments(node, inherited)
-            pushBlock('paragraph', node, segments)
+            const blockStyle = resolveBlockTextStyle('paragraph', node, undefined, inherited)
+            const segments = collectInlineSegments(node, blockStyle)
+            pushBlock('paragraph', node, segments, undefined, blockStyle)
             for (const image of collectImageNodes(node)) pushImageBlock(image)
             return
         }
 
-        for (const child of node.children ?? []) walkBlock(child, inherited, listDepth)
+        const nextInherited = applyNodeStyle(type, inherited, node.attrs)
+        for (const child of node.children ?? []) walkBlock(child, nextInherited, listDepth)
     }
 
     for (const node of nodes) walkBlock(node, { ...baseStyle })
@@ -2041,7 +2065,7 @@ function applyNodeStyle(
     inherited: TextStyle,
     attrs?: Readonly<Record<string, string>>,
 ): TextStyle {
-    const style = { ...inherited, ...parseNodeTextStyle(attrs) }
+    const style = { ...inherited, ...parseNodeTextStyle(attrs, inherited) }
     if (type === 'strong' || type === 'b') style.fontWeight = '700'
     if (type === 'em' || type === 'i' || type === 'cite') style.fontStyle = 'italic'
     if (type === 'code' || type === 'kbd' || type === 'samp' || type === 'tt') {
@@ -2063,8 +2087,11 @@ function applyNodeStyle(
     return style
 }
 
-function parseNodeTextStyle(attrs?: Readonly<Record<string, string>>): TextStyle {
-    const style = parseInlineStyle(attrs?.style)
+function parseNodeTextStyle(
+    attrs?: Readonly<Record<string, string>>,
+    inherited?: TextStyle,
+): TextStyle {
+    const style = parseInlineStyle(attrs?.style, inherited?.fontSize ?? DEFAULT_STYLE.fontSize)
     if (!style.textAlign) {
         const align = attrs?.align?.toLowerCase()
         if (align) style.textAlign = parseTextAlign(align)
@@ -2079,18 +2106,18 @@ function parseNodeTextStyle(attrs?: Readonly<Record<string, string>>): TextStyle
     return style
 }
 
-function parseInlineStyle(style?: string): TextStyle {
+function parseInlineStyle(style?: string, emBase = DEFAULT_STYLE.fontSize): TextStyle {
     if (!style) return {}
     const result: TextStyle = {}
     for (const [name, value] of parseStyleDeclarations(style)) {
         if (name === 'font-family') result.fontFamily = value
-        else if (name === 'font-size') result.fontSize = parseCSSPixels(value)
+        else if (name === 'font-size') result.fontSize = parseCSSPixels(value, emBase)
         else if (name === 'font-weight') result.fontWeight = value
         else if (name === 'font-style') result.fontStyle = value
         else if (name === 'font-variant') result.fontVariant = value
         else if (name === 'line-height') result.lineHeight = parseLineHeight(value)
         else if (name === 'text-align') result.textAlign = parseTextAlign(value)
-        else if (name === 'letter-spacing') result.letterSpacing = parseCSSPixels(value)
+        else if (name === 'letter-spacing') result.letterSpacing = parseCSSPixels(value, emBase)
         else if (name === 'color') result.color = value
         else if (name === 'text-decoration') result.textDecoration = value
         else if (name === 'vertical-align') result.verticalAlign = value
@@ -2142,12 +2169,14 @@ function parseBlockInlineOffset(value: string | undefined, fontSize: number): nu
     return amount
 }
 
-function parseCSSPixels(value: string): number | undefined {
+function parseCSSPixels(value: string, emBase = DEFAULT_STYLE.fontSize): number | undefined {
     const match = value.match(/^([\d.]+)(px|em|rem)?$/)
     if (!match) return undefined
     const amount = Number(match[1])
     if (!Number.isFinite(amount)) return undefined
-    return match[2] === 'em' || match[2] === 'rem' ? amount * DEFAULT_STYLE.fontSize : amount
+    if (match[2] === 'em') return amount * emBase
+    if (match[2] === 'rem') return amount * DEFAULT_STYLE.fontSize
+    return amount
 }
 
 function parseCSSDimension(value?: string): number | undefined {
@@ -2226,6 +2255,18 @@ function findLastVisibleLine(lines: readonly LineRange[], y: number, overscan: n
         else high = mid
     }
     return Math.min(lines.length, low + overscan)
+}
+
+function getConsistentSegmentTextAlign(segments: readonly TextSegment[]): TextStyle['textAlign'] | undefined {
+    let align: TextStyle['textAlign'] | undefined
+    for (const segment of segments) {
+        if (!segment.text.trim()) continue
+        const current = segment.style?.textAlign
+        if (!current) continue
+        if (!align) align = current
+        else if (align !== current) return undefined
+    }
+    return align
 }
 
 function sameStyle(a?: TextStyle, b?: TextStyle): boolean {

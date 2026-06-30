@@ -1718,6 +1718,8 @@ describe('BrowserRenderer', () => {
         expect(img.src).toBe('test://cover.png')
         expect(img.alt).toBe('Cover')
         expect(img.style.maxWidth).toBe('100%')
+        expect(Number.parseFloat(img.style.maxHeight)).toBeGreaterThan(0)
+        expect(Number.parseFloat(img.style.maxHeight)).toBeLessThan(90)
 
         renderer.destroy()
     })

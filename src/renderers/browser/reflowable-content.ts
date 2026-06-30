@@ -327,11 +327,12 @@ function createSemanticImageBlock(
     img.src = image.src
     img.alt = image.alt ?? ''
     if (image.title) img.title = image.title
+    const maxHeight = getImageBlockMaxHeight(image, block, context)
     img.style.cssText = `
         display: inline-block;
         width: ${image.width ? `${image.width}px` : 'auto'};
         max-width: 100%;
-        max-height: ${image.style?.maxHeight ? `${image.style.maxHeight}px` : 'none'};
+        max-height: ${maxHeight ? `${maxHeight}px` : 'none'};
         object-fit: ${image.style?.objectFit ?? 'contain'};
     `
     if (image.isCover) figure.dataset.cover = 'true'
@@ -525,6 +526,25 @@ function getImageTextAlign(image: TextImage): string {
     if (image.style?.align === 'start') return 'left'
     if (image.style?.align === 'end') return 'right'
     return 'center'
+}
+
+function getImageBlockMaxHeight(
+    image: TextImage,
+    block: PreparedTextBlock,
+    context: BrowserReflowableContentRenderContext,
+): number | null {
+    const styleMaxHeight = image.style?.maxHeight
+    const pageMaxHeight = context.layoutMode === 'paginated'
+        ? context.layout.columnHeight
+            - (block.block.blockGapBefore ?? 0)
+            - (block.block.blockGapAfter ?? 0)
+        : undefined
+    const maxHeight = styleMaxHeight != null && pageMaxHeight != null
+        ? Math.min(styleMaxHeight, pageMaxHeight)
+        : styleMaxHeight ?? pageMaxHeight
+    return maxHeight != null && Number.isFinite(maxHeight) && maxHeight > 0
+        ? Math.max(1, maxHeight)
+        : null
 }
 
 function getInlineImageVerticalAlign(segment: TextSegment): string {

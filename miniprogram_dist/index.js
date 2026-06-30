@@ -15944,13 +15944,20 @@ function extractDocumentBlocks(nodes, baseStyle = {}, options = {}) {
   const blocks = [];
   let nextId = 0;
   const coverImageSrcs = new Set(((_a2 = options.coverImageSrcs) != null ? _a2 : []).map(normalizeResourceRef));
-  const pushBlock = (type, node2, segments, depth) => {
+  const resolveBlockTextStyle = (type, node2, depth, inherited) => {
+    const preset = getBlockPreset(type, baseStyle, depth);
+    const attrs = getBlockAttrs(node2);
+    return { ...preset.style, ...parseNodeTextStyle(attrs, inherited) };
+  };
+  const pushBlock = (type, node2, segments, depth, resolvedBlockStyle) => {
     var _a3;
     const normalized = type === "pre" ? normalizePreSegments(segments) : normalizeSegments(segments);
     if (!normalized.some((segment) => segment.text.trim())) return;
     const preset = getBlockPreset(type, baseStyle, depth);
     const attrs = getBlockAttrs(node2);
-    const blockStyle = { ...preset.style, ...parseNodeTextStyle(attrs) };
+    const blockStyle = { ...resolvedBlockStyle != null ? resolvedBlockStyle : { ...preset.style, ...parseNodeTextStyle(attrs, baseStyle) } };
+    const segmentTextAlign = getConsistentSegmentTextAlign(normalized);
+    if (!blockStyle.textAlign && segmentTextAlign) blockStyle.textAlign = segmentTextAlign;
     const id = (_a3 = attrs == null ? void 0 : attrs.id) != null ? _a3 : `${type}-${nextId++}`;
     blocks.push({
       id,
@@ -16073,12 +16080,15 @@ function extractDocumentBlocks(nodes, baseStyle = {}, options = {}) {
     }
     if (/^h[1-6]$/.test(type)) {
       const depth = Number(type[1]);
-      pushBlock(depth === 1 ? "chapter" : "heading", node2, collectInlineSegments(node2, inherited), depth);
+      const blockType = depth === 1 ? "chapter" : "heading";
+      const blockStyle = resolveBlockTextStyle(blockType, node2, depth, inherited);
+      pushBlock(blockType, node2, collectInlineSegments(node2, blockStyle), depth, blockStyle);
       return;
     }
     if (type === "p") {
-      const segments = collectInlineSegments(node2, inherited);
-      pushBlock("paragraph", node2, segments);
+      const blockStyle = resolveBlockTextStyle("paragraph", node2, void 0, inherited);
+      const segments = collectInlineSegments(node2, blockStyle);
+      pushBlock("paragraph", node2, segments, void 0, blockStyle);
       if (!segments.some((segment) => segment.text.trim()) && segments.some((segment) => segment.text.includes("\n"))) {
         pushBreakBlock(node2);
       }
@@ -16086,53 +16096,60 @@ function extractDocumentBlocks(nodes, baseStyle = {}, options = {}) {
       return;
     }
     if (type === "li" || type === "dt") {
+      const blockStyle = resolveBlockTextStyle("listItem", node2, listDepth, inherited);
       const marker = listMarker ? `${listMarker} ` : "";
       pushBlock("listItem", node2, [
-        ...marker ? [{ text: marker, style: inherited, source: { nodeType: "marker" } }] : [],
-        ...collectInlineSegments(node2, inherited, { skipNestedLists: true })
-      ], listDepth);
+        ...marker ? [{ text: marker, style: blockStyle, source: { nodeType: "marker" } }] : [],
+        ...collectInlineSegments(node2, blockStyle, { skipNestedLists: true })
+      ], listDepth, blockStyle);
       for (const child of (_a3 = node2.children) != null ? _a3 : []) {
         if (!isTextNode(child) && LIST_CONTAINER_TAGS.has(child.type.toLowerCase())) {
-          walkBlock(child, inherited, listDepth + 1);
+          walkBlock(child, blockStyle, listDepth + 1);
         }
       }
       return;
     }
     if (type === "dd") {
-      for (const child of (_b2 = node2.children) != null ? _b2 : []) walkBlock(child, inherited, listDepth + 1);
+      const blockStyle = applyNodeStyle(type, inherited, node2.attrs);
+      for (const child of (_b2 = node2.children) != null ? _b2 : []) walkBlock(child, blockStyle, listDepth + 1);
       return;
     }
     if (LIST_CONTAINER_TAGS.has(type)) {
+      const listStyle = applyNodeStyle(type, inherited, node2.attrs);
       let ordinal = getOrderedListStart(node2);
       for (const child of (_c = node2.children) != null ? _c : []) {
         if (isTextNode(child)) continue;
         const childType = child.type.toLowerCase();
         if (type === "ol" && childType === "li") {
-          walkBlock(child, inherited, listDepth, formatOrderedListMarker(ordinal++, (_d = node2.attrs) == null ? void 0 : _d.type));
+          walkBlock(child, listStyle, listDepth, formatOrderedListMarker(ordinal++, (_d = node2.attrs) == null ? void 0 : _d.type));
         } else if (type === "ul" && childType === "li") {
-          walkBlock(child, inherited, listDepth, "•");
+          walkBlock(child, listStyle, listDepth, "•");
         } else {
-          walkBlock(child, inherited, listDepth);
+          walkBlock(child, listStyle, listDepth);
         }
       }
       return;
     }
     if (type === "blockquote") {
-      pushBlock("blockquote", node2, collectInlineSegments(node2, inherited));
+      const blockStyle = resolveBlockTextStyle("blockquote", node2, void 0, inherited);
+      pushBlock("blockquote", node2, collectInlineSegments(node2, blockStyle), void 0, blockStyle);
       for (const image of collectBlockImageNodes(node2)) pushImageBlock(image);
       return;
     }
     if (type === "pre") {
-      pushBlock("pre", node2, collectInlineSegments(node2, inherited), void 0);
+      const blockStyle = resolveBlockTextStyle("pre", node2, void 0, inherited);
+      pushBlock("pre", node2, collectInlineSegments(node2, blockStyle), void 0, blockStyle);
       return;
     }
     if (isInlineOnlyContainer(node2)) {
-      const segments = collectInlineSegments(node2, inherited);
-      pushBlock("paragraph", node2, segments);
+      const blockStyle = resolveBlockTextStyle("paragraph", node2, void 0, inherited);
+      const segments = collectInlineSegments(node2, blockStyle);
+      pushBlock("paragraph", node2, segments, void 0, blockStyle);
       for (const image of collectImageNodes(node2)) pushImageBlock(image);
       return;
     }
-    for (const child of (_e = node2.children) != null ? _e : []) walkBlock(child, inherited, listDepth);
+    const nextInherited = applyNodeStyle(type, inherited, node2.attrs);
+    for (const child of (_e = node2.children) != null ? _e : []) walkBlock(child, nextInherited, listDepth);
   };
   for (const node2 of nodes) walkBlock(node2, { ...baseStyle });
   return blocks;
@@ -17487,7 +17504,7 @@ function toPreLayoutText(text) {
 }
 function applyNodeStyle(type, inherited, attrs) {
   var _a2, _b2, _c, _d, _e;
-  const style = { ...inherited, ...parseNodeTextStyle(attrs) };
+  const style = { ...inherited, ...parseNodeTextStyle(attrs, inherited) };
   if (type === "strong" || type === "b") style.fontWeight = "700";
   if (type === "em" || type === "i" || type === "cite") style.fontStyle = "italic";
   if (type === "code" || type === "kbd" || type === "samp" || type === "tt") {
@@ -17508,15 +17525,15 @@ function applyNodeStyle(type, inherited, attrs) {
   }
   return style;
 }
-function parseNodeTextStyle(attrs) {
-  var _a2, _b2, _c;
-  const style = parseInlineStyle(attrs == null ? void 0 : attrs.style);
+function parseNodeTextStyle(attrs, inherited) {
+  var _a2, _b2, _c, _d;
+  const style = parseInlineStyle(attrs == null ? void 0 : attrs.style, (_a2 = inherited == null ? void 0 : inherited.fontSize) != null ? _a2 : DEFAULT_STYLE.fontSize);
   if (!style.textAlign) {
-    const align = (_a2 = attrs == null ? void 0 : attrs.align) == null ? void 0 : _a2.toLowerCase();
+    const align = (_b2 = attrs == null ? void 0 : attrs.align) == null ? void 0 : _b2.toLowerCase();
     if (align) style.textAlign = parseTextAlign(align);
   }
   if (!style.textAlign) {
-    const classes = (_c = (_b2 = attrs == null ? void 0 : attrs.class) == null ? void 0 : _b2.toLowerCase().split(/\s+/).filter(Boolean)) != null ? _c : [];
+    const classes = (_d = (_c = attrs == null ? void 0 : attrs.class) == null ? void 0 : _c.toLowerCase().split(/\s+/).filter(Boolean)) != null ? _d : [];
     if (classes.includes("center") || classes.includes("centered")) style.textAlign = "center";
     else if (classes.includes("right") || classes.includes("right-align") || classes.includes("align-right")) {
       style.textAlign = "end";
@@ -17524,18 +17541,18 @@ function parseNodeTextStyle(attrs) {
   }
   return style;
 }
-function parseInlineStyle(style) {
+function parseInlineStyle(style, emBase = DEFAULT_STYLE.fontSize) {
   if (!style) return {};
   const result = {};
   for (const [name2, value2] of parseStyleDeclarations(style)) {
     if (name2 === "font-family") result.fontFamily = value2;
-    else if (name2 === "font-size") result.fontSize = parseCSSPixels$1(value2);
+    else if (name2 === "font-size") result.fontSize = parseCSSPixels$1(value2, emBase);
     else if (name2 === "font-weight") result.fontWeight = value2;
     else if (name2 === "font-style") result.fontStyle = value2;
     else if (name2 === "font-variant") result.fontVariant = value2;
     else if (name2 === "line-height") result.lineHeight = parseLineHeight(value2);
     else if (name2 === "text-align") result.textAlign = parseTextAlign(value2);
-    else if (name2 === "letter-spacing") result.letterSpacing = parseCSSPixels$1(value2);
+    else if (name2 === "letter-spacing") result.letterSpacing = parseCSSPixels$1(value2, emBase);
     else if (name2 === "color") result.color = value2;
     else if (name2 === "text-decoration") result.textDecoration = value2;
     else if (name2 === "vertical-align") result.verticalAlign = value2;
@@ -17585,12 +17602,14 @@ function parseBlockInlineOffset(value2, fontSize) {
   if (unit === "pt") return amount * 96 / 72;
   return amount;
 }
-function parseCSSPixels$1(value2) {
+function parseCSSPixels$1(value2, emBase = DEFAULT_STYLE.fontSize) {
   const match = value2.match(/^([\d.]+)(px|em|rem)?$/);
   if (!match) return void 0;
   const amount = Number(match[1]);
   if (!Number.isFinite(amount)) return void 0;
-  return match[2] === "em" || match[2] === "rem" ? amount * DEFAULT_STYLE.fontSize : amount;
+  if (match[2] === "em") return amount * emBase;
+  if (match[2] === "rem") return amount * DEFAULT_STYLE.fontSize;
+  return amount;
 }
 function parseCSSDimension(value2) {
   if (!value2) return void 0;
@@ -17654,6 +17673,18 @@ function findLastVisibleLine(lines, y, overscan) {
     else high = mid;
   }
   return Math.min(lines.length, low + overscan);
+}
+function getConsistentSegmentTextAlign(segments) {
+  var _a2;
+  let align;
+  for (const segment of segments) {
+    if (!segment.text.trim()) continue;
+    const current = (_a2 = segment.style) == null ? void 0 : _a2.textAlign;
+    if (!current) continue;
+    if (!align) align = current;
+    else if (align !== current) return void 0;
+  }
+  return align;
 }
 function sameStyle(a, b) {
   return JSON.stringify(a != null ? a : {}) === JSON.stringify(b != null ? b : {});
