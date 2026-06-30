@@ -4,6 +4,7 @@ import {
     normalizeStyleDeclarations,
     mergeStyleDeclarations,
     parseSimpleClassRules,
+    parseSimpleClassRuleIndex,
     extractImportURLs,
 } from '../../src/core/css'
 
@@ -54,6 +55,8 @@ describe('parseSimpleClassRules', () => {
     it('parses simple class rule', () => {
         const rules = parseSimpleClassRules('.foo { color: red }')
         expect(rules).toHaveLength(1)
+        expect(rules[0].order).toBe(0)
+        expect(rules[0].classNames).toEqual(['foo'])
         expect(rules[0].declarations).toBe('color: red')
         expect(rules[0].matches('p', new Set(['foo']))).toBe(true)
         expect(rules[0].matches('p', new Set(['bar']))).toBe(false)
@@ -117,6 +120,35 @@ describe('parseSimpleClassRules', () => {
 
     it('returns empty array on malformed CSS', () => {
         expect(parseSimpleClassRules('{ broken')).toEqual([])
+    })
+})
+
+describe('parseSimpleClassRuleIndex', () => {
+    it('returns matching rules in stylesheet order', () => {
+        const index = parseSimpleClassRuleIndex([
+            '.a { color: red }',
+            '.unrelated { color: black }',
+            '.b { font-size: 14px }',
+            'p.a.b { font-weight: bold }',
+            '.a.c { text-align: center }',
+        ].join('\n'))
+
+        const matches = index.getMatchingRules('p', new Set(['a', 'b']))
+
+        expect(matches.map(rule => rule.declarations)).toEqual([
+            'color: red',
+            'font-size: 14px',
+            'font-weight: bold',
+        ])
+    })
+
+    it('matches single-class elements through the same rule semantics', () => {
+        const index = parseSimpleClassRuleIndex('.a { color: red } p.a { font-weight: bold } div.a { color: blue }')
+
+        expect(index.getMatchingRules('p', new Set(['a'])).map(rule => rule.declarations)).toEqual([
+            'color: red',
+            'font-weight: bold',
+        ])
     })
 })
 

@@ -1,8 +1,22 @@
 import * as csstree from 'css-tree'
 
 export interface SimpleClassRule {
+    order: number
+    tagName?: string
+    classNames: readonly string[]
     matches(tagName: string, classNames: ReadonlySet<string>): boolean
     declarations: string
+}
+
+export interface SimpleClassRuleIndex {
+    rules: readonly SimpleClassRule[]
+    getMatchingRules(tagName: string, classNames: ReadonlySet<string>): readonly SimpleClassRule[]
+}
+
+interface SimpleClassRuleBucket {
+    allTags: SimpleClassRule[]
+    byTagName: Map<string, SimpleClassRule[]>
+    mergedByTagName: Map<string, readonly SimpleClassRule[]>
 }
 
 export function parseStyleDeclarations(style?: string): Array<[string, string]> {
@@ -51,10 +65,11 @@ export function parseSimpleClassRules(css: string): SimpleClassRule[] {
                 const parsed = parseSimpleClassSelector(selector as csstree.Selector)
                 if (!parsed) continue
                 rules.push({
+                    order: rules.length,
+                    tagName: parsed.tagName,
+                    classNames: parsed.classNames,
                     declarations,
-                    matches: (tagName, classNames) =>
-                        (!parsed.tagName || parsed.tagName === tagName)
-                        && parsed.classNames.every(className => classNames.has(className)),
+                    matches: (tagName, classNames) => matchesSimpleClassRule(parsed, tagName, classNames),
                 })
             }
         }})
@@ -62,6 +77,78 @@ export function parseSimpleClassRules(css: string): SimpleClassRule[] {
         // ignore parse errors
     }
     return rules
+}
+
+export function parseSimpleClassRuleIndex(css: string): SimpleClassRuleIndex {
+    return createSimpleClassRuleIndex(parseSimpleClassRules(css))
+}
+
+export function createSimpleClassRuleIndex(rules: readonly SimpleClassRule[]): SimpleClassRuleIndex {
+    const byClassName = new Map<string, SimpleClassRuleBucket>()
+    for (const rule of rules) {
+        const key = rule.classNames[0]
+        if (!key) continue
+        let bucket = byClassName.get(key)
+        if (!bucket) {
+            bucket = { allTags: [], byTagName: new Map(), mergedByTagName: new Map() }
+            byClassName.set(key, bucket)
+        }
+        if (rule.tagName) {
+            let tagRules = bucket.byTagName.get(rule.tagName)
+            if (!tagRules) {
+                tagRules = []
+                bucket.byTagName.set(rule.tagName, tagRules)
+            }
+            tagRules.push(rule)
+        } else {
+            bucket.allTags.push(rule)
+        }
+    }
+
+    return {
+        rules,
+        getMatchingRules(tagName, classNames) {
+            if (!classNames.size) return []
+
+            if (classNames.size === 1) {
+                let onlyClass: string | undefined
+                for (const className of classNames) onlyClass = className
+                return getRuleBucketCandidates(onlyClass ? byClassName.get(onlyClass) : undefined, tagName)
+                    ?.filter(rule => rule.matches(tagName, classNames))
+                    ?? []
+            }
+
+            const candidates: SimpleClassRule[] = []
+            const seen = new Set<number>()
+            for (const className of classNames) {
+                for (const rule of getRuleBucketCandidates(byClassName.get(className), tagName) ?? []) {
+                    if (seen.has(rule.order)) continue
+                    seen.add(rule.order)
+                    candidates.push(rule)
+                }
+            }
+
+            return candidates
+                .filter(rule => rule.matches(tagName, classNames))
+                .sort((a, b) => a.order - b.order)
+        },
+    }
+}
+
+function getRuleBucketCandidates(
+    bucket: SimpleClassRuleBucket | undefined,
+    tagName: string,
+): readonly SimpleClassRule[] | undefined {
+    if (!bucket) return undefined
+    const tagRules = bucket.byTagName.get(tagName)
+    if (!tagRules?.length) return bucket.allTags
+    if (!bucket.allTags.length) return tagRules
+    let merged = bucket.mergedByTagName.get(tagName)
+    if (!merged) {
+        merged = [...bucket.allTags, ...tagRules].sort((a, b) => a.order - b.order)
+        bucket.mergedByTagName.set(tagName, merged)
+    }
+    return merged
 }
 
 function parseSimpleClassSelector(selector: csstree.Selector): { tagName?: string; classNames: string[] } | null {
@@ -82,6 +169,15 @@ function parseSimpleClassSelector(selector: csstree.Selector): { tagName?: strin
 
     if (!classNames.length) return null
     return { tagName, classNames }
+}
+
+function matchesSimpleClassRule(
+    rule: { tagName?: string; classNames: readonly string[] },
+    tagName: string,
+    classNames: ReadonlySet<string>,
+): boolean {
+    return (!rule.tagName || rule.tagName === tagName)
+        && rule.classNames.every(className => classNames.has(className))
 }
 
 export function extractImportURLs(css: string): string[] {

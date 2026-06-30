@@ -205,7 +205,10 @@ export {
     parseStyleDeclarations,
     mergeStyleDeclarations,
     parseSimpleClassRules,
+    parseSimpleClassRuleIndex,
+    createSimpleClassRuleIndex,
     type SimpleClassRule,
+    type SimpleClassRuleIndex,
 } from './css'
 export {
     readRasterImageDimensions,

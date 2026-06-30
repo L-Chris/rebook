@@ -18,7 +18,7 @@ import { createZipLoader, isZipFile } from '../loaders/zip-loader'
 import { normalizeWhitespace, getElementText, cssEscape, replaceSeries, getMimeTypeFromPath } from '../core/utils'
 import { UnsupportedInputError, AdapterRequiredError, ParseError, CorruptedFileError } from '../core/errors'
 import { normalizeLanguage, normalizeTitle, normalizePublisher } from '../core/metadata'
-import { parseSimpleClassRules, mergeStyleDeclarations, extractImportURLs, parseStyleDeclarations, type SimpleClassRule } from '../core/css'
+import { parseSimpleClassRuleIndex, mergeStyleDeclarations, extractImportURLs, parseStyleDeclarations, type SimpleClassRuleIndex } from '../core/css'
 import { getInputName, isBlobLike } from '../core/binary'
 import { debugRebook, isRebookDebugEnabled } from '../core/debug'
 import { readRasterImageDimensions } from '../core/image-size'
@@ -687,7 +687,7 @@ class ResourceLoader {
     private imageDimensionCache = new Map<string, Promise<{ width: number; height: number } | null>>()
     private resourceItemCache = new Map<string, ManifestItem | null>()
     private cssTextCache = new Map<string, Promise<string>>()
-    private cssRulesCache = new Map<string, SimpleClassRule[]>()
+    private cssRulesCache = new Map<string, SimpleClassRuleIndex>()
     private refCount = new Map<string, number>()
     private manifest: ManifestItem[]
     private manifestByNormalizedHref: Map<string, ManifestItem>
@@ -1016,19 +1016,18 @@ class ResourceLoader {
         }
 
         const cssSource = cssTexts.join('\n')
-        let rules = this.cssRulesCache.get(cssSource)
-        if (!rules) {
-            rules = parseSimpleClassRules(cssSource)
-            this.cssRulesCache.set(cssSource, rules)
+        let ruleIndex = this.cssRulesCache.get(cssSource)
+        if (!ruleIndex) {
+            ruleIndex = parseSimpleClassRuleIndex(cssSource)
+            this.cssRulesCache.set(cssSource, ruleIndex)
         }
-        if (!rules.length) return
+        if (!ruleIndex.rules.length) return
 
         for (const el of doc.querySelectorAll('[class]')) {
             const classNames = new Set((el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean))
             if (!classNames.size) continue
             const tagName = el.localName.toLowerCase()
-            const declarations = rules
-                .filter(rule => rule.matches(tagName, classNames))
+            const declarations = ruleIndex.getMatchingRules(tagName, classNames)
                 .map(rule => rule.declarations)
                 .join('; ')
             if (!declarations) continue

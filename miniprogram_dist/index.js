@@ -11682,14 +11682,76 @@ function parseSimpleClassRules(css) {
         const parsed = parseSimpleClassSelector(selector2);
         if (!parsed) continue;
         rules.push({
+          order: rules.length,
+          tagName: parsed.tagName,
+          classNames: parsed.classNames,
           declarations,
-          matches: (tagName, classNames) => (!parsed.tagName || parsed.tagName === tagName) && parsed.classNames.every((className) => classNames.has(className))
+          matches: (tagName, classNames) => matchesSimpleClassRule(parsed, tagName, classNames)
         });
       }
     } });
   } catch (e) {
   }
   return rules;
+}
+function parseSimpleClassRuleIndex(css) {
+  return createSimpleClassRuleIndex(parseSimpleClassRules(css));
+}
+function createSimpleClassRuleIndex(rules) {
+  const byClassName = /* @__PURE__ */ new Map();
+  for (const rule of rules) {
+    const key = rule.classNames[0];
+    if (!key) continue;
+    let bucket = byClassName.get(key);
+    if (!bucket) {
+      bucket = { allTags: [], byTagName: /* @__PURE__ */ new Map(), mergedByTagName: /* @__PURE__ */ new Map() };
+      byClassName.set(key, bucket);
+    }
+    if (rule.tagName) {
+      let tagRules = bucket.byTagName.get(rule.tagName);
+      if (!tagRules) {
+        tagRules = [];
+        bucket.byTagName.set(rule.tagName, tagRules);
+      }
+      tagRules.push(rule);
+    } else {
+      bucket.allTags.push(rule);
+    }
+  }
+  return {
+    rules,
+    getMatchingRules(tagName, classNames) {
+      var _a2, _b2, _c;
+      if (!classNames.size) return [];
+      if (classNames.size === 1) {
+        let onlyClass;
+        for (const className of classNames) onlyClass = className;
+        return (_b2 = (_a2 = getRuleBucketCandidates(onlyClass ? byClassName.get(onlyClass) : void 0, tagName)) == null ? void 0 : _a2.filter((rule) => rule.matches(tagName, classNames))) != null ? _b2 : [];
+      }
+      const candidates = [];
+      const seen = /* @__PURE__ */ new Set();
+      for (const className of classNames) {
+        for (const rule of (_c = getRuleBucketCandidates(byClassName.get(className), tagName)) != null ? _c : []) {
+          if (seen.has(rule.order)) continue;
+          seen.add(rule.order);
+          candidates.push(rule);
+        }
+      }
+      return candidates.filter((rule) => rule.matches(tagName, classNames)).sort((a, b) => a.order - b.order);
+    }
+  };
+}
+function getRuleBucketCandidates(bucket, tagName) {
+  if (!bucket) return void 0;
+  const tagRules = bucket.byTagName.get(tagName);
+  if (!(tagRules == null ? void 0 : tagRules.length)) return bucket.allTags;
+  if (!bucket.allTags.length) return tagRules;
+  let merged = bucket.mergedByTagName.get(tagName);
+  if (!merged) {
+    merged = [...bucket.allTags, ...tagRules].sort((a, b) => a.order - b.order);
+    bucket.mergedByTagName.set(tagName, merged);
+  }
+  return merged;
 }
 function parseSimpleClassSelector(selector2) {
   let tagName;
@@ -11706,6 +11768,9 @@ function parseSimpleClassSelector(selector2) {
   }
   if (!classNames.length) return null;
   return { tagName, classNames };
+}
+function matchesSimpleClassRule(rule, tagName, classNames) {
+  return (!rule.tagName || rule.tagName === tagName) && rule.classNames.every((className) => classNames.has(className));
 }
 function extractImportURLs(css) {
   const urls = [];
@@ -18514,17 +18579,17 @@ class ResourceLoader {
       if (css) cssTexts.push(css);
     }
     const cssSource = cssTexts.join("\n");
-    let rules = this.cssRulesCache.get(cssSource);
-    if (!rules) {
-      rules = parseSimpleClassRules(cssSource);
-      this.cssRulesCache.set(cssSource, rules);
+    let ruleIndex = this.cssRulesCache.get(cssSource);
+    if (!ruleIndex) {
+      ruleIndex = parseSimpleClassRuleIndex(cssSource);
+      this.cssRulesCache.set(cssSource, ruleIndex);
     }
-    if (!rules.length) return;
+    if (!ruleIndex.rules.length) return;
     for (const el of doc.querySelectorAll("[class]")) {
       const classNames = new Set(((_a2 = el.getAttribute("class")) != null ? _a2 : "").split(/\s+/).filter(Boolean));
       if (!classNames.size) continue;
       const tagName = el.localName.toLowerCase();
-      const declarations = rules.filter((rule) => rule.matches(tagName, classNames)).map((rule) => rule.declarations).join("; ");
+      const declarations = ruleIndex.getMatchingRules(tagName, classNames).map((rule) => rule.declarations).join("; ");
       if (!declarations) continue;
       el.setAttribute("style", mergeStyleDeclarations(declarations, (_b2 = el.getAttribute("style")) != null ? _b2 : ""));
     }
