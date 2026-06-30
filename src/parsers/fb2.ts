@@ -8,16 +8,16 @@
  * using recursive element mapping tables.
  */
 
-import type { Book, BookMetadata, Section, TOCItem, Contributor, SectionDocument } from '../core/types'
+import type { Book, BookMetadata, Section, TOCItem, Contributor } from '../core/types'
 import type { Parser, ParserInput, ParserOptions } from '../core/parser'
 import type { DOMAdapter, XMLDocument, XMLElement } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
 import { createZipLoader, isZipFile } from '../loaders/zip-loader'
 import { normalizeWhitespace, getElementText, escapeAttr } from '../core/utils'
 import { AdapterRequiredError, UnsupportedInputError, ParseError } from '../core/errors'
-import { parseHTML, createSectionDocument } from '../core/document'
 import { getInputName, isBlobLike } from '../core/binary'
 import { readRasterImageDimensions, type ImageDimensions } from '../core/image-size'
+import { createCachedReflowableAccessors } from '../core/section-cache'
 
 // ============================================================================
 // Constants
@@ -90,6 +90,7 @@ function decodeBase64BytesFallback(value: string): Uint8Array {
  */
 type ElementDef = [string, (ElementMap | 'self')?, string[]?]
 type ElementMap = Record<string, ElementDef | string>
+type FB2ImageData = { src: string; dimensions: ImageDimensions | null }
 
 const STYLE: ElementMap = {
     'strong': ['strong', 'self'],
@@ -154,6 +155,7 @@ const BODY: ElementMap = {
 class FB2Converter {
     private bins: Map<string, XMLElement>
     private doc: XMLDocument
+    private imageDataCache = new Map<string, FB2ImageData>()
 
     constructor(private fb2: XMLDocument, private domAdapter: DOMAdapter) {
         this.doc = fb2
@@ -172,11 +174,14 @@ class FB2Converter {
         return this.getImageData(el).src
     }
 
-    private getImageData(el: XMLElement): { src: string; dimensions: ImageDimensions | null } {
+    private getImageData(el: XMLElement): FB2ImageData {
         const href = el.getAttributeNS(XLINK_NS, 'href')
         if (!href) return { src: 'data:,', dimensions: null }
         const [, id] = href.split('#')
         if (!id) return { src: href, dimensions: null }
+        const cached = this.imageDataCache.get(id)
+        if (cached) return cached
+
         const bin = this.bins.get(id)
         if (bin) {
             const contentType = bin.getAttribute('content-type') || 'image/png'
@@ -185,10 +190,12 @@ class FB2Converter {
             const dimensions = contentType === MIME_SVG || !contentType.startsWith('image/')
                 ? null
                 : readRasterImageDimensions(bytes)
-            return {
+            const result = {
                 src: `data:${contentType};base64,${content}`,
                 dimensions,
             }
+            this.imageDataCache.set(id, result)
+            return result
         }
         return { src: href, dimensions: null }
     }
@@ -533,6 +540,10 @@ export class FB2Parser implements Parser {
 
                     // Create section HTML — return string directly, renderer creates URLs
                     const sectionHtml = buildXHTMLDocument(child, bodyType)
+                    const accessors = createCachedReflowableAccessors({
+                        domAdapter,
+                        loadDocumentHtml: () => sectionHtml,
+                    })
 
                     sections.push({
                         id: idx,
@@ -540,10 +551,9 @@ export class FB2Parser implements Parser {
                         load: () => sectionHtml,
                         format: 'xhtml' as const,
                         createDocument: () => sectionHtml,
-                        getDocument: async (): Promise<SectionDocument | null> => {
-                            const nodes = parseHTML(sectionHtml, domAdapter)
-                            return createSectionDocument(nodes, domAdapter)
-                        },
+                        getDocument: accessors.getDocument,
+                        getSegments: accessors.getSegments,
+                        getBlocks: accessors.getBlocks,
                         linear: bodyType === 'notes' ? 'no' : undefined,
                     })
 
@@ -559,6 +569,10 @@ export class FB2Parser implements Parser {
                 const title = titleEl ? getElementText(titleEl) : `Notes ${bodyIdx}`
 
                 const sectionHtml = buildXHTMLDocument(bodyEl, bodyType || 'notes')
+                const accessors = createCachedReflowableAccessors({
+                    domAdapter,
+                    loadDocumentHtml: () => sectionHtml,
+                })
 
                 // Collect IDs
                 for (const el of findAllByTag(bodyEl, '*')) {
@@ -572,10 +586,9 @@ export class FB2Parser implements Parser {
                     load: () => sectionHtml,
                     format: 'xhtml' as const,
                     createDocument: () => sectionHtml,
-                    getDocument: async (): Promise<SectionDocument | null> => {
-                        const nodes = parseHTML(sectionHtml, domAdapter)
-                        return createSectionDocument(nodes, domAdapter)
-                    },
+                    getDocument: accessors.getDocument,
+                    getSegments: accessors.getSegments,
+                    getBlocks: accessors.getBlocks,
                     linear: 'no',
                 })
 

@@ -8,8 +8,7 @@
 
 import type {
     Book, Section, TOCItem, Landmark, BookMetadata,
-    Rendition, ResolvedNavigation, LanguageMap, Contributor,
-    SectionDocument,
+    Rendition, ResolvedNavigation, LanguageMap, Contributor, DocumentNode,
 } from '../core/types'
 import type { Parser, ParserInput, ParserOptions } from '../core/parser'
 import type { DOMAdapter, XMLDocument, XMLElement } from '../core/dom-adapter'
@@ -19,12 +18,13 @@ import { createZipLoader, isZipFile } from '../loaders/zip-loader'
 import { normalizeWhitespace, getElementText, cssEscape, replaceSeries, getMimeTypeFromPath } from '../core/utils'
 import { UnsupportedInputError, AdapterRequiredError, ParseError, CorruptedFileError } from '../core/errors'
 import { normalizeLanguage, normalizeTitle, normalizePublisher } from '../core/metadata'
-import { parseHTML, createSectionDocument } from '../core/document'
-import { extractDocumentBlocks, extractDocumentSegments } from '../core/pretext'
-import { parseSimpleClassRules, mergeStyleDeclarations, extractImportURLs, type SimpleClassRule } from '../core/css'
+import { parseSimpleClassRules, mergeStyleDeclarations, extractImportURLs, parseStyleDeclarations, type SimpleClassRule } from '../core/css'
 import { getInputName, isBlobLike } from '../core/binary'
 import { debugRebook, isRebookDebugEnabled } from '../core/debug'
 import { readRasterImageDimensions } from '../core/image-size'
+import { getOrCreateCachedPromise, getOrCreatePromise } from '../core/promise-cache'
+import { createCachedReflowableAccessors } from '../core/section-cache'
+import { documentToNodes } from '../core/document'
 
 // ============================================================================
 // Constants
@@ -48,6 +48,8 @@ const MIME = {
     CSS: 'text/css',
     SVG: 'image/svg+xml',
 } as const
+
+const CSS_RESOURCE_PATTERN = /url\(|@import/i
 
 const RELATORS: Record<string, string> = {
     art: 'artist',
@@ -125,21 +127,26 @@ const normalizeArchivePath = (path: string): string => {
 function applyResolvedImageDimensions(element: XMLElement, natural: { width: number; height: number }): void {
     const widthAttr = element.getAttribute('width')?.trim()
     const heightAttr = element.getAttribute('height')?.trim()
-    const width = parseImageDimensionAttribute(widthAttr)
-    const height = parseImageDimensionAttribute(heightAttr)
+    const styleDeclarations = new Map(parseStyleDeclarations(element.getAttribute('style') ?? ''))
+    const styleWidth = parseImageDimensionAttribute(styleDeclarations.get('width'))
+    const styleHeight = parseImageDimensionAttribute(styleDeclarations.get('height'))
+    const width = parseImageDimensionAttribute(widthAttr) ?? styleWidth
+    const height = parseImageDimensionAttribute(heightAttr) ?? styleHeight
+    const widthDeclared = Boolean(widthAttr) || Boolean(styleWidth)
+    const heightDeclared = Boolean(heightAttr) || Boolean(styleHeight)
 
-    if (!widthAttr && !heightAttr) {
+    if (!widthDeclared && !heightDeclared) {
         element.setAttribute('width', String(natural.width))
         element.setAttribute('height', String(natural.height))
         return
     }
 
-    if (width && !heightAttr) {
+    if (width && !heightDeclared) {
         element.setAttribute('height', String(Math.max(1, Math.round(width * natural.height / natural.width))))
         return
     }
 
-    if (height && !widthAttr) {
+    if (height && !widthDeclared) {
         element.setAttribute('width', String(Math.max(1, Math.round(height * natural.width / natural.height))))
     }
 }
@@ -674,6 +681,13 @@ interface ManifestItem {
  */
 class ResourceLoader {
     private cache = new Map<string, string>()
+    private pending = new Map<string, Promise<string>>()
+    private documentCache = new Map<string, XMLDocument>()
+    private documentPending = new Map<string, Promise<XMLDocument | null>>()
+    private imageDimensionCache = new Map<string, Promise<{ width: number; height: number } | null>>()
+    private resourceItemCache = new Map<string, ManifestItem | null>()
+    private cssTextCache = new Map<string, Promise<string>>()
+    private cssRulesCache = new Map<string, SimpleClassRule[]>()
     private refCount = new Map<string, number>()
     private manifest: ManifestItem[]
     private manifestByNormalizedHref: Map<string, ManifestItem>
@@ -715,7 +729,28 @@ class ResourceLoader {
             this.refCount.set(item.href, (this.refCount.get(item.href) ?? 0) + 1)
             return this.cache.get(item.href)!
         }
-        return this.loadReplaced(item)
+        const pending = getOrCreatePromise(this.pending, item.href, () => this.loadReplaced(item))
+        const value = await pending.promise
+        if (!pending.created && value) this.refCount.set(item.href, (this.refCount.get(item.href) ?? 0) + 1)
+        return value
+    }
+
+    async loadItemNodes(item: ManifestItem): Promise<DocumentNode[]> {
+        const doc = await this.loadItemDocument(item)
+        return doc ? documentToNodes(doc, this.domAdapter) : []
+    }
+
+    async loadItemDocument(item: ManifestItem): Promise<XMLDocument | null> {
+        const htmlTypes: string[] = [MIME.XHTML, MIME.HTML, MIME.SVG]
+        if (!htmlTypes.includes(item.mediaType)) return null
+        if (this.documentCache.has(item.href)) {
+            this.refCount.set(item.href, (this.refCount.get(item.href) ?? 0) + 1)
+            return this.documentCache.get(item.href)!
+        }
+        const pending = getOrCreatePromise(this.documentPending, item.href, () => this.loadReplacedDocument(item))
+        const doc = await pending.promise
+        if (!pending.created && doc) this.refCount.set(item.href, (this.refCount.get(item.href) ?? 0) + 1)
+        return doc
     }
 
     private async loadReplaced(item: ManifestItem): Promise<string> {
@@ -724,131 +759,14 @@ class ResourceLoader {
         // Parse and replace in HTML/XHTML/SVG
         const htmlTypes: string[] = [MIME.XHTML, MIME.HTML, MIME.SVG]
         if (htmlTypes.includes(mediaType)) {
-            const str = await this.loadText(href)
-            if (!str) return ''
-            let doc: XMLDocument
-            try {
-                doc = this.domAdapter.parseXML(str)
-            } catch (error) {
-                if (mediaType !== MIME.XHTML && mediaType !== MIME.HTML) throw error
-                doc = this.domAdapter.parseHTML(str, MIME.HTML)
-            }
-
-            // Change to HTML if XHTML is invalid
-            if (mediaType === MIME.XHTML && (
-                doc.querySelector('parsererror') ||
-                !doc.documentElement?.namespaceURI
-            )) {
-                doc = this.domAdapter.parseHTML(str, MIME.HTML)
-            }
-
-            await this.applyLinkedStyles(doc, href)
-
-            // Replace href/src/data/poster attributes
-            const replace = async (el: XMLElement, attr: string) => {
-                const val = el.getAttribute(attr)
-                if (val) {
-                    const resolved = resolveURL(val, href)
-                    const replaced = await this.loadHref(val, href)
-                    if (attr === 'src' || attr === 'poster' || attr === 'data') {
-                        el.setAttribute(`data-rebook-original-${attr}`, resolved)
-                    }
-                    el.setAttribute(attr, replaced)
-                    if ((attr === 'src' || attr === 'poster' || attr === 'data') && replaced === val) {
-                        debugEPUB('resource attr kept original value', {
-                            base: href,
-                            tag: el.localName,
-                            attr,
-                            value: val,
-                            resolved,
-                        })
-                    } else if ((attr === 'src' || attr === 'poster' || attr === 'data') && isRebookDebugEnabled()) {
-                        debugEPUB('resource attr replaced', {
-                            base: href,
-                            tag: el.localName,
-                            attr,
-                            value: val,
-                            resolved,
-                            replaced,
-                        })
-                    }
-                }
-            }
-
-            for (const el of doc.querySelectorAll('link[href]')) {
-                if (isResourceLinkHrefElement(el)) await replace(el, 'href')
-            }
-            for (const el of doc.querySelectorAll('[href]')) {
-                if (!isNavigationHrefElement(el)) await replace(el, 'href')
-            }
-            for (const el of doc.querySelectorAll('[src]')) {
-                const srcBefore = el.getAttribute('src')
-                await replace(el, 'src')
-                // Inject usable image dimensions when the source only declares one
-                // axis, so layout can keep the real aspect ratio instead of using
-                // fallback block heights.
-                if (el.localName.toLowerCase() === 'img'
-                    && (!el.getAttribute('width') || !el.getAttribute('height'))
-                    && srcBefore) {
-                    const imgHref = resolveURL(srcBefore, href)
-                    const imgItem = this.findResourceItem(imgHref)
-                    if (imgItem?.mediaType.startsWith('image/') && imgItem.mediaType !== MIME.SVG) {
-                        try {
-                            const blob = await this.loadBlob(imgItem.href)
-                            if (blob) {
-                                const buf = await blob.arrayBuffer()
-                                const size = readRasterImageDimensions(buf)
-                                if (size?.width && size?.height) {
-                                    applyResolvedImageDimensions(el, size)
-                                }
-                            }
-                        } catch { /* ignore, non-fatal */ }
-                    }
-                }
-            }
-            for (const el of doc.querySelectorAll('[poster]')) await replace(el, 'poster')
-            for (const el of doc.querySelectorAll('object[data]')) await replace(el, 'data')
-            for (const el of doc.querySelectorAll('[*|href]:not([href])')) {
-                const val = el.getAttributeNS(NS.XLINK, 'href')
-                if (val) {
-                    el.setAttribute('data-rebook-original-href', resolveURL(val, href))
-                    el.setAttributeNS(NS.XLINK, 'href', await this.loadHref(val, href))
-                }
-            }
-
-            // Replace srcset
-            for (const el of doc.querySelectorAll('[srcset]')) {
-                const srcset = el.getAttribute('srcset')
-                if (srcset) {
-                    const replaced = await replaceSeries(
-                        srcset,
-                        /(\s*)(.+?)\s*((?:\s[\d.]+[wx])+\s*(?:,|$)|,\s+|$)/g,
-                        async (_, p1, p2, p3) => {
-                            const newUrl = await this.loadHref(p2, href)
-                            return `${p1}${newUrl}${p3}`
-                        }
-                    )
-                    el.setAttribute('srcset', replaced)
-                }
-            }
-
-            // Replace inline styles
-            for (const el of doc.querySelectorAll('style')) {
-                if (el.textContent) {
-                    el.textContent = await this.replaceCSS(el.textContent, href)
-                }
-            }
-            for (const el of doc.querySelectorAll('[style]')) {
-                const style = el.getAttribute('style')
-                if (style) el.setAttribute('style', await this.replaceCSS(style, href))
-            }
-
+            const doc = await this.loadItemDocument(item)
+            if (!doc) return ''
             const result = this.domAdapter.serialize(doc)
             // Return the serialized HTML string directly.
             // The renderer is responsible for creating blob URLs for the document.
             // Embedded resources (CSS, images) already have blob URLs from loadHref.
             this.cache.set(href, result)
-            this.refCount.set(href, 1)
+            this.refCount.set(href, Math.max(1, this.refCount.get(href) ?? 0))
             return result
         }
 
@@ -864,7 +782,169 @@ class ResourceLoader {
         const blob = await this.loadBlob(href)
         if (!blob) return ''
         const buffer = await blob.arrayBuffer()
+        this.rememberImageDimensions(href, mediaType, buffer)
         return this.createURL(href, buffer, mediaType)
+    }
+
+    private async loadReplacedDocument(item: ManifestItem): Promise<XMLDocument | null> {
+        const { href, mediaType } = item
+        const str = await this.loadText(href)
+        if (!str) return null
+        let doc: XMLDocument
+        try {
+            doc = this.domAdapter.parseXML(str)
+        } catch (error) {
+            if (mediaType !== MIME.XHTML && mediaType !== MIME.HTML) throw error
+            doc = this.domAdapter.parseHTML(str, MIME.HTML)
+        }
+
+        // Change to HTML if XHTML is invalid
+        if (mediaType === MIME.XHTML && (
+            doc.querySelector('parsererror') ||
+            !doc.documentElement?.namespaceURI
+        )) {
+            doc = this.domAdapter.parseHTML(str, MIME.HTML)
+        }
+
+        await this.applyLinkedStyles(doc, href)
+
+        // Replace href/src/data/poster attributes
+        const resourceStats = {
+            replaced: 0,
+            kept: 0,
+            byAttr: {} as Record<string, number>,
+            samples: [] as Array<{ tag: string; attr: string; value: string; resolved: string; replaced: string }>,
+        }
+        const replace = async (el: XMLElement, attr: string) => {
+            const val = el.getAttribute(attr)
+            if (val) {
+                const resolved = resolveURL(val, href)
+                const replaced = await this.loadHref(val, href)
+                if (attr === 'src' || attr === 'poster' || attr === 'data') {
+                    el.setAttribute(`data-rebook-original-${attr}`, resolved)
+                }
+                el.setAttribute(attr, replaced)
+                if ((attr === 'src' || attr === 'poster' || attr === 'data') && replaced === val) {
+                    resourceStats.kept += 1
+                } else if ((attr === 'src' || attr === 'poster' || attr === 'data') && isRebookDebugEnabled()) {
+                    resourceStats.replaced += 1
+                    resourceStats.byAttr[attr] = (resourceStats.byAttr[attr] ?? 0) + 1
+                    if (resourceStats.samples.length < 5) {
+                        resourceStats.samples.push({
+                            tag: el.localName,
+                            attr,
+                            value: val,
+                            resolved,
+                            replaced,
+                        })
+                    }
+                }
+            }
+        }
+
+        const attrTasks: Promise<void>[] = []
+        for (const el of doc.querySelectorAll('link[href]')) {
+            if (isResourceLinkHrefElement(el)) attrTasks.push(replace(el, 'href'))
+        }
+        for (const el of doc.querySelectorAll('[href]')) {
+            if (!isNavigationHrefElement(el)) attrTasks.push(replace(el, 'href'))
+        }
+        for (const el of doc.querySelectorAll('[src]')) {
+            attrTasks.push((async () => {
+                const srcBefore = el.getAttribute('src')
+                await replace(el, 'src')
+                // Inject usable image dimensions when the source only declares one
+                // axis, so layout can keep the real aspect ratio instead of using
+                // fallback block heights.
+                if (el.localName.toLowerCase() === 'img'
+                    && (!el.getAttribute('width') || !el.getAttribute('height'))
+                    && srcBefore) {
+                    const imgHref = resolveURL(srcBefore, href)
+                    const imgItem = this.findResourceItem(imgHref)
+                    if (imgItem?.mediaType.startsWith('image/') && imgItem.mediaType !== MIME.SVG) {
+                        const size = await this.readImageDimensions(imgItem)
+                        if (size) applyResolvedImageDimensions(el, size)
+                    }
+                }
+            })())
+        }
+        for (const el of doc.querySelectorAll('[poster]')) attrTasks.push(replace(el, 'poster'))
+        for (const el of doc.querySelectorAll('object[data]')) attrTasks.push(replace(el, 'data'))
+        for (const el of doc.querySelectorAll('[*|href]:not([href])')) {
+            attrTasks.push((async () => {
+                const val = el.getAttributeNS(NS.XLINK, 'href')
+                if (val) {
+                    el.setAttribute('data-rebook-original-href', resolveURL(val, href))
+                    el.setAttributeNS(NS.XLINK, 'href', await this.loadHref(val, href))
+                }
+            })())
+        }
+        await Promise.all(attrTasks)
+
+        // Replace srcset
+        for (const el of doc.querySelectorAll('[srcset]')) {
+            const srcset = el.getAttribute('srcset')
+            if (srcset) {
+                const replaced = await replaceSeries(
+                    srcset,
+                    /(\s*)(.+?)\s*((?:\s[\d.]+[wx])+\s*(?:,|$)|,\s+|$)/g,
+                    async (_, p1, p2, p3) => {
+                        const newUrl = await this.loadHref(p2, href)
+                        return `${p1}${newUrl}${p3}`
+                    }
+                )
+                el.setAttribute('srcset', replaced)
+            }
+        }
+
+        // Replace inline styles
+        for (const el of doc.querySelectorAll('style')) {
+            if (el.textContent) {
+                el.textContent = await this.replaceCSS(el.textContent, href)
+            }
+        }
+        for (const el of doc.querySelectorAll('[style]')) {
+            const style = el.getAttribute('style')
+            if (style) el.setAttribute('style', await this.replaceCSS(style, href))
+        }
+        if (isRebookDebugEnabled() && (resourceStats.replaced > 0 || resourceStats.kept > 0)) {
+            debugEPUB('resource attrs processed', {
+                base: href,
+                replaced: resourceStats.replaced,
+                kept: resourceStats.kept,
+                byAttr: resourceStats.byAttr,
+                samples: resourceStats.samples,
+            })
+        }
+
+        this.documentCache.set(href, doc)
+        this.refCount.set(href, Math.max(1, this.refCount.get(href) ?? 0))
+        return doc
+    }
+
+    private rememberImageDimensions(href: string, mediaType: string, data: ArrayBuffer): void {
+        if (!mediaType.startsWith('image/') || mediaType === MIME.SVG || this.imageDimensionCache.has(href)) return
+        const size = readRasterImageDimensions(data)
+        this.imageDimensionCache.set(href, Promise.resolve(size?.width && size?.height ? size : null))
+    }
+
+    private readImageDimensions(item: ManifestItem): Promise<{ width: number; height: number } | null> {
+        let cached = this.imageDimensionCache.get(item.href)
+        if (!cached) {
+            cached = (async () => {
+                try {
+                    const blob = await this.loadBlob(item.href)
+                    if (!blob) return null
+                    const buf = await blob.arrayBuffer()
+                    const size = readRasterImageDimensions(buf)
+                    return size?.width && size?.height ? size : null
+                } catch {
+                    return null
+                }
+            })()
+            this.imageDimensionCache.set(item.href, cached)
+        }
+        return cached
     }
 
     private async loadHref(url: string, base: string): Promise<string> {
@@ -887,12 +967,21 @@ class ResourceLoader {
 
     private findResourceItem(href: string): ManifestItem | undefined {
         const normalizedHref = normalizeArchivePath(href)
+        if (this.resourceItemCache.has(normalizedHref)) {
+            return this.resourceItemCache.get(normalizedHref) ?? undefined
+        }
         const manifestItem = this.manifestByNormalizedHref.get(normalizedHref)
             ?? this.normalizedManifest.find(entry => entry.normalized.endsWith(`/${normalizedHref}`))?.item
-        if (manifestItem) return manifestItem
+        if (manifestItem) {
+            this.resourceItemCache.set(normalizedHref, manifestItem)
+            return manifestItem
+        }
 
         const entryHref = findArchiveEntryHref(this.entries, normalizedHref)
-        if (!entryHref) return undefined
+        if (!entryHref) {
+            this.resourceItemCache.set(normalizedHref, null)
+            return undefined
+        }
 
         const normalizedEntryHref = normalizeArchivePath(entryHref)
         if (normalizedEntryHref !== normalizedHref) {
@@ -902,11 +991,13 @@ class ResourceLoader {
                 matched: normalizedEntryHref,
             })
         }
-        return {
+        const item = {
             id: normalizedEntryHref,
             href: entryHref,
             mediaType: getMimeTypeFromPath(normalizedEntryHref),
         }
+        this.resourceItemCache.set(normalizedHref, item)
+        return item
     }
 
     private async applyLinkedStyles(doc: XMLDocument, href: string): Promise<void> {
@@ -924,7 +1015,12 @@ class ResourceLoader {
             if (css) cssTexts.push(css)
         }
 
-        const rules = parseSimpleClassRules(cssTexts.join('\n'))
+        const cssSource = cssTexts.join('\n')
+        let rules = this.cssRulesCache.get(cssSource)
+        if (!rules) {
+            rules = parseSimpleClassRules(cssSource)
+            this.cssRulesCache.set(cssSource, rules)
+        }
         if (!rules.length) return
 
         for (const el of doc.querySelectorAll('[class]')) {
@@ -941,23 +1037,29 @@ class ResourceLoader {
     }
 
     private async loadCSSWithImports(href: string, seen = new Set<string>()): Promise<string> {
+        if (seen.size === 0) return getOrCreateCachedPromise(this.cssTextCache, href, () => this.loadCSSWithImportsUncached(href, seen))
+        return this.loadCSSWithImportsUncached(href, seen)
+    }
+
+    private async loadCSSWithImportsUncached(href: string, seen: Set<string>): Promise<string> {
         if (seen.has(href)) return ''
         seen.add(href)
         const css = await this.loadText(href)
         if (!css) return ''
 
-        const imports: string[] = []
-        for (const url of extractImportURLs(css)) {
+        const imports = await Promise.all(extractImportURLs(css).map(async url => {
             const importHref = resolveURL(url, href)
             const item = this.findResourceItem(importHref)
             if (item?.mediaType === MIME.CSS) {
-                imports.push(await this.loadCSSWithImports(item.href, seen))
+                return this.loadCSSWithImports(item.href, seen)
             }
-        }
+            return ''
+        }))
         return [...imports, css].filter(Boolean).join('\n')
     }
 
     private async replaceCSS(str: string, href: string): Promise<string> {
+        if (!CSS_RESOURCE_PATTERN.test(str)) return str
         const replacedUrls = await replaceSeries(
             str,
             /url\(\s*["']?([^'"\n]*?)\s*["']?\s*\)/gi,
@@ -983,6 +1085,7 @@ class ResourceLoader {
             // Only revoke blob URLs (CSS, images). HTML content is a string.
             if (url && url.startsWith('blob:')) this.urlFactory.revokeURL(url)
             this.cache.delete(href)
+            this.documentCache.delete(href)
             this.refCount.delete(href)
         } else {
             this.refCount.set(href, count)
@@ -994,6 +1097,7 @@ class ResourceLoader {
             if (url.startsWith('blob:')) this.urlFactory.revokeURL(url)
         }
         this.cache.clear()
+        this.documentCache.clear()
         this.refCount.clear()
     }
 }
@@ -1226,6 +1330,12 @@ class EPUBBook implements Book {
         this.sections = this.spine.map((spineItem, index): Section | null => {
             const item = this.manifestById.get(spineItem.idref)
             if (!item) return null
+            const accessors = createCachedReflowableAccessors({
+                domAdapter: this.domAdapter,
+                loadDocumentHtml: () => this.loadDocument(item),
+                loadBlockNodes: () => this.resourceLoader.loadItemNodes(item),
+                coverImageSrcs: () => this.getCoverImageSrcs(),
+            })
             return {
                 id: item.href,
                 load: () => this.resourceLoader.loadItem(item),
@@ -1233,23 +1343,9 @@ class EPUBBook implements Book {
                 format: 'xhtml' as const,
                 loadText: () => this.loader.loadText(item.href).then(t => t ?? ''),
                 createDocument: () => this.loadDocument(item),
-                getDocument: async (): Promise<SectionDocument | null> => {
-                    const html = await this.loadDocument(item)
-                    const nodes = parseHTML(html, this.domAdapter)
-                    return createSectionDocument(nodes, this.domAdapter)
-                },
-                getSegments: async () => {
-                    const html = await this.loadDocument(item)
-                    const nodes = parseHTML(html, this.domAdapter)
-                    return extractDocumentSegments(nodes)
-                },
-                getBlocks: async () => {
-                    const html = await this.resourceLoader.loadItem(item)
-                    const nodes = parseHTML(html, this.domAdapter)
-                    return extractDocumentBlocks(nodes, {}, {
-                        coverImageSrcs: this.getCoverImageSrcs(),
-                    })
-                },
+                getDocument: accessors.getDocument,
+                getSegments: accessors.getSegments,
+                getBlocks: accessors.getBlocks,
                 size: this.loader.getSize(item.href),
                 linear: spineItem.linear,
                 cfi: `/6/${(index + 1) * 2}`,

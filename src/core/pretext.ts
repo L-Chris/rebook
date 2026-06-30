@@ -376,7 +376,7 @@ export function extractDocumentBlocks(
 
         if (type === 'table') {
             pushTableBlocks(node)
-            for (const image of collectImageNodes(node)) pushImageBlock(image)
+            for (const image of collectBlockImageNodes(node)) pushImageBlock(image)
             return
         }
 
@@ -392,7 +392,7 @@ export function extractDocumentBlocks(
             if (!segments.some(segment => segment.text.trim()) && segments.some(segment => segment.text.includes('\n'))) {
                 pushBreakBlock(node)
             }
-            for (const image of collectImageNodes(node)) pushImageBlock(image)
+            for (const image of collectBlockImageNodes(node)) pushImageBlock(image)
             return
         }
 
@@ -434,7 +434,7 @@ export function extractDocumentBlocks(
 
         if (type === 'blockquote') {
             pushBlock('blockquote', node, collectInlineSegments(node, inherited))
-            for (const image of collectImageNodes(node)) pushImageBlock(image)
+            for (const image of collectBlockImageNodes(node)) pushImageBlock(image)
             return
         }
 
@@ -1023,6 +1023,23 @@ function collectInlineSegments(
                         },
                     },
                 })
+            } else if (image && isInlineImageNode(current, node)) {
+                const dimensions = getInlineImageDimensions(image, style)
+                segments.push({
+                    text: '\uFFFC',
+                    style,
+                    break: 'never',
+                    extraWidth: dimensions.width,
+                    source: {
+                        nodeType: 'img',
+                        attrs: {
+                            ...(sourceAttrs ?? current.attrs ?? {}),
+                            'data-rebook-inline-image-width': String(dimensions.width),
+                            'data-rebook-inline-image-height': String(dimensions.height),
+                            ...(dimensions.verticalAlign ? { 'data-rebook-inline-image-vertical-align': dimensions.verticalAlign } : {}),
+                        },
+                    },
+                })
             }
             return
         }
@@ -1049,6 +1066,22 @@ function collectImageNodes(node: DocumentNode): DocumentNode[] {
         const type = current.type.toLowerCase()
         if (isImageNode(type, current)) {
             images.push(current)
+            return
+        }
+        for (const child of current.children ?? []) walk(child)
+    }
+    for (const child of node.children ?? []) walk(child)
+    return images
+}
+
+function collectBlockImageNodes(node: DocumentNode): DocumentNode[] {
+    const images: DocumentNode[] = []
+    const walk = (current: DocumentNode) => {
+        if (isTextNode(current)) return
+        if (isFootnoteContentNode(current)) return
+        const type = current.type.toLowerCase()
+        if (isImageNode(type, current)) {
+            if (!isInlineImageNode(current, node)) images.push(current)
             return
         }
         for (const child of current.children ?? []) walk(child)
@@ -1269,8 +1302,15 @@ function getImageData(
     if (!src) return null
 
     const imageStyle = parseImageStyle(attrs.style)
-    const width = parseCSSDimension(attrs.width) ?? imageStyle.width
-    const height = parseCSSDimension(attrs.height) ?? imageStyle.height
+    const attrWidth = parseCSSDimension(attrs.width)
+    const attrHeight = parseCSSDimension(attrs.height)
+    const naturalRatio = attrWidth && attrHeight ? attrWidth / attrHeight : undefined
+    const width = imageStyle.width
+        ?? (imageStyle.height && naturalRatio ? imageStyle.height * naturalRatio : undefined)
+        ?? attrWidth
+    const height = imageStyle.height
+        ?? (imageStyle.width && naturalRatio ? imageStyle.width / naturalRatio : undefined)
+        ?? attrHeight
     const originalSrc = attrs['data-rebook-original-src']
         ?? attrs['data-rebook-original-href']
         ?? attrs['data-rebook-original-data']
@@ -1296,7 +1336,7 @@ function getImageData(
         title: attrs.title,
         width,
         height,
-        aspectRatio: width && height ? width / height : undefined,
+        aspectRatio: naturalRatio ?? (width && height ? width / height : undefined),
         isCover,
         role: role || undefined,
         style: imageStyle,
@@ -1310,6 +1350,48 @@ function isFootnoteMarkerImage(image: TextImage): boolean {
         || token === 'epub-footnote1'
         || token === 'noteref'
         || token === 'footnote-ref')
+}
+
+function isInlineImageNode(node: DocumentNode, inlineRoot: DocumentNode): boolean {
+    if (isTextNode(node)) return false
+    const image = getImageData(node, new Set())
+    if (!image) return false
+    if (isFootnoteMarkerImage(image)) return true
+    if (image.style?.display === 'block' || image.style?.display === 'none') return false
+    if (image.style?.display === 'inline' || image.style?.display === 'inline-block') return true
+    if (image.style?.verticalAlign) return true
+    return hasReadableText(inlineRoot)
+}
+
+function hasReadableText(node: DocumentNode): boolean {
+    if (isTextNode(node)) return Boolean(node.text.trim())
+    if (isFootnoteContentNode(node)) return false
+    for (const child of node.children ?? []) {
+        if (hasReadableText(child)) return true
+    }
+    return false
+}
+
+function getInlineImageDimensions(
+    image: TextImage,
+    inherited: TextStyle,
+): { width: number; height: number; verticalAlign?: string } {
+    const fontSize = inherited.fontSize ?? DEFAULT_STYLE.fontSize
+    const lineHeight = fontSize * (inherited.lineHeight ?? DEFAULT_STYLE.lineHeight)
+    const naturalRatio = image.aspectRatio ?? (image.width && image.height ? image.width / image.height : undefined)
+    const width = image.style?.width
+        ?? image.width
+        ?? (image.style?.height && naturalRatio ? image.style.height * naturalRatio : undefined)
+        ?? fontSize
+    const height = image.style?.height
+        ?? (naturalRatio ? width / naturalRatio : undefined)
+        ?? image.height
+        ?? lineHeight
+    return {
+        width: Math.max(1, width),
+        height: Math.max(1, height),
+        verticalAlign: image.style?.verticalAlign,
+    }
 }
 
 function isFootnoteContentNode(node: DocumentNode): boolean {
@@ -1850,7 +1932,7 @@ function formatRoman(value: number): string {
 function normalizeSegments(segments: TextSegment[]): TextSegment[] {
     const normalized: TextSegment[] = []
     for (const segment of segments) {
-        const text = segment.text.replace(/[ \t\r\f]+/g, ' ')
+        const text = normalizeSegmentWhitespace(segment)
         if (!text) continue
         const last = normalized[normalized.length - 1]
         if (last && sameStyle(last.style, segment.style) && sameSource(last.source, segment.source)) {
@@ -1862,6 +1944,13 @@ function normalizeSegments(segments: TextSegment[]): TextSegment[] {
     trimBoundaryNewlines(normalized, 'start')
     trimBoundaryNewlines(normalized, 'end')
     return normalized
+}
+
+function normalizeSegmentWhitespace(segment: TextSegment): string {
+    if (segment.source?.nodeType === 'text') {
+        return segment.text.replace(/[ \t\r\n\f]+/g, ' ')
+    }
+    return segment.text.replace(/[ \t\r\f]+/g, ' ')
 }
 
 function trimBoundaryNewlines(segments: TextSegment[], edge: 'start' | 'end'): void {
@@ -2016,8 +2105,10 @@ function parseImageStyle(style: string | undefined): ImageStyle {
         else if (name === 'height') result.height = parseCSSDimension(value)
         else if (name === 'max-width') result.maxWidth = parseCSSDimension(value)
         else if (name === 'max-height') result.maxHeight = parseCSSDimension(value)
+        else if (name === 'display' && isImageDisplay(value)) result.display = value
         else if (name === 'object-fit' && isObjectFit(value)) result.objectFit = value
         else if (name === 'text-align') result.align = parseBoxAlign(value)
+        else if (name === 'vertical-align') result.verticalAlign = value
         else if (name === 'margin-left' && value === 'auto') result.align = 'center'
         else if (name === 'margin-right' && value === 'auto' && result.align === 'center') result.align = 'center'
     }
@@ -2072,6 +2163,13 @@ function isObjectFit(value: string): value is NonNullable<ImageStyle['objectFit'
         || value === 'fill'
         || value === 'none'
         || value === 'scale-down'
+}
+
+function isImageDisplay(value: string): value is NonNullable<ImageStyle['display']> {
+    return value === 'inline'
+        || value === 'inline-block'
+        || value === 'block'
+        || value === 'none'
 }
 
 function parseTextAlign(value: string): TextStyle['textAlign'] | undefined {

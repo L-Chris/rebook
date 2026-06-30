@@ -65,7 +65,7 @@ export function isElementNode(node: DocumentNode): node is DocumentNode & { chil
 /**
  * Convert a DOM element to a DocumentNode tree.
  */
-function domToNode(element: XMLElement, domAdapter: DOMAdapter): DocumentNode {
+export function elementToDocumentNode(element: XMLElement, domAdapter: DOMAdapter): DocumentNode {
     const type = element.localName
     const attrs: Record<string, string> = {}
     for (const attr of element.attributes) {
@@ -81,7 +81,7 @@ function domToNode(element: XMLElement, domAdapter: DOMAdapter): DocumentNode {
 
     for (const child of childNodes) {
         if (child.nodeType === 1) { // Element
-            children.push(domToNode(child as XMLElement, domAdapter))
+            children.push(elementToDocumentNode(child as XMLElement, domAdapter))
         } else if (child.nodeType === 3) { // Text
             const text = child.textContent || ''
             if (text) {
@@ -91,6 +91,35 @@ function domToNode(element: XMLElement, domAdapter: DOMAdapter): DocumentNode {
     }
 
     return elementNode(type, Object.keys(attrs).length > 0 ? attrs : undefined, children)
+}
+
+function documentRootChildrenToNodes(element: XMLElement, domAdapter: DOMAdapter): DocumentNode[] {
+    const nodes: DocumentNode[] = []
+    const childNodes = domAdapter.getChildNodes
+        ? domAdapter.getChildNodes(element)
+        : element.children
+
+    for (const child of childNodes) {
+        if (child.nodeType === 1) { // Element
+            nodes.push(elementToDocumentNode(child as XMLElement, domAdapter))
+        } else if (child.nodeType === 3) { // Text
+            const text = child.textContent || ''
+            if (text.trim()) {
+                nodes.push(textNode(text))
+            }
+        }
+    }
+
+    return nodes
+}
+
+/**
+ * Convert an already parsed HTML/XML document into the same top-level
+ * DocumentNode array returned by parseHTML().
+ */
+export function documentToNodes(doc: XMLDocument, domAdapter: DOMAdapter): DocumentNode[] {
+    const body = doc.querySelector('body') || doc.getElementsByTagName('body')[0] || doc.documentElement
+    return documentRootChildrenToNodes(body, domAdapter)
 }
 
 /**
@@ -104,27 +133,7 @@ export function parseHTML(html: string, domAdapter: DOMAdapter): DocumentNode[] 
     const isFullDocument = /^\s*(<!DOCTYPE|<html[\s>])/i.test(cleaned)
     const source = isFullDocument ? cleaned : `<html><body>${cleaned}</body></html>`
     const doc = domAdapter.parseHTML(source, 'text/html')
-    const body = doc.querySelector('body') || doc.getElementsByTagName('body')[0] || doc.documentElement
-
-    const nodes: DocumentNode[] = []
-
-    // Use getChildNodes if available, otherwise use children
-    const childNodes = domAdapter.getChildNodes
-        ? domAdapter.getChildNodes(body)
-        : body.children
-
-    for (const child of childNodes) {
-        if (child.nodeType === 1) { // Element
-            nodes.push(domToNode(child as XMLElement, domAdapter))
-        } else if (child.nodeType === 3) { // Text
-            const text = child.textContent || ''
-            if (text.trim()) {
-                nodes.push(textNode(text))
-            }
-        }
-    }
-
-    return nodes
+    return documentToNodes(doc, domAdapter)
 }
 
 // ============================================================================

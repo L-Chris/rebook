@@ -259,6 +259,33 @@ describe('Pretext pipeline', () => {
         expect(lines[0].height).toBeLessThanOrEqual(300)
     })
 
+    it('keeps images with text siblings as inline image segments using CSS sizing', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('p', {}, [
+                textNode('公式\n\t'),
+                elementNode('span', {}, [
+                    elementNode('img', {
+                        src: 'blob:formula',
+                        'data-rebook-original-src': 'images/formula.jpg',
+                        width: '140',
+                        height: '60',
+                        style: 'width: 14px; height: 6px; vertical-align: middle',
+                    }),
+                ]),
+                textNode(' 继续说明。'),
+            ]),
+        ], { fontSize: 16, lineHeight: 1.5 })
+
+        expect(blocks.map(block => block.type)).toEqual(['paragraph'])
+        const imageSegment = blocks[0].segments.find(segment => segment.source?.nodeType === 'img')
+        expect(blocks[0].segments[0]?.text).toBe('公式 ')
+        expect(imageSegment?.text).toBe('\uFFFC')
+        expect(imageSegment?.extraWidth).toBe(14)
+        expect(imageSegment?.source?.attrs?.['data-rebook-inline-image-width']).toBe('14')
+        expect(imageSegment?.source?.attrs?.['data-rebook-inline-image-height']).toBe('6')
+        expect(imageSegment?.source?.attrs?.['data-rebook-inline-image-vertical-align']).toBe('middle')
+    })
+
     it('extracts images nested inside layout tables', () => {
         const blocks = extractDocumentBlocks([
             elementNode('table', { class: 'borderless' }, [

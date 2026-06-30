@@ -13,17 +13,18 @@
  *   MOBIParser → public Parser interface
  */
 
-import type { Book, BookMetadata, Section, TOCItem, Landmark, Rendition, SectionDocument, DocumentNode } from '../core/types'
+import type { Book, BookMetadata, Section, TOCItem, Landmark, Rendition, DocumentNode } from '../core/types'
 import type { Parser, ParserInput, ParserOptions } from '../core/parser'
 import type { DOMAdapter, XMLDocument, XMLElement } from '../core/dom-adapter'
 import type { URLFactory } from '../core/url-factory'
 import { replaceSeries, unescapeHTML } from '../core/utils'
 import { UnsupportedInputError, ParseError, CorruptedFileError, AdapterRequiredError } from '../core/errors'
 import { normalizeContributors } from '../core/metadata'
-import { parseHTML, createSectionDocument } from '../core/document'
-import { extractDocumentBlocks, extractDocumentSegments } from '../core/pretext'
+import { documentToNodes, parseHTML } from '../core/document'
 import { ArrayBufferBlob, type BlobLike, getInputName, isBlobLike, toBlobLike } from '../core/binary'
 import { readRasterImageDimensions, type ImageDimensions } from '../core/image-size'
+import { getOrCreatePromise } from '../core/promise-cache'
+import { createCachedReflowableAccessors } from '../core/section-cache'
 
 // ============================================================================
 // Constants
@@ -908,8 +909,11 @@ class MOBI6 {
     #domAdapter?: DOMAdapter
     #urlFactory?: URLFactory
     #resourceCache = new Map<number, string>()
+    #resourcePending = new Map<number, Promise<string>>()
     #textCache = new Map<MOBI6Section, string>()
+    #textPending = new Map<MOBI6Section, Promise<string>>()
     #cache = new Map<MOBI6Section, string>()
+    #pending = new Map<MOBI6Section, Promise<string>>()
     #sections: MOBI6Section[] = []
     #fileposList: { filepos: string; number: number }[] = []
     #urls: string[] = []
@@ -954,33 +958,23 @@ class MOBI6 {
         })
 
         // Build sections array
-        this.sections = this.#sections.map((section, index) => ({
-            id: index,
-            load: () => this.loadSection(section),
-            createDocument: () => this.createDocument(section),
-            format: 'html' as const,
-            getDocument: async (): Promise<SectionDocument | null> => {
-                const html = await this.createDocument(section)
-                if (!this.#domAdapter) return null
-                const nodes = parseHTML(html, this.#domAdapter)
-                return createSectionDocument(nodes, this.#domAdapter)
-            },
-            getSegments: async () => {
-                const html = await this.createDocument(section)
-                if (!this.#domAdapter) return []
-                const nodes = parseHTML(html, this.#domAdapter)
-                return extractDocumentSegments(nodes)
-            },
-            getBlocks: async () => {
-                const html = await this.loadSection(section)
-                if (!this.#domAdapter) return []
-                const nodes = parseHTML(html, this.#domAdapter)
-                return extractDocumentBlocks(nodes, {}, {
-                    coverImageSrcs: [],
-                })
-            },
-            size: section.end - section.start,
-        }))
+        this.sections = this.#sections.map((section, index) => {
+            const accessors = createCachedReflowableAccessors({
+                domAdapter: this.#domAdapter,
+                loadDocumentHtml: () => this.createDocument(section),
+                loadBlocksHtml: () => this.loadSection(section),
+            })
+            return {
+                id: index,
+                load: () => this.loadSection(section),
+                createDocument: () => this.createDocument(section),
+                format: 'html' as const,
+                getDocument: accessors.getDocument,
+                getSegments: accessors.getSegments,
+                getBlocks: accessors.getBlocks,
+                size: section.end - section.start,
+            }
+        })
 
         // Build TOC from guide
         try {
@@ -1024,10 +1018,12 @@ class MOBI6 {
 
     async loadResource(index: number): Promise<string> {
         if (this.#resourceCache.has(index)) return this.#resourceCache.get(index)!
-        const raw = await this.#mobi.loadResource(index)
-        const url = this.#createURL(raw, '')
-        this.#resourceCache.set(index, url)
-        return url
+        return getOrCreatePromise(this.#resourcePending, index, async () => {
+            const raw = await this.#mobi.loadResource(index)
+            const url = this.#createURL(raw, '')
+            this.#resourceCache.set(index, url)
+            return url
+        }).promise
     }
 
     async loadRecindex(recindex: string): Promise<string> {
@@ -1065,28 +1061,30 @@ class MOBI6 {
 
     async loadSectionText(section: MOBI6Section): Promise<string> {
         if (this.#textCache.has(section)) return this.#textCache.get(section)!
-        const { raw } = section
+        return getOrCreatePromise(this.#textPending, section, async () => {
+            const { raw } = section
 
-        // Insert anchor elements for filepos references
-        const sectionFilepos = this.#fileposList
-            .filter(({ number }) => number >= section.start && number < section.end)
-            .map(obj => ({ ...obj, offset: obj.number - section.start }))
+            // Insert anchor elements for filepos references
+            const sectionFilepos = this.#fileposList
+                .filter(({ number }) => number >= section.start && number < section.end)
+                .map(obj => ({ ...obj, offset: obj.number - section.start }))
 
-        let arr = raw
-        if (sectionFilepos.length) {
-            arr = raw.subarray(0, sectionFilepos[0].offset)
-            sectionFilepos.forEach(({ filepos, offset }, i) => {
-                const next = sectionFilepos[i + 1]
-                const a = this.#mobi.encode(`<a id="filepos${filepos}"></a>`)
-                arr = concatTypedArray3(arr, a, raw.subarray(offset, next?.offset))
-            })
-        }
+            let arr = raw
+            if (sectionFilepos.length) {
+                arr = raw.subarray(0, sectionFilepos[0].offset)
+                sectionFilepos.forEach(({ filepos, offset }, i) => {
+                    const next = sectionFilepos[i + 1]
+                    const a = this.#mobi.encode(`<a id="filepos${filepos}"></a>`)
+                    arr = concatTypedArray3(arr, a, raw.subarray(offset, next?.offset))
+                })
+            }
 
-        const str = this.#mobi.decode(arr)
-            .replaceAll(mbpPagebreakRegex, '')
-            .replace(/<\/\s*(?:mbp:)?pagebreak\s*>/gi, '')
-        this.#textCache.set(section, str)
-        return str
+            const str = this.#mobi.decode(arr)
+                .replaceAll(mbpPagebreakRegex, '')
+                .replace(/<\/\s*(?:mbp:)?pagebreak\s*>/gi, '')
+            this.#textCache.set(section, str)
+            return str
+        }).promise
     }
 
     async createDocument(section: MOBI6Section): Promise<string> {
@@ -1096,15 +1094,17 @@ class MOBI6 {
 
     async loadSection(section: MOBI6Section): Promise<string> {
         if (this.#cache.has(section)) return this.#cache.get(section)!
-        let str = await this.createDocument(section)
-        str = await this.replaceResources(str)
+        return getOrCreatePromise(this.#pending, section, async () => {
+            let str = await this.createDocument(section)
+            str = await this.replaceResources(str)
 
-        // Wrap in minimal HTML document (styles should be applied by the renderer)
-        // Return the HTML string directly; the renderer creates blob URLs if needed.
-        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${str}</body></html>`
+            // Wrap in minimal HTML document (styles should be applied by the renderer)
+            // Return the HTML string directly; the renderer creates blob URLs if needed.
+            const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${str}</body></html>`
 
-        this.#cache.set(section, html)
-        return html
+            this.#cache.set(section, html)
+            return html
+        }).promise
     }
 
     resolveHref(href: string): { index: number; anchor: (doc: unknown) => unknown } | null {
@@ -1277,6 +1277,9 @@ class KF8 {
     #domAdapter?: DOMAdapter
     #urlFactory?: URLFactory
     #cache = new Map<KF8Section | string, string>()
+    #pending = new Map<KF8Section | string, Promise<string>>()
+    #documentCache = new Map<KF8Section, XMLDocument>()
+    #documentPending = new Map<KF8Section, Promise<XMLDocument | null>>()
     #fragmentOffsets = new Map<number, number[]>()
     #fragmentSelectors = new Map<number, Map<number, string>>()
     #tables: {
@@ -1393,31 +1396,19 @@ class KF8 {
             }
 
             this.#sectionIndexMap.set(index, this.sections.length)
+            const accessors = createCachedReflowableAccessors({
+                domAdapter: this.#domAdapter,
+                loadDocumentHtml: () => this.createDocument(section),
+                loadBlockNodes: () => this.loadSectionNodes(section),
+            })
             this.sections.push({
                 id: index,
                 load: () => this.loadSection(section),
                 createDocument: () => this.createDocument(section),
                 format: 'xhtml' as const,
-                getDocument: async (): Promise<SectionDocument | null> => {
-                    const html = await this.createDocument(section)
-                    if (!this.#domAdapter) return null
-                    const nodes = parseHTML(html, this.#domAdapter)
-                    return createSectionDocument(nodes, this.#domAdapter)
-                },
-                getSegments: async () => {
-                    const html = await this.createDocument(section)
-                    if (!this.#domAdapter) return []
-                    const nodes = parseHTML(html, this.#domAdapter)
-                    return extractDocumentSegments(nodes)
-                },
-                getBlocks: async () => {
-                    const html = await this.loadSection(section)
-                    if (!this.#domAdapter) return []
-                    const nodes = parseHTML(html, this.#domAdapter)
-                    return extractDocumentBlocks(nodes, {}, {
-                        coverImageSrcs: [],
-                    })
-                },
+                getDocument: accessors.getDocument,
+                getSegments: accessors.getSegments,
+                getBlocks: accessors.getBlocks,
                 size: section.length,
             })
         }
@@ -1480,27 +1471,29 @@ class KF8 {
 
     async loadResource(str: string): Promise<string> {
         if (this.#cache.has(str)) return this.#cache.get(str)!
-        const { resourceType, id, type } = parseResourceURI(str)
-        const raw = resourceType === 'flow' ? await this.loadFlow(id)
-            : await this.#mobi.loadResource(id - 1)
+        return getOrCreatePromise(this.#pending, str, async () => {
+            const { resourceType, id, type } = parseResourceURI(str)
+            const raw = resourceType === 'flow' ? await this.loadFlow(id)
+                : await this.#mobi.loadResource(id - 1)
 
-        let data: string | ArrayBuffer
-        if ([MIME_XHTML, MIME_HTML, MIME_CSS, MIME_SVG].includes(type)) {
-            const buf = raw instanceof Uint8Array ? raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) : raw
-            data = await this.replaceResources(this.#mobi.decode(buf as ArrayBuffer))
-        } else {
-            data = raw instanceof Uint8Array
-                ? new Uint8Array(raw).buffer as ArrayBuffer
-                : raw as ArrayBuffer
-        }
+            let data: string | ArrayBuffer
+            if ([MIME_XHTML, MIME_HTML, MIME_CSS, MIME_SVG].includes(type)) {
+                const buf = raw instanceof Uint8Array ? raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) : raw
+                data = await this.replaceResources(this.#mobi.decode(buf as ArrayBuffer))
+            } else {
+                data = raw instanceof Uint8Array
+                    ? new Uint8Array(raw).buffer as ArrayBuffer
+                    : raw as ArrayBuffer
+            }
 
-        const url = this.#createURL(data, type)
-        const dimensions = typeof data === 'string' || type === MIME_SVG || !type.startsWith('image/')
-            ? null
-            : readRasterImageDimensions(data)
-        if (dimensions) this.#imageDimensionsByURL.set(url, dimensions)
-        this.#cache.set(str, url)
-        return url
+            const url = this.#createURL(data, type)
+            const dimensions = typeof data === 'string' || type === MIME_SVG || !type.startsWith('image/')
+                ? null
+                : readRasterImageDimensions(data)
+            if (dimensions) this.#imageDimensionsByURL.set(url, dimensions)
+            this.#cache.set(str, url)
+            return url
+        }).promise
     }
 
     replaceResources(str: string): Promise<string> {
@@ -1564,27 +1557,43 @@ class KF8 {
         return this.loadText(section)
     }
 
-    async loadSection(section: KF8Section): Promise<string> {
-        if (this.#cache.has(section)) return this.#cache.get(section)!
-        const str = await this.loadText(section)
-        const replaced = await this.replaceResources(str)
+    async loadSectionNodes(section: KF8Section): Promise<DocumentNode[]> {
+        if (!this.#domAdapter) return []
+        const doc = await this.loadSectionDocument(section)
+        return doc ? documentToNodes(doc, this.#domAdapter) : []
+    }
 
-        // Try XHTML first, fall back to HTML
-        let docStr = replaced
-        if (this.#domAdapter) {
-            let doc = this.#domAdapter.parseHTML(replaced, this.#type)
+    async loadSectionDocument(section: KF8Section): Promise<XMLDocument | null> {
+        if (!this.#domAdapter) return null
+        if (this.#documentCache.has(section)) return this.#documentCache.get(section)!
+        return getOrCreatePromise(this.#documentPending, section, async () => {
+            const str = await this.loadText(section)
+            const replaced = await this.replaceResources(str)
+
+            let doc = this.#domAdapter!.parseHTML(replaced, this.#type)
             const parseError = doc.querySelector('parsererror')
             if (parseError || !doc.documentElement?.namespaceURI) {
                 this.#type = MIME_HTML
-                doc = this.#domAdapter.parseHTML(replaced, this.#type)
+                doc = this.#domAdapter!.parseHTML(replaced, this.#type)
             }
             this.#annotateImageDimensions(doc)
-            docStr = this.#domAdapter.serialize(doc)
-        }
+            this.#documentCache.set(section, doc)
+            return doc
+        }).promise
+    }
 
-        // Return the HTML string directly; the renderer creates blob URLs if needed.
-        this.#cache.set(section, docStr)
-        return docStr
+    async loadSection(section: KF8Section): Promise<string> {
+        if (this.#cache.has(section)) return this.#cache.get(section)!
+        return getOrCreatePromise(this.#pending, section, async () => {
+            const doc = await this.loadSectionDocument(section)
+            const docStr = doc && this.#domAdapter
+                ? this.#domAdapter.serialize(doc)
+                : await this.replaceResources(await this.loadText(section))
+
+            // Return the HTML string directly; the renderer creates blob URLs if needed.
+            this.#cache.set(section, docStr)
+            return docStr
+        }).promise
     }
 
     getIndexByFID(fid: number): number {

@@ -22,6 +22,8 @@ import {
 } from '../../core/pretext'
 import type { BrowserPageSurface, BrowserPageSurfaceLayer } from './compositor'
 
+const REBOOK_ROLE_ATTR = 'data-rebook-role'
+
 export interface BrowserReflowableContentRenderContext {
     readonly sectionIndex: number
     readonly pageIndex: number
@@ -267,13 +269,15 @@ function createSemanticInlineSegment(
         const img = document.createElement('img')
         img.src = segment.source.attrs.src ?? ''
         img.alt = segment.source.attrs.alt ?? ''
+        const width = parseCSSPixels(segment.source.attrs['data-rebook-inline-image-width'], 11)
+        const height = parseCSSPixels(segment.source.attrs['data-rebook-inline-image-height'], 11)
+        const verticalAlign = getInlineImageVerticalAlign(segment)
         img.style.cssText = `
             display: inline-block;
-            width: ${parseCSSPixels(segment.source.attrs['data-rebook-inline-image-width'], 11)}px;
-            height: ${parseCSSPixels(segment.source.attrs['data-rebook-inline-image-height'], 11)}px;
-            max-width: 1em;
-            max-height: 1em;
-            vertical-align: super;
+            width: ${width}px;
+            height: ${height}px;
+            max-width: 100%;
+            vertical-align: ${verticalAlign};
             object-fit: contain;
         `
         return img
@@ -521,6 +525,12 @@ function getImageTextAlign(image: TextImage): string {
     if (image.style?.align === 'start') return 'left'
     if (image.style?.align === 'end') return 'right'
     return 'center'
+}
+
+function getInlineImageVerticalAlign(segment: TextSegment): string {
+    const attrs = segment.source?.attrs
+    if (attrs?.[REBOOK_ROLE_ATTR] === 'noteref') return 'super'
+    return attrs?.['data-rebook-inline-image-vertical-align'] ?? 'baseline'
 }
 
 function getColumnContentLeft(position: { left: number }, context: BrowserReflowableContentRenderContext): number {

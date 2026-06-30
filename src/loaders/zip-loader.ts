@@ -25,6 +25,7 @@ import {
     toBlobLike,
 } from '../core/binary'
 import { debugRebook } from '../core/debug'
+import { getOrCreatePromise } from '../core/promise-cache'
 
 /** Input types accepted by the zip loader */
 export type ZipInput = File | Blob | ArrayBuffer | BlobLike
@@ -458,45 +459,35 @@ function buildFallbackLoader(
         filename,
         size: localHeaderMap.get(filename)?.uncompressedSize ?? 0,
     }))
+    const pendingBuffers = new Map<string, Promise<ArrayBuffer | null>>()
+
+    const loadBuffer = (filename: string): Promise<ArrayBuffer | null> =>
+        getOrCreatePromise(pendingBuffers, filename, async () => {
+            const entry = localHeaderMap.get(filename)
+            if (!entry) return null
+            try {
+                return await extractDirectly(blob, entry.offset, localHeaderMap)
+            } catch {
+                if (!recoverLocalHeaderMap) return null
+                const recoveredMap = await recoverLocalHeaderMap()
+                const recoveredEntry = recoveredMap.get(filename)
+                if (!recoveredEntry || recoveredEntry.offset === entry.offset) return null
+                try {
+                    return await extractDirectly(blob, recoveredEntry.offset, recoveredMap)
+                } catch {
+                    return null
+                }
+            }
+        }).promise
 
     const loadText = async (filename: string): Promise<string | null> => {
-        const entry = localHeaderMap.get(filename)
-        if (!entry) return null
-        try {
-            const buffer = await extractDirectly(blob, entry.offset, localHeaderMap)
-            return new TextDecoder().decode(buffer)
-        } catch {
-            if (!recoverLocalHeaderMap) return null
-            const recoveredMap = await recoverLocalHeaderMap()
-            const recoveredEntry = recoveredMap.get(filename)
-            if (!recoveredEntry || recoveredEntry.offset === entry.offset) return null
-            try {
-                const buffer = await extractDirectly(blob, recoveredEntry.offset, recoveredMap)
-                return new TextDecoder().decode(buffer)
-            } catch {
-                return null
-            }
-        }
+        const buffer = await loadBuffer(filename)
+        return buffer ? new TextDecoder().decode(buffer) : null
     }
 
     const loadBlob = async (filename: string, type?: string): Promise<Blob | null> => {
-        const entry = localHeaderMap.get(filename)
-        if (!entry) return null
-        try {
-            const buffer = await extractDirectly(blob, entry.offset, localHeaderMap)
-            return createOutputBlob(buffer, type)
-        } catch {
-            if (!recoverLocalHeaderMap) return null
-            const recoveredMap = await recoverLocalHeaderMap()
-            const recoveredEntry = recoveredMap.get(filename)
-            if (!recoveredEntry || recoveredEntry.offset === entry.offset) return null
-            try {
-                const buffer = await extractDirectly(blob, recoveredEntry.offset, recoveredMap)
-                return createOutputBlob(buffer, type)
-            } catch {
-                return null
-            }
-        }
+        const buffer = await loadBuffer(filename)
+        return buffer ? createOutputBlob(buffer, type) : null
     }
 
     const getSize = (filename: string): number => localHeaderMap.get(filename)?.uncompressedSize ?? 0

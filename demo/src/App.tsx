@@ -812,6 +812,32 @@ function App() {
     await readerRef.current?.prev?.()
   }), [runDebugNavigation])
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return
+      if (settingsOpen) return
+      if (!bookRef.current || !readerRef.current) return
+      if (isEditableKeyboardTarget(event.target)) return
+
+      const direction = getKeyboardPageDirection(event)
+      if (!direction) return
+
+      event.preventDefault()
+      const reader = readerRef.current
+      const navigation = direction === 'next' ? reader.next?.() : reader.prev?.()
+      void Promise.resolve(navigation).catch((error: unknown) => {
+        appendDebug('keyboard navigation failed', {
+          key: event.key,
+          direction,
+          error: formatError(error),
+        })
+      })
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [appendDebug, settingsOpen])
+
   const debugGoTo = useCallback((target: string | number) => runDebugNavigation(async () => {
     await readerRef.current?.goTo?.(target)
   }), [runDebugNavigation])
@@ -4467,6 +4493,19 @@ function clampPanelWidth(value: string | number) {
   const number = typeof value === 'number' ? value : Number(value)
   const viewportMax = typeof window === 'undefined' ? 1120 : Math.max(420, window.innerWidth - 160)
   return Math.max(320, Math.min(1120, viewportMax, Number.isFinite(number) ? number : 420))
+}
+
+function getKeyboardPageDirection(event: KeyboardEvent): 'next' | 'prev' | null {
+  if (event.shiftKey) return null
+  if (event.key === 'ArrowRight' || event.key === 'ArrowDown' || event.key === 'PageDown') return 'next'
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowUp' || event.key === 'PageUp') return 'prev'
+  return null
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false
+  const editable = target.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="textbox"]')
+  return Boolean(editable)
 }
 
 function panelButtonClass(active: boolean) {

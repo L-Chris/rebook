@@ -1885,6 +1885,64 @@ describe('BrowserRenderer', () => {
         renderer.destroy()
     })
 
+    it('renders ordinary inline image segments at their computed CSS size', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '120')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 120,
+                format: 'xhtml',
+                load: () => '',
+                getBlocks: () => [{
+                    id: 'body',
+                    type: 'paragraph',
+                    segments: [
+                        { text: 'Alpha ' },
+                        {
+                            text: '\uFFFC',
+                            break: 'never',
+                            extraWidth: 28,
+                            source: {
+                                nodeType: 'img',
+                                attrs: {
+                                    src: 'test://formula.png',
+                                    alt: 'formula',
+                                    'data-rebook-inline-image-width': '28',
+                                    'data-rebook-inline-image-height': '12',
+                                    'data-rebook-inline-image-vertical-align': 'middle',
+                                },
+                            },
+                        },
+                        { text: ' beta' },
+                    ],
+                }],
+            }],
+        }
+
+        const renderer = new BrowserRenderer({
+            container,
+            layout: 'paginated',
+            styles: { fontSize: '16px', lineHeight: 1.5, maxInlineSize: '280px', margin: '16px' },
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+
+        const image = container.querySelector('[data-block-type="paragraph"] img') as HTMLImageElement
+        expect(image).toBeTruthy()
+        expect(image.src).toBe('test://formula.png')
+        expect(image.style.width).toBe('28px')
+        expect(image.style.height).toBe('12px')
+        expect(image.style.verticalAlign).toBe('middle')
+        expect(container.querySelector('[data-block-type="image"]')).toBeNull()
+
+        renderer.destroy()
+    })
+
     it('navigates to anchors inside a browser renderer section and reports the active TOC item', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')

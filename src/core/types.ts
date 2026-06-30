@@ -119,8 +119,10 @@ export interface ImageStyle {
     height?: number
     maxWidth?: number
     maxHeight?: number
+    display?: 'inline' | 'inline-block' | 'block' | 'none'
     objectFit?: 'contain' | 'cover' | 'fill' | 'none' | 'scale-down'
     align?: 'start' | 'center' | 'end'
+    verticalAlign?: string
 }
 
 /**
