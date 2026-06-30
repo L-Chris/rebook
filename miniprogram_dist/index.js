@@ -18401,6 +18401,7 @@ class ResourceLoader {
     __publicField(this, "documentCache", /* @__PURE__ */ new Map());
     __publicField(this, "documentPending", /* @__PURE__ */ new Map());
     __publicField(this, "imageDimensionCache", /* @__PURE__ */ new Map());
+    __publicField(this, "imageBlobCache", /* @__PURE__ */ new Map());
     __publicField(this, "resourceItemCache", /* @__PURE__ */ new Map());
     __publicField(this, "cssTextCache", /* @__PURE__ */ new Map());
     __publicField(this, "cssRulesCache", /* @__PURE__ */ new Map());
@@ -18481,9 +18482,10 @@ class ResourceLoader {
     }
     const blob = await this.loadBlob(href);
     if (!blob) return "";
-    const buffer = await blob.arrayBuffer();
-    this.rememberImageDimensions(href, mediaType, buffer);
-    return this.createURL(href, buffer, mediaType);
+    if (mediaType.startsWith("image/") && mediaType !== MIME.SVG) {
+      this.imageBlobCache.set(href, blob);
+    }
+    return this.createURL(href, blob, mediaType);
   }
   async loadReplacedDocument(item) {
     var _a2, _b2;
@@ -18603,23 +18605,21 @@ class ResourceLoader {
     this.refCount.set(href, Math.max(1, (_b2 = this.refCount.get(href)) != null ? _b2 : 0));
     return doc;
   }
-  rememberImageDimensions(href, mediaType, data) {
-    if (!mediaType.startsWith("image/") || mediaType === MIME.SVG || this.imageDimensionCache.has(href)) return;
-    const size = readRasterImageDimensions(data);
-    this.imageDimensionCache.set(href, Promise.resolve((size == null ? void 0 : size.width) && (size == null ? void 0 : size.height) ? size : null));
-  }
   readImageDimensions(item) {
     let cached = this.imageDimensionCache.get(item.href);
     if (!cached) {
       cached = (async () => {
+        var _a2;
         try {
-          const blob = await this.loadBlob(item.href);
+          const blob = (_a2 = this.imageBlobCache.get(item.href)) != null ? _a2 : await this.loadBlob(item.href);
           if (!blob) return null;
           const buf = await blob.arrayBuffer();
           const size = readRasterImageDimensions(buf);
           return (size == null ? void 0 : size.width) && (size == null ? void 0 : size.height) ? size : null;
         } catch (e) {
           return null;
+        } finally {
+          this.imageBlobCache.delete(item.href);
         }
       })();
       this.imageDimensionCache.set(item.href, cached);
@@ -19239,7 +19239,7 @@ class CBZParser {
       href: filename
     }));
     const pageIndexByHref = new Map(imageFiles.map((filename, index) => [filename, index]));
-    const fixedDocument = createCBZFixedDocument(loader, imageFiles);
+    const fixedDocument = createCBZFixedDocument(loader, imageFiles, options.urlFactory);
     const book = {
       sections: [],
       toc,
@@ -19269,13 +19269,14 @@ class CBZParser {
   }
 }
 const cbz = () => new CBZParser();
-function createCBZFixedDocument(loader, imageFiles) {
+function createCBZFixedDocument(loader, imageFiles, urlFactory) {
   const imageCache = /* @__PURE__ */ new Map();
+  const imageURLs = /* @__PURE__ */ new Set();
   const readImage = async (pageIndex) => {
     assertCBZPageIndex(imageFiles, pageIndex);
     let cached = imageCache.get(pageIndex);
     if (!cached) {
-      cached = readCBZImage(loader, imageFiles[pageIndex], pageIndex);
+      cached = readCBZImage(loader, imageFiles[pageIndex], pageIndex, urlFactory, imageURLs);
       imageCache.set(pageIndex, cached);
     }
     return cached;
@@ -19298,17 +19299,21 @@ function createCBZFixedDocument(loader, imageFiles) {
       return (await readImage(pageIndex)).image;
     },
     destroy() {
+      for (const url of imageURLs) revokeCBZImageURL(url, urlFactory);
+      imageURLs.clear();
       imageCache.clear();
     }
   };
 }
-async function readCBZImage(loader, filename, pageIndex) {
+async function readCBZImage(loader, filename, pageIndex, urlFactory, imageURLs) {
   var _a2;
   const mimeType = getMimeTypeFromPath(filename);
   const blob = await loader.loadBlob(filename, mimeType);
   if (!blob) throw new ParseError(`Failed to load ${filename}`, "cbz");
   const bytes = new Uint8Array(await blob.arrayBuffer());
   const dimensions = (_a2 = readRasterImageDimensions(bytes)) != null ? _a2 : { width: 1e3, height: 1414 };
+  const src = createCBZImageURL(blob, bytes, mimeType, urlFactory);
+  if (isRevokableCBZImageURL(src)) imageURLs.add(src);
   const page2 = {
     index: pageIndex,
     width: dimensions.width,
@@ -19319,11 +19324,30 @@ async function readCBZImage(loader, filename, pageIndex) {
     pageIndex,
     width: dimensions.width,
     height: dimensions.height,
-    src: bytesToDataURI(bytes, mimeType),
+    src,
     mimeType,
     alt: filename
   };
   return { page: page2, image };
+}
+function createCBZImageURL(blob, bytes, mimeType, urlFactory) {
+  if (urlFactory) return urlFactory.createURL(blob, mimeType);
+  if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+    return URL.createObjectURL(blob);
+  }
+  return bytesToDataURI(bytes, mimeType);
+}
+function revokeCBZImageURL(url, urlFactory) {
+  if (urlFactory) {
+    urlFactory.revokeURL(url);
+    return;
+  }
+  if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+    URL.revokeObjectURL(url);
+  }
+}
+function isRevokableCBZImageURL(url) {
+  return !url.startsWith("data:");
 }
 function bytesToDataURI(bytes, mimeType) {
   let binary = "";

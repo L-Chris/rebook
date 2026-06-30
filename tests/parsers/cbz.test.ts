@@ -126,7 +126,7 @@ describe('CBZParser', () => {
             expect(labels).toEqual(['page001.jpg', 'page002.jpg', 'page003.jpg'])
         })
 
-        it('should load fixed page images as data URI surfaces', async () => {
+        it('should load fixed page images as resource URL surfaces', async () => {
             const opts = options()
             const buffer = await createTestCBZ({ pages: 1 })
             const book = await parser.parse(buffer, opts)
@@ -135,8 +135,9 @@ describe('CBZParser', () => {
             const image = await book.fixedDocument!.getPageImage!(0)
             expect(page.width).toBe(1)
             expect(page.height).toBe(1)
-            // Should be a data URI for image format
-            expect(image.src.startsWith('data:image/')).toBe(true)
+            expect(image.src.startsWith('test://resource-')).toBe(true)
+            expect(opts.urlFactory.hasURL(image.src)).toBe(true)
+            expect(opts.urlFactory.getData(image.src)?.data).toBeInstanceOf(Blob)
             expect(image.width).toBe(1)
             expect(image.height).toBe(1)
         })

@@ -10,6 +10,7 @@ import type { Book, BookMetadata, TOCItem } from '../core/types'
 import type { Parser, ParserInput, ParserOptions } from '../core/parser'
 import type { Loader } from '../core/loader'
 import type { DOMAdapter } from '../core/dom-adapter'
+import type { URLFactory } from '../core/url-factory'
 import type { FixedDocument, FixedPageImage, FixedPageInfo } from '../core/fixed-document'
 import { createZipLoader, isZipFile } from '../loaders/zip-loader'
 import { UnsupportedInputError, ParseError, AdapterRequiredError } from '../core/errors'
@@ -220,7 +221,7 @@ export class CBZParser implements Parser {
             href: filename,
         }))
         const pageIndexByHref = new Map(imageFiles.map((filename, index) => [filename, index]))
-        const fixedDocument = createCBZFixedDocument(loader, imageFiles)
+        const fixedDocument = createCBZFixedDocument(loader, imageFiles, options.urlFactory)
 
         // Build Book
         const book: Book = {
@@ -258,15 +259,20 @@ interface CachedCBZImage {
     readonly image: FixedPageImage
 }
 
-function createCBZFixedDocument(loader: Loader, imageFiles: readonly string[]): FixedDocument {
+function createCBZFixedDocument(
+    loader: Loader,
+    imageFiles: readonly string[],
+    urlFactory?: URLFactory,
+): FixedDocument {
     const imageCache = new Map<number, Promise<CachedCBZImage>>()
+    const imageURLs = new Set<string>()
 
     const readImage = async (pageIndex: number): Promise<CachedCBZImage> => {
         assertCBZPageIndex(imageFiles, pageIndex)
 
         let cached = imageCache.get(pageIndex)
         if (!cached) {
-            cached = readCBZImage(loader, imageFiles[pageIndex], pageIndex)
+            cached = readCBZImage(loader, imageFiles[pageIndex], pageIndex, urlFactory, imageURLs)
             imageCache.set(pageIndex, cached)
         }
         return cached
@@ -290,18 +296,28 @@ function createCBZFixedDocument(loader: Loader, imageFiles: readonly string[]): 
             return (await readImage(pageIndex)).image
         },
         destroy() {
+            for (const url of imageURLs) revokeCBZImageURL(url, urlFactory)
+            imageURLs.clear()
             imageCache.clear()
         },
     }
 }
 
-async function readCBZImage(loader: Loader, filename: string, pageIndex: number): Promise<CachedCBZImage> {
+async function readCBZImage(
+    loader: Loader,
+    filename: string,
+    pageIndex: number,
+    urlFactory: URLFactory | undefined,
+    imageURLs: Set<string>,
+): Promise<CachedCBZImage> {
     const mimeType = getMimeTypeFromPath(filename)
     const blob = await loader.loadBlob(filename, mimeType)
     if (!blob) throw new ParseError(`Failed to load ${filename}`, 'cbz')
 
     const bytes = new Uint8Array(await blob.arrayBuffer())
     const dimensions = readRasterImageDimensions(bytes) ?? { width: 1000, height: 1414 }
+    const src = createCBZImageURL(blob, bytes, mimeType, urlFactory)
+    if (isRevokableCBZImageURL(src)) imageURLs.add(src)
     const page = {
         index: pageIndex,
         width: dimensions.width,
@@ -312,11 +328,38 @@ async function readCBZImage(loader: Loader, filename: string, pageIndex: number)
         pageIndex,
         width: dimensions.width,
         height: dimensions.height,
-        src: bytesToDataURI(bytes, mimeType),
+        src,
         mimeType,
         alt: filename,
     }
     return { page, image }
+}
+
+function createCBZImageURL(
+    blob: Blob,
+    bytes: Uint8Array,
+    mimeType: string,
+    urlFactory?: URLFactory,
+): string {
+    if (urlFactory) return urlFactory.createURL(blob, mimeType)
+    if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+        return URL.createObjectURL(blob)
+    }
+    return bytesToDataURI(bytes, mimeType)
+}
+
+function revokeCBZImageURL(url: string, urlFactory?: URLFactory): void {
+    if (urlFactory) {
+        urlFactory.revokeURL(url)
+        return
+    }
+    if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+        URL.revokeObjectURL(url)
+    }
+}
+
+function isRevokableCBZImageURL(url: string): boolean {
+    return !url.startsWith('data:')
 }
 
 function bytesToDataURI(bytes: Uint8Array, mimeType: string): string {

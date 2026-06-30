@@ -685,6 +685,7 @@ class ResourceLoader {
     private documentCache = new Map<string, XMLDocument>()
     private documentPending = new Map<string, Promise<XMLDocument | null>>()
     private imageDimensionCache = new Map<string, Promise<{ width: number; height: number } | null>>()
+    private imageBlobCache = new Map<string, Blob>()
     private resourceItemCache = new Map<string, ManifestItem | null>()
     private cssTextCache = new Map<string, Promise<string>>()
     private cssRulesCache = new Map<string, SimpleClassRuleIndex>()
@@ -716,7 +717,7 @@ class ResourceLoader {
         this.entries = createArchiveEntryLookup(entries)
     }
 
-    private async createURL(href: string, data: string | ArrayBuffer, type: string): Promise<string> {
+    private async createURL(href: string, data: string | ArrayBuffer | Blob, type: string): Promise<string> {
         if (!data) return ''
         const url = this.urlFactory.createURL(data, type)
         this.cache.set(href, url)
@@ -778,12 +779,14 @@ class ResourceLoader {
             return this.createURL(href, result, mediaType)
         }
 
-        // Other resources: load as ArrayBuffer
+        // Other resources: create URLs directly from the extracted Blob. This
+        // avoids a Blob -> ArrayBuffer -> Blob round-trip for image-heavy EPUBs.
         const blob = await this.loadBlob(href)
         if (!blob) return ''
-        const buffer = await blob.arrayBuffer()
-        this.rememberImageDimensions(href, mediaType, buffer)
-        return this.createURL(href, buffer, mediaType)
+        if (mediaType.startsWith('image/') && mediaType !== MIME.SVG) {
+            this.imageBlobCache.set(href, blob)
+        }
+        return this.createURL(href, blob, mediaType)
     }
 
     private async loadReplacedDocument(item: ManifestItem): Promise<XMLDocument | null> {
@@ -922,24 +925,20 @@ class ResourceLoader {
         return doc
     }
 
-    private rememberImageDimensions(href: string, mediaType: string, data: ArrayBuffer): void {
-        if (!mediaType.startsWith('image/') || mediaType === MIME.SVG || this.imageDimensionCache.has(href)) return
-        const size = readRasterImageDimensions(data)
-        this.imageDimensionCache.set(href, Promise.resolve(size?.width && size?.height ? size : null))
-    }
-
     private readImageDimensions(item: ManifestItem): Promise<{ width: number; height: number } | null> {
         let cached = this.imageDimensionCache.get(item.href)
         if (!cached) {
             cached = (async () => {
                 try {
-                    const blob = await this.loadBlob(item.href)
+                    const blob = this.imageBlobCache.get(item.href) ?? await this.loadBlob(item.href)
                     if (!blob) return null
                     const buf = await blob.arrayBuffer()
                     const size = readRasterImageDimensions(buf)
                     return size?.width && size?.height ? size : null
                 } catch {
                     return null
+                } finally {
+                    this.imageBlobCache.delete(item.href)
                 }
             })()
             this.imageDimensionCache.set(item.href, cached)
