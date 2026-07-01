@@ -602,6 +602,49 @@ describe('EPUB Pretext segments', () => {
         expect(image?.style?.maxWidth).toBe(160)
     })
 
+    it('does not read image bytes when CSS already declares both dimensions', async () => {
+        const parser = new EPUBParser()
+        const book = await parser.parse(await createTestEPUB({
+            chapters: [{
+                id: 'css-sized-image',
+                title: 'CSS Sized Image',
+                content: '<html xmlns="http://www.w3.org/1999/xhtml"><head><link href="styles/book.css" rel="stylesheet" type="text/css"/></head><body><p><img class="sized" src="images/pic.png" alt="pic"/></p></body></html>',
+            }],
+            resources: [
+                {
+                    id: 'css',
+                    href: 'styles/book.css',
+                    mediaType: 'text/css',
+                    data: '.sized { width: 12px; height: 6px; }',
+                },
+                {
+                    id: 'pic',
+                    href: 'images/pic.png',
+                    mediaType: 'image/png',
+                    data: new Uint8Array(100_000),
+                },
+            ],
+        }), {
+            domAdapter: new NodeDOMAdapter(),
+            urlFactory: new NodeURLFactory(),
+        })
+        const originalArrayBuffer = Blob.prototype.arrayBuffer
+        let arrayBufferCalls = 0
+        Blob.prototype.arrayBuffer = function patchedArrayBuffer(this: Blob) {
+            arrayBufferCalls += 1
+            return originalArrayBuffer.call(this)
+        }
+        try {
+            const blocks = await book.sections[0].getBlocks?.()
+            const image = blocks?.find(block => block.type === 'image')?.image
+            expect(image?.style?.width).toBe(12)
+            expect(image?.style?.height).toBe(6)
+            expect(arrayBufferCalls).toBe(0)
+        } finally {
+            Blob.prototype.arrayBuffer = originalArrayBuffer
+        }
+    })
+
     it('keeps image blocks when corrupt archives cannot extract referenced resources', async () => {
         const parser = new EPUBParser()
         const data = await readFile('data/1.epub')

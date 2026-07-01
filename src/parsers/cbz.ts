@@ -17,7 +17,7 @@ import { UnsupportedInputError, ParseError, AdapterRequiredError } from '../core
 import { normalizeContributors } from '../core/metadata'
 import { getMimeTypeFromPath } from '../core/utils'
 import { getInputName } from '../core/binary'
-import { readRasterImageDimensions } from '../core/image-size'
+import { readRasterImageDimensionsFromBlobPrefix } from '../core/image-size'
 
 // ============================================================================
 // Image extensions
@@ -314,9 +314,8 @@ async function readCBZImage(
     const blob = await loader.loadBlob(filename, mimeType)
     if (!blob) throw new ParseError(`Failed to load ${filename}`, 'cbz')
 
-    const bytes = new Uint8Array(await blob.arrayBuffer())
-    const dimensions = readRasterImageDimensions(bytes) ?? { width: 1000, height: 1414 }
-    const src = createCBZImageURL(blob, bytes, mimeType, urlFactory)
+    const dimensions = await readRasterImageDimensionsFromBlobPrefix(blob) ?? { width: 1000, height: 1414 }
+    const src = await createCBZImageURL(blob, mimeType, urlFactory)
     if (isRevokableCBZImageURL(src)) imageURLs.add(src)
     const page = {
         index: pageIndex,
@@ -335,16 +334,16 @@ async function readCBZImage(
     return { page, image }
 }
 
-function createCBZImageURL(
+async function createCBZImageURL(
     blob: Blob,
-    bytes: Uint8Array,
     mimeType: string,
     urlFactory?: URLFactory,
-): string {
+): Promise<string> {
     if (urlFactory) return urlFactory.createURL(blob, mimeType)
     if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
         return URL.createObjectURL(blob)
     }
+    const bytes = new Uint8Array(await blob.arrayBuffer())
     return bytesToDataURI(bytes, mimeType)
 }
 

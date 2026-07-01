@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readRasterImageDimensions } from '../../src/core/image-size'
+import { readRasterImageDimensions, readRasterImageDimensionsFromBlobPrefix } from '../../src/core/image-size'
 
 describe('readRasterImageDimensions', () => {
     it('reads PNG dimensions', () => {
@@ -59,6 +59,28 @@ describe('readRasterImageDimensions', () => {
         expect(readRasterImageDimensions(vp8l)).toEqual({ width: 640, height: 480 })
         expect(readRasterImageDimensions(vp8x)).toEqual({ width: 300, height: 200 })
     })
+
+    it('reads dimensions from a Blob prefix without reading the full image', async () => {
+        const bytes = new Uint8Array(100_000)
+        bytes.set([0xff, 0xd8])
+        bytes.set([0xff, 0xe0, 0x13, 0x88], 2)
+        const sofOffset = 2 + 5000 + 2
+        bytes.set([
+            0xff, 0xc0, 0x00, 0x11, 0x08,
+            0x02, 0x58,
+            0x03, 0x20,
+            0x03, 0x01, 0x00, 0x00,
+            0x02, 0x00, 0x00,
+            0x03, 0x00, 0x00,
+        ], sofOffset)
+        const blob = createTrackingBlob(bytes)
+
+        await expect(readRasterImageDimensionsFromBlobPrefix(blob as Blob)).resolves.toEqual({ width: 800, height: 600 })
+        expect(blob.calls).toEqual([
+            [0, 4096],
+            [0, 16384],
+        ])
+    })
 })
 
 function fourCC(value: string): number[] {
@@ -88,4 +110,21 @@ function writeUint32BE(bytes: Uint8Array, offset: number, value: number): void {
     bytes[offset + 1] = (value >> 16) & 0xff
     bytes[offset + 2] = (value >> 8) & 0xff
     bytes[offset + 3] = value & 0xff
+}
+
+function createTrackingBlob(bytes: Uint8Array): { size: number; calls: Array<[number, number]>; slice: (start: number, end: number) => { arrayBuffer: () => Promise<ArrayBuffer> } } {
+    const calls: Array<[number, number]> = []
+    return {
+        size: bytes.byteLength,
+        calls,
+        slice(start: number, end: number) {
+            calls.push([start, end])
+            return {
+                async arrayBuffer() {
+                    const sliced = bytes.slice(start, end)
+                    return sliced.buffer.slice(sliced.byteOffset, sliced.byteOffset + sliced.byteLength)
+                },
+            }
+        },
+    }
 }

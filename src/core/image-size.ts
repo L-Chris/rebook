@@ -3,6 +3,8 @@ export interface ImageDimensions {
     height: number
 }
 
+const IMAGE_DIMENSION_PREFIX_SIZES = [4096, 16384, 65536, 262144] as const
+
 export function readRasterImageDimensions(data: ArrayBuffer | Uint8Array): ImageDimensions | null {
     const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -10,6 +12,19 @@ export function readRasterImageDimensions(data: ArrayBuffer | Uint8Array): Image
         ?? readJPEGDimensions(bytes, view)
         ?? readGIFDimensions(bytes, view)
         ?? readWebPDimensions(bytes, view)
+}
+
+export async function readRasterImageDimensionsFromBlobPrefix(blob: Blob): Promise<ImageDimensions | null> {
+    let lastReadSize = 0
+    for (const prefixSize of IMAGE_DIMENSION_PREFIX_SIZES) {
+        const readSize = Math.min(blob.size, prefixSize)
+        if (readSize <= lastReadSize) continue
+        const dimensions = readRasterImageDimensions(await blob.slice(0, readSize).arrayBuffer())
+        if (dimensions) return dimensions
+        lastReadSize = readSize
+        if (readSize >= blob.size) break
+    }
+    return null
 }
 
 function readPNGDimensions(bytes: Uint8Array, view: DataView): ImageDimensions | null {

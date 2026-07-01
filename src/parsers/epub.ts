@@ -21,7 +21,7 @@ import { normalizeLanguage, normalizeTitle, normalizePublisher } from '../core/m
 import { parseSimpleClassRuleIndex, mergeStyleDeclarations, extractImportURLs, parseStyleDeclarations, type SimpleClassRuleIndex } from '../core/css'
 import { getInputName, isBlobLike } from '../core/binary'
 import { debugRebook, isRebookDebugEnabled } from '../core/debug'
-import { readRasterImageDimensions } from '../core/image-size'
+import { readRasterImageDimensionsFromBlobPrefix } from '../core/image-size'
 import { getOrCreateCachedPromise, getOrCreatePromise } from '../core/promise-cache'
 import { createCachedReflowableAccessors } from '../core/section-cache'
 import { documentToNodes } from '../core/document'
@@ -149,6 +149,17 @@ function applyResolvedImageDimensions(element: XMLElement, natural: { width: num
     if (height && !widthDeclared) {
         element.setAttribute('width', String(Math.max(1, Math.round(height * natural.width / natural.height))))
     }
+}
+
+function shouldResolveImageNaturalSize(element: XMLElement): boolean {
+    const widthAttr = element.getAttribute('width')?.trim()
+    const heightAttr = element.getAttribute('height')?.trim()
+    const styleDeclarations = new Map(parseStyleDeclarations(element.getAttribute('style') ?? ''))
+    const styleWidth = parseImageDimensionAttribute(styleDeclarations.get('width'))
+    const styleHeight = parseImageDimensionAttribute(styleDeclarations.get('height'))
+    const widthDeclared = Boolean(widthAttr) || Boolean(styleWidth)
+    const heightDeclared = Boolean(heightAttr) || Boolean(styleHeight)
+    return !widthDeclared || !heightDeclared
 }
 
 function parseImageDimensionAttribute(value: string | undefined): number | undefined {
@@ -860,8 +871,8 @@ class ResourceLoader {
                 // axis, so layout can keep the real aspect ratio instead of using
                 // fallback block heights.
                 if (el.localName.toLowerCase() === 'img'
-                    && (!el.getAttribute('width') || !el.getAttribute('height'))
-                    && srcBefore) {
+                    && srcBefore
+                    && shouldResolveImageNaturalSize(el)) {
                     const imgHref = resolveURL(srcBefore, href)
                     const imgItem = this.findResourceItem(imgHref)
                     if (imgItem?.mediaType.startsWith('image/') && imgItem.mediaType !== MIME.SVG) {
@@ -932,8 +943,7 @@ class ResourceLoader {
                 try {
                     const blob = this.imageBlobCache.get(item.href) ?? await this.loadBlob(item.href)
                     if (!blob) return null
-                    const buf = await blob.arrayBuffer()
-                    const size = readRasterImageDimensions(buf)
+                    const size = await readRasterImageDimensionsFromBlobPrefix(blob)
                     return size?.width && size?.height ? size : null
                 } catch {
                     return null

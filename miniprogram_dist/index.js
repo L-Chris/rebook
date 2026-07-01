@@ -11810,11 +11810,24 @@ function extractImportURLs(css) {
   }
   return urls;
 }
+const IMAGE_DIMENSION_PREFIX_SIZES = [4096, 16384, 65536, 262144];
 function readRasterImageDimensions(data) {
   var _a2, _b2, _c;
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return (_c = (_b2 = (_a2 = readPNGDimensions(bytes, view)) != null ? _a2 : readJPEGDimensions(bytes, view)) != null ? _b2 : readGIFDimensions(bytes, view)) != null ? _c : readWebPDimensions(bytes, view);
+}
+async function readRasterImageDimensionsFromBlobPrefix(blob) {
+  let lastReadSize = 0;
+  for (const prefixSize of IMAGE_DIMENSION_PREFIX_SIZES) {
+    const readSize = Math.min(blob.size, prefixSize);
+    if (readSize <= lastReadSize) continue;
+    const dimensions = readRasterImageDimensions(await blob.slice(0, readSize).arrayBuffer());
+    if (dimensions) return dimensions;
+    lastReadSize = readSize;
+    if (readSize >= blob.size) break;
+  }
+  return null;
 }
 function readPNGDimensions(bytes, view) {
   if (bytes.length < 24 || bytes[0] !== 137 || bytes[1] !== 80 || bytes[2] !== 78 || bytes[3] !== 71) return null;
@@ -18003,6 +18016,17 @@ function applyResolvedImageDimensions(element, natural) {
     element.setAttribute("width", String(Math.max(1, Math.round(height * natural.width / natural.height))));
   }
 }
+function shouldResolveImageNaturalSize(element) {
+  var _a2, _b2, _c;
+  const widthAttr = (_a2 = element.getAttribute("width")) == null ? void 0 : _a2.trim();
+  const heightAttr = (_b2 = element.getAttribute("height")) == null ? void 0 : _b2.trim();
+  const styleDeclarations = new Map(parseStyleDeclarations((_c = element.getAttribute("style")) != null ? _c : ""));
+  const styleWidth = parseImageDimensionAttribute(styleDeclarations.get("width"));
+  const styleHeight = parseImageDimensionAttribute(styleDeclarations.get("height"));
+  const widthDeclared = Boolean(widthAttr) || Boolean(styleWidth);
+  const heightDeclared = Boolean(heightAttr) || Boolean(styleHeight);
+  return !widthDeclared || !heightDeclared;
+}
 function parseImageDimensionAttribute(value2) {
   if (!value2 || value2.endsWith("%")) return void 0;
   const match = value2.match(/^([\d.]+)(?:px)?$/);
@@ -18547,7 +18571,7 @@ class ResourceLoader {
       attrTasks.push((async () => {
         const srcBefore = el.getAttribute("src");
         await replace(el, "src");
-        if (el.localName.toLowerCase() === "img" && (!el.getAttribute("width") || !el.getAttribute("height")) && srcBefore) {
+        if (el.localName.toLowerCase() === "img" && srcBefore && shouldResolveImageNaturalSize(el)) {
           const imgHref = resolveURL(srcBefore, href);
           const imgItem = this.findResourceItem(imgHref);
           if ((imgItem == null ? void 0 : imgItem.mediaType.startsWith("image/")) && imgItem.mediaType !== MIME.SVG) {
@@ -18613,8 +18637,7 @@ class ResourceLoader {
         try {
           const blob = (_a2 = this.imageBlobCache.get(item.href)) != null ? _a2 : await this.loadBlob(item.href);
           if (!blob) return null;
-          const buf = await blob.arrayBuffer();
-          const size = readRasterImageDimensions(buf);
+          const size = await readRasterImageDimensionsFromBlobPrefix(blob);
           return (size == null ? void 0 : size.width) && (size == null ? void 0 : size.height) ? size : null;
         } catch (e) {
           return null;
@@ -19310,9 +19333,8 @@ async function readCBZImage(loader, filename, pageIndex, urlFactory, imageURLs) 
   const mimeType = getMimeTypeFromPath(filename);
   const blob = await loader.loadBlob(filename, mimeType);
   if (!blob) throw new ParseError(`Failed to load ${filename}`, "cbz");
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  const dimensions = (_a2 = readRasterImageDimensions(bytes)) != null ? _a2 : { width: 1e3, height: 1414 };
-  const src = createCBZImageURL(blob, bytes, mimeType, urlFactory);
+  const dimensions = (_a2 = await readRasterImageDimensionsFromBlobPrefix(blob)) != null ? _a2 : { width: 1e3, height: 1414 };
+  const src = await createCBZImageURL(blob, mimeType, urlFactory);
   if (isRevokableCBZImageURL(src)) imageURLs.add(src);
   const page2 = {
     index: pageIndex,
@@ -19330,11 +19352,12 @@ async function readCBZImage(loader, filename, pageIndex, urlFactory, imageURLs) 
   };
   return { page: page2, image };
 }
-function createCBZImageURL(blob, bytes, mimeType, urlFactory) {
+async function createCBZImageURL(blob, mimeType, urlFactory) {
   if (urlFactory) return urlFactory.createURL(blob, mimeType);
   if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
     return URL.createObjectURL(blob);
   }
+  const bytes = new Uint8Array(await blob.arrayBuffer());
   return bytesToDataURI(bytes, mimeType);
 }
 function revokeCBZImageURL(url, urlFactory) {
