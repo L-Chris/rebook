@@ -248,6 +248,28 @@ describe('Pretext pipeline', () => {
         expect(sup?.style?.verticalAlign).toBe('super')
     })
 
+    it('lifts common inheritable inline styles to the parent text block', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('p', {}, [
+                elementNode('span', { style: 'font-family: "PingFang SC"; font-size: 1em' }, [
+                    textNode('假设A'),
+                    elementNode('span', {}, [
+                        elementNode('sub', { style: 'font-size: 0.75em; vertical-align: sub' }, [
+                            textNode('4'),
+                        ]),
+                    ]),
+                    textNode('仍然成立。'),
+                ]),
+            ]),
+        ], { fontSize: 16, lineHeight: 1.6 })
+
+        expect(blocks).toHaveLength(1)
+        expect(blocks[0].style?.fontFamily).toBe('"PingFang SC"')
+        expect(blocks[0].segments.map(segment => segment.text).join('')).toBe('假设A4仍然成立。')
+        expect(blocks[0].segments[0]?.style?.fontFamily).toBe('"PingFang SC"')
+        expect(blocks[0].segments[1]?.style?.verticalAlign).toBe('sub')
+    })
+
     it('extracts image blocks with sizing and cover metadata', () => {
         const blocks = extractDocumentBlocks([
             elementNode('p', {}, [
@@ -301,6 +323,70 @@ describe('Pretext pipeline', () => {
         expect(imageSegment?.source?.attrs?.['data-rebook-inline-image-width']).toBe('14')
         expect(imageSegment?.source?.attrs?.['data-rebook-inline-image-height']).toBe('6')
         expect(imageSegment?.source?.attrs?.['data-rebook-inline-image-vertical-align']).toBe('middle')
+    })
+
+    it('keeps standalone text-sized images as inline image paragraphs', () => {
+        const blocks = extractDocumentBlocks([
+            elementNode('img', {
+                src: 'blob:small-formula',
+                'data-rebook-original-src': 'images/formula.jpg',
+                width: '34',
+                height: '14',
+                style: 'height: auto; width: 34px',
+            }),
+            elementNode('img', {
+                src: 'blob:small-formula-2',
+                'data-rebook-original-src': 'images/formula-2.jpg',
+                width: '36',
+                height: '15',
+                style: 'height: auto; width: 36px',
+            }),
+            elementNode('img', {
+                src: 'blob:wide-formula-fragment',
+                'data-rebook-original-src': 'images/wide-formula-fragment.jpg',
+                width: '132',
+                height: '15',
+                style: 'height: auto; width: 132px',
+            }),
+            elementNode('img', {
+                src: 'blob:block-formula',
+                'data-rebook-original-src': 'images/block-formula.jpg',
+                width: '34',
+                height: '14',
+                style: 'display: block; height: auto; width: 34px',
+            }),
+            elementNode('img', {
+                src: 'blob:wide-standalone-image',
+                'data-rebook-original-src': 'images/wide-standalone-image.jpg',
+                width: '150',
+                height: '15',
+                style: 'height: auto; width: 150px',
+            }),
+            elementNode('img', {
+                src: 'blob:chart',
+                'data-rebook-original-src': 'images/chart.jpg',
+                width: '525',
+                height: '375',
+                style: 'height: auto; width: 525px',
+            }),
+        ], { fontSize: 16, lineHeight: 1.5 })
+
+        expect(blocks.map(block => block.type)).toEqual(['paragraph', 'image', 'image', 'image'])
+        const imageSegments = blocks[0].segments.filter(segment => segment.source?.nodeType === 'img')
+        expect(imageSegments).toHaveLength(3)
+        expect(imageSegments.map(segment => segment.text).join('')).toBe('\uFFFC\uFFFC\uFFFC')
+        expect(imageSegments[0]?.extraWidth).toBe(34)
+        expect(imageSegments[0]?.source?.attrs?.['data-rebook-inline-image-width']).toBe('34')
+        expect(Number(imageSegments[0]?.source?.attrs?.['data-rebook-inline-image-height'])).toBeCloseTo(14)
+        expect(imageSegments[1]?.extraWidth).toBe(36)
+        expect(imageSegments[1]?.source?.attrs?.['data-rebook-inline-image-width']).toBe('36')
+        expect(Number(imageSegments[1]?.source?.attrs?.['data-rebook-inline-image-height'])).toBeCloseTo(15)
+        expect(imageSegments[2]?.extraWidth).toBe(132)
+        expect(imageSegments[2]?.source?.attrs?.['data-rebook-inline-image-width']).toBe('132')
+        expect(Number(imageSegments[2]?.source?.attrs?.['data-rebook-inline-image-height'])).toBeCloseTo(15)
+        expect(blocks[1].image?.src).toBe('blob:block-formula')
+        expect(blocks[2].image?.src).toBe('blob:wide-standalone-image')
+        expect(blocks[3].image?.src).toBe('blob:chart')
     })
 
     it('extracts images nested inside layout tables', () => {

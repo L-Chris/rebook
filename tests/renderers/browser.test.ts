@@ -543,6 +543,51 @@ describe('BrowserRenderer', () => {
         renderer.destroy()
     })
 
+    it('does not wrap inherited paragraph text segments in redundant spans', async () => {
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '120')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 120,
+                format: 'xhtml',
+                load: () => '',
+                getBlocks: () => [{
+                    id: 'body',
+                    type: 'paragraph',
+                    style: { fontFamily: '"PingFang SC"', fontSize: 16, lineHeight: 1.6 },
+                    segments: [
+                        { text: '假设A', style: { fontFamily: '"PingFang SC"', fontSize: 16, lineHeight: 1.6 } },
+                        { text: '4', style: { fontFamily: '"PingFang SC"', fontSize: 9, lineHeight: 1.6, verticalAlign: 'sub' } },
+                        { text: '仍然成立。', style: { fontFamily: '"PingFang SC"', fontSize: 16, lineHeight: 1.6 } },
+                    ],
+                }],
+            }],
+        }
+
+        const renderer = new BrowserRenderer({
+            container,
+            styles: { fontSize: '16px', lineHeight: 1.6, maxInlineSize: '260px' },
+        })
+
+        await renderer.open(book)
+        await renderer.goTo(0)
+
+        const paragraph = container.querySelector('[data-rebook-block="true"][data-block-id="body"]') as HTMLParagraphElement | null
+        expect(paragraph).toBeTruthy()
+        expect(paragraph?.style.fontFamily).toBe('"PingFang SC"')
+        expect(paragraph?.childNodes).toHaveLength(3)
+        expect(paragraph?.childNodes[0]?.nodeType).toBe(3)
+        expect(paragraph?.childNodes[1]?.nodeName).toBe('SPAN')
+        expect((paragraph?.childNodes[1] as HTMLElement | undefined)?.style.verticalAlign).toBe('sub')
+        expect(paragraph?.childNodes[2]?.nodeType).toBe(3)
+
+        renderer.destroy()
+    })
+
     it('renders reader marks as classes on matching browser blocks', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')

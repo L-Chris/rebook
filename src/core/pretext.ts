@@ -183,6 +183,19 @@ const DEFAULT_STYLE = {
     lineHeight: 1.6,
 } satisfies Required<Pick<TextStyle, 'fontFamily' | 'fontSize' | 'lineHeight'>>
 
+const TEXT_SIZED_IMAGE_MAX_HEIGHT_LINES = 1.25
+const TEXT_SIZED_IMAGE_MAX_WIDTH_LINES = 5.75
+const INHERITABLE_TEXT_STYLE_KEYS = [
+    'fontFamily',
+    'fontSize',
+    'fontWeight',
+    'fontStyle',
+    'fontVariant',
+    'color',
+    'textDecoration',
+    'letterSpacing',
+] as const satisfies readonly (keyof TextStyle)[]
+
 /**
  * Installs the canvas shape expected by @chenglou/pretext in runtimes where
  * OffscreenCanvas is exposed by a host adapter instead of as a browser global.
@@ -270,7 +283,10 @@ export function extractDocumentBlocks(
         if (!normalized.some(segment => segment.text.trim())) return
         const preset = getBlockPreset(type, baseStyle, depth)
         const attrs = getBlockAttrs(node)
-        const blockStyle = { ...(resolvedBlockStyle ?? { ...preset.style, ...parseNodeTextStyle(attrs, baseStyle) }) }
+        const blockStyle = {
+            ...(resolvedBlockStyle ?? { ...preset.style, ...parseNodeTextStyle(attrs, baseStyle) }),
+            ...getCommonInheritableSegmentStyle(normalized),
+        }
         const segmentTextAlign = getConsistentSegmentTextAlign(normalized)
         if (!blockStyle.textAlign && segmentTextAlign) blockStyle.textAlign = segmentTextAlign
         const id = attrs?.id ?? `${type}-${nextId++}`
@@ -309,6 +325,74 @@ export function extractDocumentBlocks(
             image,
             segments: [],
         })
+    }
+
+    const pushInlineImageParagraph = (
+        items: Array<{ node: DocumentNode; image: TextImage }>,
+        inherited: TextStyle,
+    ) => {
+        const first = items[0]
+        if (!first) return
+        const node = first.node
+        const blockStyle = resolveBlockTextStyle('paragraph', node, undefined, inherited)
+        pushBlock('paragraph', node, items.map(item => {
+            const dimensions = getInlineImageDimensions(item.image, blockStyle)
+            return {
+                text: '\uFFFC',
+                style: blockStyle,
+                break: 'never' as const,
+                extraWidth: dimensions.width,
+                source: {
+                    nodeType: 'img',
+                    attrs: {
+                        ...(item.node.attrs ?? {}),
+                        'data-rebook-inline-image-width': String(dimensions.width),
+                        'data-rebook-inline-image-height': String(dimensions.height),
+                        ...(dimensions.verticalAlign ? { 'data-rebook-inline-image-vertical-align': dimensions.verticalAlign } : {}),
+                    },
+                },
+            }
+        }), undefined, blockStyle)
+    }
+
+    const getStandaloneInlineImage = (
+        node: DocumentNode,
+        inherited: TextStyle,
+    ): { node: DocumentNode; image: TextImage } | null => {
+        if (isTextNode(node)) return null
+        if (!isImageNode(node.type.toLowerCase(), node)) return null
+        const image = getImageData(node, coverImageSrcs)
+        return image && isStandaloneInlineImage(image, inherited) ? { node, image } : null
+    }
+
+    const walkInlineAwareChildren = (
+        children: readonly DocumentNode[],
+        inherited: TextStyle,
+        listDepth: number,
+    ) => {
+        for (let index = 0; index < children.length;) {
+            const inlineImage = getStandaloneInlineImage(children[index]!, inherited)
+            if (inlineImage) {
+                const group = [inlineImage]
+                index += 1
+                while (index < children.length) {
+                    let nextIndex = index
+                    while (nextIndex < children.length && isWhitespaceTextNode(children[nextIndex]!)) {
+                        nextIndex += 1
+                    }
+                    const next = nextIndex < children.length
+                        ? getStandaloneInlineImage(children[nextIndex]!, inherited)
+                        : null
+                    if (!next) break
+                    group.push(next)
+                    index = nextIndex + 1
+                }
+                pushInlineImageParagraph(group, inherited)
+                continue
+            }
+            walkBlock(children[index]!, inherited, listDepth)
+            index += 1
+        }
     }
 
     const pushBreakBlock = (node: DocumentNode) => {
@@ -392,7 +476,12 @@ export function extractDocumentBlocks(
         }
 
         if (isImageNode(type, node)) {
-            pushImageBlock(node)
+            const image = getImageData(node, coverImageSrcs)
+            if (image && isStandaloneInlineImage(image, inherited)) {
+                pushInlineImageParagraph([{ node, image }], inherited)
+            } else {
+                pushImageBlock(node)
+            }
             return
         }
 
@@ -482,10 +571,10 @@ export function extractDocumentBlocks(
         }
 
         const nextInherited = applyNodeStyle(type, inherited, node.attrs)
-        for (const child of node.children ?? []) walkBlock(child, nextInherited, listDepth)
+        walkInlineAwareChildren(node.children ?? [], nextInherited, listDepth)
     }
 
-    for (const node of nodes) walkBlock(node, { ...baseStyle })
+    walkInlineAwareChildren(nodes, { ...baseStyle }, 0)
 
     return blocks
 }
@@ -1182,7 +1271,7 @@ function collectInlineSegments(
                         },
                     },
                 })
-            } else if (image && isInlineImageNode(current, node)) {
+            } else if (image && isInlineImageNode(current, node, style)) {
                 const dimensions = getInlineImageDimensions(image, style)
                 segments.push({
                     text: '\uFFFC',
@@ -1511,7 +1600,7 @@ function isFootnoteMarkerImage(image: TextImage): boolean {
         || token === 'footnote-ref')
 }
 
-function isInlineImageNode(node: DocumentNode, inlineRoot: DocumentNode): boolean {
+function isInlineImageNode(node: DocumentNode, inlineRoot: DocumentNode, inherited: TextStyle = DEFAULT_STYLE): boolean {
     if (isTextNode(node)) return false
     const image = getImageData(node, new Set())
     if (!image) return false
@@ -1522,6 +1611,32 @@ function isInlineImageNode(node: DocumentNode, inlineRoot: DocumentNode): boolea
     return hasReadableText(inlineRoot)
 }
 
+function isStandaloneInlineImage(image: TextImage, inherited: TextStyle): boolean {
+    if (isFootnoteMarkerImage(image)) return false
+    if (image.style?.display === 'block' || image.style?.display === 'none') return false
+    return isTextSizedImage(image, inherited)
+}
+
+function isTextSizedImage(image: TextImage, inherited: TextStyle): boolean {
+    if (image.isCover) return false
+    const fontSize = inherited.fontSize ?? DEFAULT_STYLE.fontSize
+    const lineHeight = fontSize * (inherited.lineHeight ?? DEFAULT_STYLE.lineHeight)
+    const naturalRatio = image.aspectRatio ?? (image.width && image.height ? image.width / image.height : undefined)
+    const width = image.style?.width
+        ?? image.width
+        ?? (image.style?.height && naturalRatio ? image.style.height * naturalRatio : undefined)
+    const height = image.style?.height
+        ?? (width && naturalRatio ? width / naturalRatio : undefined)
+        ?? image.height
+    if (!height) return false
+    return height <= lineHeight * TEXT_SIZED_IMAGE_MAX_HEIGHT_LINES
+        && (!width || width <= lineHeight * TEXT_SIZED_IMAGE_MAX_WIDTH_LINES)
+}
+
+function isWhitespaceTextNode(node: DocumentNode): boolean {
+    return isTextNode(node) && !node.text.trim()
+}
+
 function hasReadableText(node: DocumentNode): boolean {
     if (isTextNode(node)) return Boolean(node.text.trim())
     if (isFootnoteContentNode(node)) return false
@@ -1529,6 +1644,25 @@ function hasReadableText(node: DocumentNode): boolean {
         if (hasReadableText(child)) return true
     }
     return false
+}
+
+function getCommonInheritableSegmentStyle(segments: readonly TextSegment[]): TextStyle {
+    const textSegments = segments.filter(segment =>
+        segment.source?.nodeType !== 'img'
+        && segment.source?.nodeType !== 'br'
+        && Boolean(segment.text.trim())
+    )
+    if (textSegments.length === 0) return {}
+
+    const style: TextStyle = {}
+    for (const key of INHERITABLE_TEXT_STYLE_KEYS) {
+        const first = textSegments[0]?.style?.[key]
+        if (first == null) continue
+        if (textSegments.every(segment => segment.style?.[key] === first)) {
+            ;(style as Record<string, unknown>)[key] = first
+        }
+    }
+    return style
 }
 
 function getInlineImageDimensions(

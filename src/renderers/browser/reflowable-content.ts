@@ -23,6 +23,17 @@ import {
 import type { BrowserPageSurface, BrowserPageSurfaceLayer } from './compositor'
 
 const REBOOK_ROLE_ATTR = 'data-rebook-role'
+const INLINE_TEXT_STYLE_KEYS = [
+    'fontFamily',
+    'fontSize',
+    'fontWeight',
+    'fontStyle',
+    'fontVariant',
+    'color',
+    'textDecoration',
+    'verticalAlign',
+    'letterSpacing',
+] as const satisfies readonly (keyof TextStyle)[]
 
 export interface BrowserReflowableContentRenderContext {
     readonly sectionIndex: number
@@ -253,9 +264,10 @@ function createSemanticBlock(block: PreparedTextBlock, context: BrowserReflowabl
     const element = document.createElement(tagName)
     applySemanticBlockDataset(element, block)
     applySemanticBlockStyle(element, block, context)
+    const inheritedTextStyle = getSemanticBlockTextStyle(block, context)
 
     for (const segment of source.segments) {
-        element.appendChild(createSemanticInlineSegment(segment, context))
+        element.appendChild(createSemanticInlineSegment(segment, context, inheritedTextStyle))
     }
 
     return element
@@ -264,6 +276,7 @@ function createSemanticBlock(block: PreparedTextBlock, context: BrowserReflowabl
 function createSemanticInlineSegment(
     segment: TextSegment,
     context: BrowserReflowableContentRenderContext,
+    inheritedTextStyle: TextStyle,
 ): Node {
     if (isInlineImageSegment(segment)) {
         const img = document.createElement('img')
@@ -284,25 +297,32 @@ function createSemanticInlineSegment(
     }
 
     if (segment.source?.nodeType === 'br' || segment.text.includes('\n')) {
-        return createSemanticLineBreakFragment(segment, context)
+        return createSemanticLineBreakFragment(segment, context, inheritedTextStyle)
     }
 
-    return createSemanticTextSpan(segment.text, { ...context.baseTextStyle, ...segment.style })
+    return createSemanticTextNode(segment.text, { ...context.baseTextStyle, ...segment.style }, inheritedTextStyle)
 }
 
 function createSemanticLineBreakFragment(
     segment: TextSegment,
     context: BrowserReflowableContentRenderContext,
+    inheritedTextStyle: TextStyle,
 ): DocumentFragment {
     const fragment = document.createDocumentFragment()
     const parts = segment.text.split('\n')
     parts.forEach((part, index) => {
         if (index > 0) fragment.appendChild(document.createElement('br'))
         if (part) {
-            fragment.appendChild(createSemanticTextSpan(part, { ...context.baseTextStyle, ...segment.style }))
+            fragment.appendChild(createSemanticTextNode(part, { ...context.baseTextStyle, ...segment.style }, inheritedTextStyle))
         }
     })
     return fragment
+}
+
+function createSemanticTextNode(text: string, style: TextStyle, inheritedStyle: TextStyle): Node {
+    const delta = getTextStyleDelta(style, inheritedStyle)
+    if (Object.keys(delta).length === 0) return document.createTextNode(text)
+    return createSemanticTextSpan(text, delta)
 }
 
 function createSemanticTextSpan(text: string, style: TextStyle): HTMLSpanElement {
@@ -451,19 +471,20 @@ function applySemanticBlockStyle(
     context: BrowserReflowableContentRenderContext,
 ): void {
     const style = block.block.style ?? {}
-    const fontSize = style.fontSize ?? getBaseFontSize(context)
+    const inheritedStyle = getSemanticBlockTextStyle(block, context)
+    const fontSize = inheritedStyle.fontSize ?? getBaseFontSize(context)
     const lineHeight = getCSSLineHeight(style.lineHeight, fontSize, context.lineHeightPixels)
     const fallbackGapAfter = getSemanticBlockFallbackGapAfter(block.block.type, context.lineHeightPixels)
     element.style.boxSizing = 'border-box'
     element.style.margin = `${block.block.blockGapBefore ?? 0}px 0 ${block.block.blockGapAfter ?? fallbackGapAfter}px`
     element.style.padding = '0'
-    element.style.fontFamily = style.fontFamily ?? context.styles.fontFamily ?? context.baseTextStyle.fontFamily ?? 'system-ui, -apple-system, Georgia, serif'
+    element.style.fontFamily = inheritedStyle.fontFamily ?? 'system-ui, -apple-system, Georgia, serif'
     element.style.fontSize = `${fontSize}px`
     element.style.lineHeight = `${lineHeight}px`
     element.style.textAlign = getTextAlign(style.textAlign)
     element.style.whiteSpace = block.block.type === 'pre' ? 'pre-wrap' : 'normal'
     element.style.overflowWrap = 'anywhere'
-    element.style.color = style.color ?? context.styles.color ?? 'inherit'
+    element.style.color = inheritedStyle.color ?? 'inherit'
     if (block.block.type === 'blockquote') {
         const inset = parseBlockquoteInset(block.block.attrs?.width, fontSize) ?? fontSize * 1.5
         element.style.paddingInlineStart = `${inset}px`
@@ -472,7 +493,33 @@ function applySemanticBlockStyle(
     }
     if (style.fontWeight) element.style.fontWeight = style.fontWeight
     if (style.fontStyle) element.style.fontStyle = style.fontStyle
+    if (style.fontVariant) element.style.fontVariant = style.fontVariant
     if (style.textDecoration) element.style.textDecoration = style.textDecoration
+    if (style.letterSpacing) element.style.letterSpacing = `${style.letterSpacing}px`
+}
+
+function getSemanticBlockTextStyle(
+    block: PreparedTextBlock,
+    context: BrowserReflowableContentRenderContext,
+): TextStyle {
+    const style = block.block.style ?? {}
+    return {
+        ...context.baseTextStyle,
+        ...style,
+        fontFamily: style.fontFamily ?? context.styles.fontFamily ?? context.baseTextStyle.fontFamily,
+        fontSize: style.fontSize ?? getBaseFontSize(context),
+        color: style.color ?? context.styles.color,
+    }
+}
+
+function getTextStyleDelta(style: TextStyle, inheritedStyle: TextStyle): TextStyle {
+    const delta: TextStyle = {}
+    for (const key of INLINE_TEXT_STYLE_KEYS) {
+        const value = style[key]
+        if (value == null || value === inheritedStyle[key]) continue
+        ;(delta as Record<string, unknown>)[key] = value
+    }
+    return delta
 }
 
 function getBaseFontSize(context: BrowserReflowableContentRenderContext): number {
