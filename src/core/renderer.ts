@@ -12,12 +12,30 @@ import type { ReaderThemeInput } from './theme'
 import type { PageSurface } from './page-surface'
 import type { ReflowablePageFitMode } from './reflowable-page-model'
 
+export type RendererDefaultFontFamily = 'serif' | 'sans-serif'
+
+/** Semantic font stacks used by reflowable renderers. */
+export interface RendererFontFamilies {
+    /** Body font category. */
+    default: RendererDefaultFontFamily
+    /** Complete CSS serif font stack. */
+    serif: string
+    /** Complete CSS sans-serif font stack. */
+    sansSerif: string
+    /** Complete CSS monospace font stack. */
+    monospace: string
+}
+
 /**
  * Style options for the renderer.
  */
 export interface RendererStyles {
-    /** Font family */
+    /** Legacy body font family. Prefer fontFamilies for semantic font selection. */
     fontFamily?: string
+    /** Semantic serif, sans-serif, and monospace font stacks. */
+    fontFamilies?: RendererFontFamilies
+    /** Replace font families declared by reflowable books. */
+    overrideBookFonts?: boolean
     /** Font size (CSS value) */
     fontSize?: string | number
     /** Line height (number or CSS value) */

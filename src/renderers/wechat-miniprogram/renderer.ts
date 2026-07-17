@@ -9,6 +9,7 @@ import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, Resol
 import type { LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from '../../core/renderer'
 import { mergeRendererStyles, resolveRendererStyles, type ReaderThemeInput } from '../../core/theme'
 import { getBlockWindowPrefetchPageCount } from '../../core/block-window'
+import { getRendererDefaultFontFamily, resolveTextBlockFontFamilies } from '../../core/font-family'
 import { resolveReflowableLineMarks } from '../../core/mark-resolver'
 import { ReaderMarkStore, RendererEventDispatcher } from '../../core/renderer-state'
 import { flattenTOC } from '../../core/toc'
@@ -449,7 +450,7 @@ export class WechatMiniProgramRenderer implements Renderer {
         if (index < 0 || index >= this.sections.length) return
         const loadId = ++this.activeLoadId
         const section = this.sections[index]
-        const blocks = await this.loadTextBlocks(section)
+        const blocks = resolveTextBlockFontFamilies(await this.loadTextBlocks(section), this.styles)
         if (loadId !== this.activeLoadId) return
         const segments = blocks.flatMap(block => block.segments)
 
@@ -926,7 +927,7 @@ export class WechatMiniProgramRenderer implements Renderer {
     private getBaseTextStyle(): TextStyle {
         const fontSize = parseCSSPixels(this.styles.fontSize, 16)
         return {
-            fontFamily: this.styles.fontFamily ?? 'system-ui, "Noto Serif CJK SC", "Noto Serif SC", Georgia, serif',
+            fontFamily: getRendererDefaultFontFamily(this.styles),
             fontSize,
             lineHeight: getLineHeightMultiplier(this.styles.lineHeight, fontSize),
             color: this.styles.color,

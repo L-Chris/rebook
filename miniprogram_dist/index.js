@@ -25323,6 +25323,10 @@ function mergeRendererStyles(current, patch) {
 		...current,
 		...patch
 	};
+	if (patch.fontFamilies !== void 0) next.fontFamilies = {
+		...current.fontFamilies,
+		...patch.fontFamilies
+	};
 	if (patch.theme !== void 0) {
 		if (patch.color === void 0) delete next.color;
 		if (patch.background === void 0) delete next.background;
@@ -25351,6 +25355,92 @@ function normalizeBlockWindowPageCount(value) {
 }
 function isBlockWindowConsumer(value) {
 	return !!value && typeof value === "object" && typeof value.onBlockWindow === "function";
+}
+//#endregion
+//#region src/core/font-family.ts
+var DEFAULT_SERIF_STACK = "system-ui, -apple-system, \"Noto Serif CJK SC\", \"Noto Serif SC\", Georgia, serif";
+var DEFAULT_MONOSPACE_STACK = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+function getRendererDefaultFontFamily(styles) {
+	const families = styles.fontFamilies;
+	if (!families) return styles.fontFamily ?? DEFAULT_SERIF_STACK;
+	return families.default === "sans-serif" ? families.sansSerif : families.serif;
+}
+function resolveRendererFontFamily(sourceFamily, styles, role = "content") {
+	const families = styles.fontFamilies;
+	if (role === "monospace") return families?.monospace ?? sourceFamily ?? DEFAULT_MONOSPACE_STACK;
+	const defaultFamily = getRendererDefaultFontFamily(styles);
+	if (styles.overrideBookFonts) return defaultFamily;
+	if (!sourceFamily) return defaultFamily;
+	if (!families) return sourceFamily;
+	return splitFontFamilyList(sourceFamily).map((token) => {
+		const generic = getGenericFontFamily(token);
+		return generic ? getSemanticFontStack(generic, families) : token;
+	}).join(", ");
+}
+function resolveTextBlockFontFamilies(blocks, styles) {
+	return blocks.map((block) => {
+		const blockRole = block.type === "pre" ? "monospace" : "content";
+		const blockFontFamily = resolveRendererFontFamily(block.style?.fontFamily, styles, blockRole);
+		return {
+			...block,
+			style: withFontFamily(block.style, blockFontFamily),
+			segments: block.segments.map((segment) => resolveTextSegmentFontFamily(segment, styles, isMonospaceSegment(segment) ? "monospace" : blockRole, block.style?.fontFamily))
+		};
+	});
+}
+function resolveTextSegmentFontFamily(segment, styles, role, inheritedFontFamily) {
+	const family = resolveRendererFontFamily(segment.style?.fontFamily ?? inheritedFontFamily, styles, role);
+	return {
+		...segment,
+		style: withFontFamily(segment.style, family)
+	};
+}
+function withFontFamily(style, fontFamily) {
+	return {
+		...style,
+		fontFamily
+	};
+}
+function isMonospaceSegment(segment) {
+	const nodeType = segment.source?.nodeType?.toLowerCase();
+	return nodeType === "code" || nodeType === "kbd" || nodeType === "pre" || nodeType === "samp";
+}
+function getSemanticFontStack(family, families) {
+	if (family === "monospace") return families.monospace;
+	if (family === "sans-serif") return families.sansSerif;
+	return families.serif;
+}
+function getGenericFontFamily(value) {
+	const normalized = value.trim().replace(/^(['"])(.*)\1$/, "$2").toLowerCase();
+	if (normalized === "monospace" || normalized === "ui-monospace") return "monospace";
+	if (normalized === "sans-serif" || normalized === "ui-sans-serif" || normalized === "system-ui") return "sans-serif";
+	if (normalized === "serif" || normalized === "ui-serif") return "serif";
+	return null;
+}
+function splitFontFamilyList(value) {
+	const result = [];
+	let start = 0;
+	let quote = "";
+	let depth = 0;
+	for (let index = 0; index < value.length; index += 1) {
+		const char = value[index];
+		if (quote) {
+			if (char === quote && value[index - 1] !== "\\") quote = "";
+			continue;
+		}
+		if (char === "\"" || char === "'") {
+			quote = char;
+			continue;
+		}
+		if (char === "(") depth += 1;
+		else if (char === ")") depth = Math.max(0, depth - 1);
+		else if (char === "," && depth === 0) {
+			result.push(value.slice(start, index).trim());
+			start = index + 1;
+		}
+	}
+	result.push(value.slice(start).trim());
+	return result.filter(Boolean);
 }
 //#endregion
 //#region src/core/location.ts
@@ -26071,7 +26161,7 @@ var WechatMiniProgramRenderer = class {
 		if (index < 0 || index >= this.sections.length) return;
 		const loadId = ++this.activeLoadId;
 		const section = this.sections[index];
-		const blocks = await this.loadTextBlocks(section);
+		const blocks = resolveTextBlockFontFamilies(await this.loadTextBlocks(section), this.styles);
 		if (loadId !== this.activeLoadId) return;
 		const segments = blocks.flatMap((block) => block.segments);
 		this.prepared = blocks.length > 0 ? prepareBlocks(blocks, { baseStyle: this.getBaseTextStyle() }) : prepare(segments, { baseStyle: this.getBaseTextStyle() });
@@ -26483,7 +26573,7 @@ var WechatMiniProgramRenderer = class {
 	getBaseTextStyle() {
 		const fontSize = parseCSSPixels(this.styles.fontSize, 16);
 		return {
-			fontFamily: this.styles.fontFamily ?? "system-ui, \"Noto Serif CJK SC\", \"Noto Serif SC\", Georgia, serif",
+			fontFamily: getRendererDefaultFontFamily(this.styles),
 			fontSize,
 			lineHeight: getLineHeightMultiplier(this.styles.lineHeight, fontSize),
 			color: this.styles.color

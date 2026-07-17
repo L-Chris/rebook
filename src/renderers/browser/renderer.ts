@@ -9,6 +9,7 @@ import type { LayoutMode, NavigationDirection, ReaderMark, RendererConfig, Rende
 import { mergeRendererStyles, resolveRendererStyles, type ReaderThemeInput } from '../../core/theme'
 import { debugRebook } from '../../core/debug'
 import { getBlockWindowPrefetchPageCount } from '../../core/block-window'
+import { getRendererDefaultFontFamily, resolveTextBlockFontFamilies } from '../../core/font-family'
 import { RendererEventDispatcher } from '../../core/renderer-state'
 import { flattenTOC } from '../../core/toc'
 import { SectionProgress } from '../../utils/progress'
@@ -407,7 +408,7 @@ export class BrowserRenderer implements BrowserContentEngine {
         if (index < 0 || index >= this.sections.length) return
         const loadId = ++this.activeLoadId
         const section = this.sections[index]
-        const blocks = await this.loadTextBlocks(section)
+        const blocks = resolveTextBlockFontFamilies(await this.loadTextBlocks(section), this.styles)
         if (loadId !== this.activeLoadId) return
         const segments = blocks.flatMap(block => block.segments)
 
@@ -809,7 +810,7 @@ export class BrowserRenderer implements BrowserContentEngine {
 
     private getBaseTextStyle(): TextStyle {
         return {
-            fontFamily: this.styles.fontFamily ?? 'system-ui, -apple-system, "Noto Serif CJK SC", "Noto Serif SC", Georgia, serif',
+            fontFamily: getRendererDefaultFontFamily(this.styles),
             fontSize: parseCSSPixels(this.styles.fontSize, 16),
             lineHeight: getLineHeightMultiplier(this.styles.lineHeight, parseCSSPixels(this.styles.fontSize, 16)),
             color: this.styles.color,

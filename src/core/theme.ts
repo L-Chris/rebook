@@ -92,6 +92,12 @@ export function resolveRendererStyles(styles: RendererStyles = {}): RendererStyl
 
 export function mergeRendererStyles(current: RendererStyles, patch: RendererStyles): RendererStyles {
     const next: RendererStyles = { ...current, ...patch }
+    if (patch.fontFamilies !== undefined) {
+        next.fontFamilies = {
+            ...current.fontFamilies,
+            ...patch.fontFamilies,
+        }
+    }
     if (patch.theme !== undefined) {
         if (patch.color === undefined) delete next.color
         if (patch.background === undefined) delete next.background

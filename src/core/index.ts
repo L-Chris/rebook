@@ -18,7 +18,15 @@ export {
     firstSectionsSelection,
     isBook,
 } from './exporter'
-export { type Renderer, type RendererConfig, type RendererStyles, type LayoutMode, type RendererFactory } from './renderer'
+export {
+    type Renderer,
+    type RendererConfig,
+    type RendererStyles,
+    type RendererDefaultFontFamily,
+    type RendererFontFamilies,
+    type LayoutMode,
+    type RendererFactory,
+} from './renderer'
 export {
     BUILT_IN_READER_THEMES,
     mergeRendererStyles,

@@ -157,6 +157,8 @@ export type {
     Renderer,
     RendererConfig,
     RendererStyles,
+    RendererDefaultFontFamily,
+    RendererFontFamilies,
     ReaderMark,
     LayoutMode,
     RendererFactory,
