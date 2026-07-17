@@ -328,6 +328,7 @@ async function readCBZImage(
         width: dimensions.width,
         height: dimensions.height,
         src,
+        blob,
         mimeType,
         alt: filename,
     }

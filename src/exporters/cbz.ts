@@ -11,6 +11,7 @@ import type { Exporter, ExportOptions, ExportSelection } from '../core/exporter'
 import { selectSections } from './section-selection'
 import {
     parseDataURI,
+    toBytes,
     extensionFromMime,
     loadReferencedResource,
     resolveSectionTitle,
@@ -84,6 +85,18 @@ async function createCBZ(
                 entries.push({
                     filename: `page${pageNum}${ext}`,
                     data: loaded.bytes,
+                })
+                continue
+            }
+            // Fixed-document parsers may use an opaque object URL for display.
+            // Prefer the original payload when that URL is not independently resolvable.
+            const pageImage = await book.fixedDocument?.getPageImage?.(entry.sourceIndex)
+            if (pageImage?.blob) {
+                const mimeType = pageImage.mimeType || pageImage.blob.type
+                const ext = extensionFromMime(mimeType, pageImage.src)
+                entries.push({
+                    filename: `page${pageNum}${ext}`,
+                    data: await toBytes(pageImage.blob),
                 })
                 continue
             }

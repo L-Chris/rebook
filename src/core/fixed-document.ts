@@ -63,6 +63,8 @@ export interface FixedPageImage {
     readonly width: number
     readonly height: number
     readonly src: string
+    /** Original image payload when the fixed document can expose it directly. */
+    readonly blob?: Blob
     readonly mimeType?: string
     readonly alt?: string
 }

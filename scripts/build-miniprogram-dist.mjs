@@ -14,16 +14,16 @@ await build({
   build: {
     emptyOutDir: false,
     outDir: out,
-    target: 'es2018',
+    target: 'es2020',
     minify: false,
     lib: {
       entry: resolve('src/miniprogram.ts'),
       formats: ['es'],
       fileName: () => 'index.js',
     },
-    rollupOptions: {
+    rolldownOptions: {
       output: {
-        inlineDynamicImports: true,
+        codeSplitting: false,
       },
     },
   },

@@ -1,14 +1,7 @@
 import { defineConfig } from 'vite'
 import { resolve } from 'path'
-import dts from 'vite-plugin-dts'
 
 export default defineConfig({
-  plugins: [
-    dts({
-      include: ['src/**/*.ts'],
-      outDir: 'dist',
-    }),
-  ],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
@@ -61,7 +54,7 @@ export default defineConfig({
       },
       formats: ['es'],
     },
-    rollupOptions: {
+    rolldownOptions: {
       external: [
         /^node:/,
         '@napi-rs/canvas',
@@ -70,7 +63,7 @@ export default defineConfig({
         'zod/v4',
       ],
     },
-    target: 'es2018',
+    target: 'es2020',
     minify: false,
   },
 })
