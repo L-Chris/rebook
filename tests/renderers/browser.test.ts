@@ -29,8 +29,28 @@ import { makeSimplePdf } from '../fixtures/pdf-fixture'
 import { createTestCBZ } from '../fixtures/cbz-fixture'
 
 class MockResizeObserver {
-    observe() {}
-    disconnect() {}
+    static readonly instances: MockResizeObserver[] = []
+    private target: Element | null = null
+
+    constructor(private readonly callback: ResizeObserverCallback) {
+        MockResizeObserver.instances.push(this)
+    }
+
+    observe(target: Element) {
+        this.target = target
+    }
+
+    disconnect() {
+        this.target = null
+    }
+
+    trigger() {
+        if (!this.target) return
+        this.callback([{
+            target: this.target,
+            contentRect: this.target.getBoundingClientRect(),
+        } as ResizeObserverEntry], this as unknown as ResizeObserver)
+    }
 }
 
 interface TestCanvasLike {
@@ -90,6 +110,7 @@ function createTestCanvasContext(canvas: TestCanvasLike) {
 }
 
 beforeEach(() => {
+    MockResizeObserver.instances.length = 0
     const { window } = parseHTML('<!doctype html><html><body></body></html>')
     vi.stubGlobal('window', window)
     vi.stubGlobal('document', window.document)
@@ -1029,6 +1050,64 @@ describe('BrowserRenderer', () => {
             location: { type: 'fixed', format: 'pdf', pageIndex: 1 },
         })
         expect(container.querySelector('[data-rebook-annotation="true"]')).toBeNull()
+
+        reader.destroy()
+    })
+
+    it('rerenders the current fixed page immediately when its container resizes', async () => {
+        const container = document.createElement('div')
+        document.body.appendChild(container)
+
+        const book: Book = {
+            sections: [],
+            pageList: [{ label: '1', href: 'pdf:page:0' }],
+            fixedDocument: {
+                kind: 'fixed-document',
+                format: 'pdf',
+                pageCount: 1,
+                getPage: () => ({ index: 0, width: 300, height: 400 }),
+                getPages: () => [{ index: 0, width: 300, height: 400 }],
+                getPageText: () => ({
+                    pageIndex: 0,
+                    width: 300,
+                    height: 400,
+                    text: 'Resizable fixed page',
+                    runs: [],
+                }),
+            },
+        }
+
+        const reader = createReader({
+            container,
+            maxColumnCount: 1,
+            styles: { margin: '0px' },
+        })
+        const resizeReasons: string[] = []
+        reader.on('relocate', event => {
+            if (event.reason === 'resize') resizeReasons.push(event.reason)
+        })
+
+        await reader.openBook(book)
+        const initialFrame = container.querySelector('[data-rebook-page-surface="true"]') as HTMLElement
+        const initialWidth = initialFrame.style.width
+        const scroller = container.querySelector('[data-rebook-viewport-scroller="true"]') as HTMLElement
+        scroller.setAttribute('data-width', '600')
+        scroller.setAttribute('data-height', '800')
+
+        const observer = MockResizeObserver.instances.at(-1)
+        expect(observer).toBeTruthy()
+        observer?.trigger()
+        observer?.trigger()
+
+        await vi.waitFor(() => {
+            expect(reader.getLocation()?.reason).toBe('resize')
+        })
+
+        const resizedFrame = container.querySelector('[data-rebook-page-surface="true"]') as HTMLElement
+        expect(resizedFrame.style.width).toBe('600px')
+        expect(resizedFrame.style.width).not.toBe(initialWidth)
+        expect(reader.getCurrentSurface()).toMatchObject({ pageIndex: 0, scale: 2 })
+        expect(resizeReasons).toEqual(['resize'])
 
         reader.destroy()
     })

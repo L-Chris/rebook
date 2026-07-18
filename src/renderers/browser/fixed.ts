@@ -88,6 +88,9 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     private visiblePageCount = 1
     private prewarmToken = 0
     private cancelPrewarmTask: (() => void) | null = null
+    private resizeObserver: ResizeObserver | null = null
+    private resizeRenderScheduled = false
+    private destroyed = false
 
     constructor(config: BrowserFixedRendererConfig) {
         this.styles = resolveRendererStyles(config.styles ?? {})
@@ -122,6 +125,10 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
             ],
         })
         this.scroller.addEventListener('wheel', this.handleWheel, { passive: false })
+        if (typeof ResizeObserver !== 'undefined') {
+            this.resizeObserver = new ResizeObserver(() => this.scheduleResizeRender())
+            this.resizeObserver.observe(config.container)
+        }
     }
 
     async open(book: Book): Promise<void> {
@@ -228,12 +235,25 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     }
 
     destroy(): void {
+        this.destroyed = true
+        this.resizeObserver?.disconnect()
+        this.resizeObserver = null
         this.scroller.removeEventListener('wheel', this.handleWheel)
         this.cancelScheduledPrewarm()
         this.surfacePipeline.destroy()
         this.host.destroy({ compositor: false })
         this.events.clear()
         this.sequence = null
+    }
+
+    private scheduleResizeRender(): void {
+        if (this.resizeRenderScheduled || this.destroyed) return
+        this.resizeRenderScheduled = true
+        queueMicrotask(() => {
+            this.resizeRenderScheduled = false
+            if (this.destroyed || !this.sequence) return
+            void this.renderCurrentPage('resize', 'next')
+        })
     }
 
     private async renderCurrentPage(reason: string, prewarmDirection: 'next' | 'prev'): Promise<void> {
