@@ -243,6 +243,13 @@ export class ReaderSession {
     }
 
     /**
+     * Get the runtime object exposed by an activated extension.
+     */
+    getExtensionRuntime<T = unknown>(extensionId: string): T | undefined {
+        return this.extensionHost.runtimes.get<T>(extensionId)
+    }
+
+    /**
      * List settings declared by installed/activated extensions with effective values.
      */
     getExtensionSettings(extensionId?: string): readonly RebookExtensionSettingInspection[] {
@@ -636,6 +643,9 @@ export class ReaderSession {
     destroy(): void {
         this.close()
         this.renderer.destroy()
+        this.extensionHost.subscriptions.clear()
+        this.extensionHost.commands.clear()
+        this.extensionHost.runtimes.clear()
         this.registeredListeners = []
     }
 

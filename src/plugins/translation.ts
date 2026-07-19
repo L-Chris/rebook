@@ -50,6 +50,44 @@ type TranslationBook = Book & {
     readonly professionalTranslationStatus?: ProfessionalTranslationStatus
 }
 
+export type TranslationRuntimeState = 'idle' | 'preparing' | 'running' | 'paused' | 'error'
+
+export interface TranslationRuntimeSnapshot {
+    readonly state: TranslationRuntimeState
+    readonly error?: Error
+}
+
+export interface TranslationRuntime {
+    readonly state: TranslationRuntimeState
+    readonly snapshot: TranslationRuntimeSnapshot
+    start(): Promise<void>
+    pause(): void
+    destroy(): void
+    subscribe(listener: (snapshot: TranslationRuntimeSnapshot) => void): () => void
+}
+
+export interface TranslationProviderContext {
+    readonly book: Book
+    readonly targetLanguage: string
+    readonly signal: AbortSignal
+}
+
+export interface TranslationProvider {
+    readonly id: string
+    prepare?(context: TranslationProviderContext): Promise<void>
+    translate(texts: readonly string[], context: TranslationProviderContext): Promise<readonly (string | null)[]>
+    destroy?(): void
+}
+
+export type BrowserTranslationAvailability = 'unavailable' | 'downloadable' | 'downloading' | 'available'
+
+export interface BrowserTranslationProviderOptions {
+    /** Explicit BCP-47 source language. Book metadata is used when omitted. */
+    readonly sourceLanguage?: string
+    readonly onAvailabilityChange?: (availability: BrowserTranslationAvailability) => void
+    readonly onDownloadProgress?: (progress: number) => void
+}
+
 export type TranslationTermCategory = 'term' | 'person' | 'organization' | 'place' | 'concept' | 'abbreviation'
 
 export interface TranslationTerm {
@@ -166,7 +204,11 @@ class TranslationFormatError extends Error {
 
 export interface TranslationOptions {
     /** The language model to use for translation (from @ai-sdk/...) */
-    model: LanguageModel
+    model?: LanguageModel
+    /** Translation backend. When set, it takes precedence over model. */
+    provider?: TranslationProvider
+    /** Whether translation should start when the book opens. Defaults to true. */
+    initiallyEnabled?: boolean
     /** Target language (default: 'zh-CN') */
     targetLanguage?: string
     /**
@@ -196,6 +238,287 @@ export interface TranslationOptions {
     onUpdate?: (event: TranslationUpdate) => void
     /** Called when table of contents labels have been translated. */
     onTOCUpdate?: (toc: Book['toc']) => void
+}
+
+type TranslationRuntimeBinding = {
+    readonly provider: TranslationProvider
+    readonly book: Book
+    readonly targetLanguage: string
+    readonly onStarted: () => void
+    readonly onPaused: () => void
+}
+
+class TranslationRuntimeController implements TranslationRuntime {
+    private currentState: TranslationRuntimeState
+    private currentError: Error | undefined
+    private desiredEnabled: boolean
+    private binding: TranslationRuntimeBinding | null = null
+    private provider: TranslationProvider | null = null
+    private bindingVersion = 0
+    private abortController: AbortController | null = null
+    private startPromise: Promise<void> | null = null
+    private readonly listeners = new Set<(snapshot: TranslationRuntimeSnapshot) => void>()
+
+    constructor(initiallyEnabled: boolean) {
+        this.desiredEnabled = initiallyEnabled
+        this.currentState = initiallyEnabled ? 'idle' : 'paused'
+    }
+
+    get state(): TranslationRuntimeState {
+        return this.currentState
+    }
+
+    get snapshot(): TranslationRuntimeSnapshot {
+        return { state: this.currentState, error: this.currentError }
+    }
+
+    get signal(): AbortSignal | null {
+        return this.abortController?.signal ?? null
+    }
+
+    attach(binding: TranslationRuntimeBinding): () => void {
+        const version = ++this.bindingVersion
+        this.binding = binding
+        this.provider = binding.provider
+        if (this.desiredEnabled) void this.start()
+        return () => {
+            if (version !== this.bindingVersion) return
+            this.pauseCurrentWork(false)
+            this.binding = null
+            this.setState('idle')
+        }
+    }
+
+    async start(): Promise<void> {
+        this.desiredEnabled = true
+        if (!this.binding) {
+            this.setState('idle')
+            return
+        }
+        if (this.currentState === 'running') return
+        if (this.startPromise) return this.startPromise
+
+        const binding = this.binding
+        const version = this.bindingVersion
+        this.abortController?.abort()
+        const controller = new AbortController()
+        this.abortController = controller
+        this.currentError = undefined
+        this.setState('preparing')
+
+        const startPromise = Promise.resolve(binding.provider.prepare?.({
+            book: binding.book,
+            targetLanguage: binding.targetLanguage,
+            signal: controller.signal,
+        })).then(() => {
+            if (controller.signal.aborted || version !== this.bindingVersion || binding !== this.binding) return
+            this.setState('running')
+            binding.onStarted()
+        }).catch(error => {
+            if (controller.signal.aborted || version !== this.bindingVersion) return
+            this.currentError = toError(error)
+            this.setState('error')
+        }).finally(() => {
+            if (this.startPromise === startPromise) this.startPromise = null
+        })
+        this.startPromise = startPromise
+        return startPromise
+    }
+
+    pause(): void {
+        this.desiredEnabled = false
+        this.pauseCurrentWork(true)
+    }
+
+    destroy(): void {
+        this.pauseCurrentWork(true)
+        this.binding = null
+        this.bindingVersion += 1
+        this.provider?.destroy?.()
+        this.provider = null
+        this.listeners.clear()
+    }
+
+    subscribe(listener: (snapshot: TranslationRuntimeSnapshot) => void): () => void {
+        this.listeners.add(listener)
+        listener(this.snapshot)
+        return () => this.listeners.delete(listener)
+    }
+
+    private pauseCurrentWork(notifyBinding: boolean): void {
+        this.abortController?.abort()
+        this.abortController = null
+        this.startPromise = null
+        if (notifyBinding) this.binding?.onPaused()
+        this.setState('paused')
+    }
+
+    private setState(state: TranslationRuntimeState): void {
+        if (this.currentState === state && state !== 'error') return
+        this.currentState = state
+        const snapshot = this.snapshot
+        for (const listener of this.listeners) listener(snapshot)
+    }
+}
+
+function toError(value: unknown): Error {
+    return value instanceof Error ? value : new Error(String(value))
+}
+
+export function createAITranslationProvider(model: LanguageModel): TranslationProvider {
+    if (!model) throw new Error('createAITranslationProvider requires a language model.')
+    return {
+        id: 'ai',
+        translate(texts, context) {
+            return requestTranslations(model, context.targetLanguage, [...texts], context.signal)
+        },
+    }
+}
+
+type BrowserTranslatorSession = {
+    translate(text: string, options?: { signal?: AbortSignal }): Promise<string>
+    destroy?(): void
+}
+
+type BrowserTranslatorFactory = {
+    availability?(options: { sourceLanguage: string, targetLanguage: string }): Promise<string>
+    create(options: {
+        sourceLanguage: string
+        targetLanguage: string
+        signal?: AbortSignal
+        monitor?: (monitor: EventTarget) => void
+    }): Promise<BrowserTranslatorSession>
+}
+
+/** Create a provider backed by the browser's built-in Translator API. */
+export function createBrowserTranslationProvider(
+    options: BrowserTranslationProviderOptions = {},
+): TranslationProvider {
+    let session: BrowserTranslatorSession | null = null
+    let sessionPair = ''
+    let preparing: Promise<void> | null = null
+    let preparingSignal: AbortSignal | null = null
+
+    const provider: TranslationProvider = {
+        id: 'browser',
+        async prepare(context) {
+            const sourceLanguage = resolveBrowserTranslationSourceLanguage(
+                options.sourceLanguage,
+                context.book,
+                context.targetLanguage,
+            )
+            const pair = `${sourceLanguage}\u0000${context.targetLanguage}`
+            if (session && sessionPair === pair) return
+            if (preparing && !preparingSignal?.aborted) return preparing
+            preparing = null
+            preparingSignal = context.signal
+
+            const factory = (globalThis as typeof globalThis & { Translator?: BrowserTranslatorFactory }).Translator
+            if (!factory?.create) {
+                throw new Error('Browser translation is not supported by this browser.')
+            }
+            if ('isSecureContext' in globalThis && globalThis.isSecureContext === false) {
+                throw new Error('Browser translation requires a secure context (HTTPS or localhost).')
+            }
+
+            const nextPreparing = Promise.resolve(factory.availability?.({
+                sourceLanguage,
+                targetLanguage: context.targetLanguage,
+            })).then(async rawAvailability => {
+                const availability = normalizeBrowserTranslationAvailability(rawAvailability)
+                options.onAvailabilityChange?.(availability)
+                if (availability === 'unavailable') {
+                    throw new Error(`Browser translation is unavailable for ${sourceLanguage} → ${context.targetLanguage}.`)
+                }
+
+                session?.destroy?.()
+                session = await factory.create({
+                    sourceLanguage,
+                    targetLanguage: context.targetLanguage,
+                    signal: context.signal,
+                    monitor(monitor) {
+                        monitor.addEventListener('downloadprogress', event => {
+                            const loaded = Number((event as Event & { loaded?: number }).loaded)
+                            if (Number.isFinite(loaded)) options.onDownloadProgress?.(Math.max(0, Math.min(1, loaded)))
+                        })
+                    },
+                })
+                if (context.signal.aborted) {
+                    session.destroy?.()
+                    session = null
+                    throw createAbortError()
+                }
+                sessionPair = pair
+                options.onAvailabilityChange?.('available')
+            }).finally(() => {
+                if (preparing === nextPreparing) {
+                    preparing = null
+                    preparingSignal = null
+                }
+            })
+            preparing = nextPreparing
+            return preparing
+        },
+        async translate(texts, context) {
+            await provider.prepare?.(context)
+            if (!session) throw new Error('Browser translator session was not created.')
+            const translations: string[] = []
+            for (const text of texts) {
+                if (context.signal.aborted) throw createAbortError()
+                translations.push(await session.translate(text, { signal: context.signal }))
+            }
+            return translations
+        },
+        destroy() {
+            session?.destroy?.()
+            session = null
+            sessionPair = ''
+        },
+    }
+    return provider
+}
+
+export function isBrowserTranslationSupported(): boolean {
+    return Boolean((globalThis as typeof globalThis & { Translator?: BrowserTranslatorFactory }).Translator?.create)
+}
+
+function resolveBrowserTranslationSourceLanguage(
+    configured: string | undefined,
+    book: Book,
+    targetLanguage: string,
+): string {
+    const metadataLanguage = Array.isArray(book.metadata?.language)
+        ? book.metadata?.language[0]
+        : book.metadata?.language
+    const sourceLanguage = configured?.trim() || metadataLanguage?.trim()
+    if (sourceLanguage) return sourceLanguage
+    return targetLanguage.toLowerCase().startsWith('zh') ? 'en' : 'zh-CN'
+}
+
+function normalizeBrowserTranslationAvailability(value: string | undefined): BrowserTranslationAvailability {
+    switch (value) {
+        case 'unavailable':
+        case 'no':
+            return 'unavailable'
+        case 'downloadable':
+        case 'after-download':
+            return 'downloadable'
+        case 'downloading':
+            return 'downloading'
+        case 'available':
+        case 'readily':
+        case undefined:
+            return 'available'
+        default:
+            return 'unavailable'
+    }
+}
+
+function createAbortError(): Error {
+    if (typeof DOMException !== 'undefined') return new DOMException('Translation was paused.', 'AbortError')
+    const error = new Error('Translation was paused.')
+    error.name = 'AbortError'
+    return error
 }
 
 /**
@@ -405,9 +728,23 @@ export function withProfessionalTranslation(
 /**
  * A plugin that translates the text blocks of a book using Vercel AI SDK.
  */
+export interface TranslationRuntimePlugin {
+    readonly plugin: RebookPlugin
+    readonly runtime: TranslationRuntime
+}
+
 export function withTranslation(options: TranslationOptions): RebookPlugin {
+    return createTranslationRuntimePlugin(options).plugin
+}
+
+export function createTranslationRuntimePlugin(options: TranslationOptions): TranslationRuntimePlugin {
+    if (!options?.provider && !options?.model) {
+        throw new Error('withTranslation requires options.provider or options.model.')
+    }
     const {
         model,
+        provider: configuredProvider,
+        initiallyEnabled = true,
         targetLanguage = 'zh-CN',
         mode = 'bilingual',
         concurrency = 2,
@@ -418,29 +755,50 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
         onTOCUpdate
     } = options
 
-    return (book: Book): Book => {
+    const provider = configuredProvider ?? createAITranslationProvider(model!)
+    const runtime = new TranslationRuntimeController(initiallyEnabled)
+
+    const plugin: RebookPlugin = (book: Book): Book => {
         const sectionTranslators = new Map<number, (blockIds: readonly string[]) => void>()
+        const cancelSectionTranslations = new Set<() => void>()
         let translatedTOCLabels: string[] | null = null
         let tocTranslationPromise: Promise<string[] | null> | null = null
+        let runGeneration = 0
 
         const getMode = () => getValue(mode)
         const shouldTranslateTOC = () => getValue(translateTOC)
 
-        const getTOC = () => renderTOCItems(book.toc, translatedTOCLabels, shouldTranslateTOC(), getMode())
+        const getTOC = () => renderTOCItems(
+            book.toc,
+            translatedTOCLabels,
+            runtime.state === 'running' && shouldTranslateTOC(),
+            getMode(),
+        )
 
         const startTOCTranslation = () => {
-            if (!book.toc || !shouldTranslateTOC() || tocTranslationPromise || translatedTOCLabels) return
+            if (
+                runtime.state !== 'running'
+                || !book.toc
+                || !shouldTranslateTOC()
+                || tocTranslationPromise
+                || translatedTOCLabels
+            ) return
+            const signal = runtime.signal
+            if (!signal) return
+            const generation = runGeneration
             tocTranslationPromise = Promise.resolve()
                 .then(async () => {
-                    return translateTOCLabels(book.toc!, model, targetLanguage)
+                    return translateTOCLabels(book.toc!, provider, book, targetLanguage, signal)
                 })
                 .then(labels => {
+                    if (signal.aborted || generation !== runGeneration) return null
                     translatedTOCLabels = labels
                     onTOCUpdate?.(getTOC())
                     return labels
                 })
                 .catch(err => {
                     tocTranslationPromise = null
+                    if (signal.aborted) return null
                     throw err
                 })
             tocTranslationPromise.catch(console.error)
@@ -469,6 +827,7 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
             }
 
             const scheduleTranslationDrain = () => {
+                if (runtime.state !== 'running') return
                 if (translationDrainTimer) clearTimeout(translationDrainTimer)
                 translationDrainTimer = setTimeout(() => {
                     translationDrainTimer = null
@@ -478,6 +837,10 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
 
             const drainPendingTranslations = () => {
                 if (translationDrainPromise) return translationDrainPromise
+                if (runtime.state !== 'running') return Promise.resolve()
+                const signal = runtime.signal
+                if (!signal) return Promise.resolve()
+                const generation = runGeneration
                 translationDrainPromise = getOriginalBlocks()
                     .then(async blocks => {
                         const pendingIds = [...pendingBlockIds]
@@ -497,7 +860,7 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                         if (!requestedItems.length) return
                         for (const item of requestedItems) queuedBlockIds.add(item.block.id)
 
-                        await translateBlockItems(requestedItems, model, targetLanguage, concurrency, tokensPerBatch, {
+                        await translateBlockItems(requestedItems, provider, book, targetLanguage, concurrency, tokensPerBatch, signal, {
                             onBatchStart: batch => {
                                 for (const item of batch) {
                                     queuedBlockIds.delete(item.block.id)
@@ -506,6 +869,7 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                             },
                             onBatchComplete: (translations, batch) => {
                                 for (const item of batch) inFlightBlockIds.delete(item.block.id)
+                                if (signal.aborted || generation !== runGeneration || runtime.state !== 'running') return
                                 translatedTextByIndex = new Map([...translatedTextByIndex, ...translations])
                                 const renderedBlocks = renderTranslatedBlocks(blocks, translatedTextByIndex, getMode())
                                 onUpdate?.({ sectionIndex: index, blocks: renderedBlocks })
@@ -521,12 +885,13 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
                     .catch(console.error)
                     .finally(() => {
                         translationDrainPromise = null
-                        if (pendingBlockIds.size > 0) scheduleTranslationDrain()
+                        if (runtime.state === 'running' && pendingBlockIds.size > 0) scheduleTranslationDrain()
                     })
                 return translationDrainPromise
             }
 
             const requestTranslationsForBlocks = (blockIds: readonly string[]) => {
+                if (runtime.state !== 'running') return
                 void getOriginalBlocks()
                     .then(blocks => {
                         const indexById = new Map(blocks.map((block, blockIndex) => [block.id, blockIndex]))
@@ -552,12 +917,19 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
             }
 
             sectionTranslators.set(index, requestTranslationsForBlocks)
+            cancelSectionTranslations.add(() => {
+                if (translationDrainTimer) clearTimeout(translationDrainTimer)
+                translationDrainTimer = null
+                pendingBlockIds.clear()
+                queuedBlockIds.clear()
+                inFlightBlockIds.clear()
+            })
 
             return {
                 ...section,
                 getBlocks: async () => {
                     const originalBlocks = await getOriginalBlocks()
-                    const blocks = translatedTextByIndex.size > 0
+                    const blocks = runtime.state === 'running' && translatedTextByIndex.size > 0
                         ? renderTranslatedBlocks(originalBlocks, translatedTextByIndex, getMode())
                         : originalBlocks
                     return blocks
@@ -565,13 +937,12 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
             }
         })
 
-        startTOCTranslation()
-
         const blockWindowConsumer: BlockWindowConsumer = {
             get pageCount() {
                 return getSafePageCount(prefetchPages)
             },
             onBlockWindow(event) {
+                if (runtime.state !== 'running') return
                 sectionTranslators.get(event.index)?.(event.blockIds)
             },
         }
@@ -590,29 +961,45 @@ export function withTranslation(options: TranslationOptions): RebookPlugin {
             sections: wrappedSections
         }
 
+        const detachRuntime = runtime.attach({
+            provider,
+            book,
+            targetLanguage,
+            onStarted() {
+                runGeneration += 1
+                startTOCTranslation()
+            },
+            onPaused() {
+                runGeneration += 1
+                tocTranslationPromise = null
+                for (const cancel of cancelSectionTranslations) cancel()
+            },
+        })
+
+        const originalDestroy = book.destroy?.bind(book)
+        Object.defineProperty(translatedBook, 'destroy', {
+            configurable: true,
+            enumerable: false,
+            value: () => {
+                detachRuntime()
+                originalDestroy?.()
+            },
+        })
+
         return translatedBook
     }
-}
 
-async function translateBlockTexts(
-    blocks: TextBlock[],
-    model: LanguageModel,
-    targetLanguage: string,
-    concurrency: number,
-    tokensPerBatch: number,
-    onBatch?: (translations: Map<number, BlockTranslation>) => void
-): Promise<Map<number, BlockTranslation>> {
-    return translateBlockItems(getTranslatableItems(blocks), model, targetLanguage, concurrency, tokensPerBatch, {
-        onBatchComplete: onBatch,
-    })
+    return { plugin, runtime }
 }
 
 async function translateBlockItems(
     translatableItems: TranslationItem[],
-    model: LanguageModel,
+    provider: TranslationProvider,
+    book: Book,
     targetLanguage: string,
     concurrency: number,
     tokensPerBatch: number,
+    signal: AbortSignal,
     callbacks: {
         onBatchStart?: (batch: TranslationItem[]) => void
         onBatchComplete?: (translations: Map<number, BlockTranslation>, batch: TranslationItem[]) => void
@@ -649,8 +1036,10 @@ async function translateBlockItems(
         const payload = batch.map(item => item.text)
 
         try {
+            if (signal.aborted) return
             callbacks.onBatchStart?.(batch)
-            const batchTranslations = await requestTranslations(model, targetLanguage, payload)
+            const batchTranslations = await provider.translate(payload, { book, targetLanguage, signal })
+            if (signal.aborted) return
 
             for (let i = 0; i < batch.length; i++) {
                 const { index } = batch[i]
@@ -661,6 +1050,7 @@ async function translateBlockItems(
             }
             callbacks.onBatchComplete?.(new Map(translations), batch)
         } catch (error) {
+            if (signal.aborted) return
             callbacks.onBatchError?.(batch, error)
             console.error(`Batch translation failed:`, error)
         }
@@ -1065,14 +1455,16 @@ function getTableCellKey(rowIndex: number, cellIndex: number): string {
 
 async function translateTOCLabels(
     toc: NonNullable<Book['toc']>,
-    model: LanguageModel,
+    provider: TranslationProvider,
+    book: Book,
     targetLanguage: string,
+    signal: AbortSignal,
 ): Promise<string[]> {
     const items = flattenTOC(toc)
     const labels = items.map(item => item.label)
     if (!labels.length) return []
 
-    const translations = await requestTranslations(model, targetLanguage, labels)
+    const translations = await provider.translate(labels, { book, targetLanguage, signal })
     return translations.map((translation, index) => translation ?? labels[index])
 }
 
@@ -1105,6 +1497,7 @@ async function requestTranslations(
     model: LanguageModel,
     targetLanguage: string,
     payload: string[],
+    abortSignal?: AbortSignal,
 ): Promise<Array<string | null>> {
     let lastError: unknown
     const entries = payload.map((text, index) => ({ key: index.toString(36), text }))
@@ -1120,6 +1513,7 @@ async function requestTranslations(
         try {
             const { output } = await generateText({
                 model,
+                abortSignal,
                 output: Output.object({
                     schema: jsonSchema<Record<string, string>>(schema),
                     description: 'Translations keyed by the same short block ids as the input.',

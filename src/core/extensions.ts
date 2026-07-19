@@ -126,10 +126,58 @@ export interface RebookExtensionSettingsService {
     list(): readonly RebookExtensionSettingInspection[]
 }
 
+/**
+ * An activated extension may expose one host-queryable runtime object.
+ * Runtimes are scoped by extension id and are disposed with activation.
+ */
+export interface RebookExtensionRuntimeService {
+    register<T>(runtime: T): RebookDisposable
+    get<T = unknown>(): T | undefined
+}
+
+export class RebookExtensionRuntimeRegistry {
+    private readonly runtimes = new Map<string, unknown>()
+
+    register<T>(extensionId: string, runtime: T): RebookDisposable {
+        assertNonEmptyString(extensionId, 'extension id')
+        const registration = { runtime }
+        this.runtimes.set(extensionId, registration)
+        return {
+            dispose: () => {
+                if (this.runtimes.get(extensionId) === registration) {
+                    this.runtimes.delete(extensionId)
+                }
+            },
+        }
+    }
+
+    get<T = unknown>(extensionId: string): T | undefined {
+        const registration = this.runtimes.get(extensionId) as { runtime: T } | undefined
+        return registration?.runtime
+    }
+
+    has(extensionId: string): boolean {
+        return this.runtimes.has(extensionId)
+    }
+
+    unregisterExtension(extensionId: string): boolean {
+        return this.runtimes.delete(extensionId)
+    }
+
+    clear(): void {
+        this.runtimes.clear()
+    }
+}
+
+export function createRebookExtensionRuntimeRegistry(): RebookExtensionRuntimeRegistry {
+    return new RebookExtensionRuntimeRegistry()
+}
+
 export interface RebookExtensionHost {
     readonly commands: RebookExtensionCommandRegistry
     readonly settings: RebookExtensionSettingsRegistry
     readonly subscriptions: RebookExtensionSubscriptionRegistry
+    readonly runtimes: RebookExtensionRuntimeRegistry
 }
 
 export interface RebookExtensionManifest {
@@ -166,6 +214,7 @@ export interface RebookExtensionContext {
     readonly subscriptions: RebookDisposable[]
     readonly commands: RebookExtensionCommandService
     readonly settings: RebookExtensionSettingsService
+    readonly runtime: RebookExtensionRuntimeService
 }
 
 export interface RebookExtension {
@@ -512,6 +561,7 @@ export function createRebookExtensionHost(): RebookExtensionHost {
         commands: createRebookExtensionCommandRegistry(),
         settings: createRebookExtensionSettingsRegistry(),
         subscriptions: createRebookExtensionSubscriptionRegistry(),
+        runtimes: createRebookExtensionRuntimeRegistry(),
     }
 }
 
@@ -638,6 +688,7 @@ export async function resolveRebookExtension(
         subscriptions,
         commands: createScopedCommandService(host.commands, manifest, subscriptions),
         settings: createScopedSettingsService(host.settings, manifest),
+        runtime: createScopedRuntimeService(host.runtimes, manifest, subscriptions),
     }
     let activated: void | RebookPlugin | readonly RebookPlugin[] | undefined
     try {
@@ -1145,6 +1196,23 @@ function createScopedSettingsService(
         },
         list() {
             return registry.list(manifest.id)
+        },
+    }
+}
+
+function createScopedRuntimeService(
+    registry: RebookExtensionRuntimeRegistry,
+    manifest: RebookExtensionManifest,
+    subscriptions: RebookDisposable[],
+): RebookExtensionRuntimeService {
+    return {
+        register(runtime) {
+            const disposable = registry.register(manifest.id, runtime)
+            subscriptions.push(disposable)
+            return disposable
+        },
+        get() {
+            return registry.get(manifest.id)
         },
     }
 }

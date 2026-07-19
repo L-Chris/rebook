@@ -63,6 +63,7 @@ export {
     RebookExtensionCommandRegistry,
     RebookExtensionManager,
     RebookExtensionRegistry,
+    RebookExtensionRuntimeRegistry,
     RebookExtensionSettingsRegistry,
     RebookExtensionSubscriptionRegistry,
     assertRebookExtensionManifest,
@@ -74,6 +75,7 @@ export {
     createRebookExtensionInstallation,
     createRebookExtensionManager,
     createRebookExtensionRegistry,
+    createRebookExtensionRuntimeRegistry,
     createRebookExtensionSettingsRegistry,
     createRebookExtensionSubscriptionRegistry,
     defineRebookExtension,
@@ -118,6 +120,7 @@ export type {
     RebookExtensionPanelContribution,
     RebookExtensionPanelLocation,
     RebookExtensionRegistryInstallOptions,
+    RebookExtensionRuntimeService,
     RebookExtensionSettingContribution,
     RebookExtensionSettingInspection,
     RebookExtensionSettingsService,
@@ -507,6 +510,22 @@ export type {
     BuiltInRebookExtensionName,
     BuiltInRebookExtensionOptions,
 } from './plugins/extensions'
+export {
+    createAITranslationProvider,
+    createBrowserTranslationProvider,
+    isBrowserTranslationSupported,
+    withTranslation,
+} from './plugins/translation'
+export type {
+    BrowserTranslationAvailability,
+    BrowserTranslationProviderOptions,
+    TranslationOptions,
+    TranslationProvider,
+    TranslationProviderContext,
+    TranslationRuntime,
+    TranslationRuntimeSnapshot,
+    TranslationRuntimeState,
+} from './plugins/translation'
 export {
     createBrowserTTSAudioPlayer,
     withTTS,

@@ -26673,6 +26673,34 @@ function clamp01$1(value) {
 }
 //#endregion
 //#region src/core/extensions.ts
+var RebookExtensionRuntimeRegistry = class {
+	constructor() {
+		_defineProperty(this, "runtimes", /* @__PURE__ */ new Map());
+	}
+	register(extensionId, runtime) {
+		assertNonEmptyString(extensionId, "extension id");
+		const registration = { runtime };
+		this.runtimes.set(extensionId, registration);
+		return { dispose: () => {
+			if (this.runtimes.get(extensionId) === registration) this.runtimes.delete(extensionId);
+		} };
+	}
+	get(extensionId) {
+		return this.runtimes.get(extensionId)?.runtime;
+	}
+	has(extensionId) {
+		return this.runtimes.has(extensionId);
+	}
+	unregisterExtension(extensionId) {
+		return this.runtimes.delete(extensionId);
+	}
+	clear() {
+		this.runtimes.clear();
+	}
+};
+function createRebookExtensionRuntimeRegistry() {
+	return new RebookExtensionRuntimeRegistry();
+}
 var RebookExtensionCommandRegistry = class {
 	constructor() {
 		_defineProperty(this, "commands", /* @__PURE__ */ new Map());
@@ -26851,7 +26879,8 @@ function createRebookExtensionHost() {
 	return {
 		commands: createRebookExtensionCommandRegistry(),
 		settings: createRebookExtensionSettingsRegistry(),
-		subscriptions: createRebookExtensionSubscriptionRegistry()
+		subscriptions: createRebookExtensionSubscriptionRegistry(),
+		runtimes: createRebookExtensionRuntimeRegistry()
 	};
 }
 function isRebookExtension(value) {
@@ -26906,7 +26935,8 @@ async function resolveRebookExtension(value, host = createRebookExtensionHost())
 		manifest,
 		subscriptions,
 		commands: createScopedCommandService(host.commands, manifest, subscriptions),
-		settings: createScopedSettingsService(host.settings, manifest)
+		settings: createScopedSettingsService(host.settings, manifest),
+		runtime: createScopedRuntimeService(host.runtimes, manifest, subscriptions)
 	};
 	let activated;
 	try {
@@ -27047,6 +27077,18 @@ function createScopedSettingsService(registry, manifest) {
 		},
 		list() {
 			return registry.list(manifest.id);
+		}
+	};
+}
+function createScopedRuntimeService(registry, manifest, subscriptions) {
+	return {
+		register(runtime) {
+			const disposable = registry.register(manifest.id, runtime);
+			subscriptions.push(disposable);
+			return disposable;
+		},
+		get() {
+			return registry.get(manifest.id);
 		}
 	};
 }
@@ -27536,6 +27578,12 @@ var ReaderSession = class {
 		return this.extensionHost.commands.executeCommand(id, ...args);
 	}
 	/**
+	* Get the runtime object exposed by an activated extension.
+	*/
+	getExtensionRuntime(extensionId) {
+		return this.extensionHost.runtimes.get(extensionId);
+	}
+	/**
 	* List settings declared by installed/activated extensions with effective values.
 	*/
 	getExtensionSettings(extensionId) {
@@ -27855,6 +27903,9 @@ var ReaderSession = class {
 	destroy() {
 		this.close();
 		this.renderer.destroy();
+		this.extensionHost.subscriptions.clear();
+		this.extensionHost.commands.clear();
+		this.extensionHost.runtimes.clear();
 		this.registeredListeners = [];
 	}
 	getRenderer() {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { LanguageModel } from 'ai'
 import type { Book } from '../../src/core/types'
 import { ReaderSession } from '../../src/core/reader'
@@ -18,6 +18,7 @@ import {
 } from '../../src/plugins/extensions'
 import type { AIChatBook } from '../../src/plugins/ai-chat'
 import type { TrialLimitedBook } from '../../src/plugins/trial-limit'
+import type { TranslationRuntime } from '../../src/plugins/translation'
 
 class FakeRenderer implements Renderer {
     private book: Book | null = null
@@ -63,6 +64,33 @@ const makeBook = (): Book => ({
 })
 
 describe('built-in rebook extensions', () => {
+    it('exposes a translation runtime that starts and pauses without reopening the book', async () => {
+        const prepare = vi.fn(async () => undefined)
+        const reader = new ReaderSession({
+            createRenderer: () => new FakeRenderer(),
+            plugins: [createTranslationExtension({
+                initiallyEnabled: false,
+                provider: {
+                    id: 'test',
+                    prepare,
+                    translate: async texts => texts.map(text => `[Translated] ${text}`),
+                },
+            })],
+        })
+
+        await reader.openBook(makeBook())
+        const runtime = reader.getExtensionRuntime<TranslationRuntime>(TRANSLATION_EXTENSION_ID)
+
+        expect(runtime?.state).toBe('paused')
+        await runtime?.start()
+        expect(runtime?.state).toBe('running')
+        expect(prepare).toHaveBeenCalledTimes(1)
+        runtime?.pause()
+        expect(runtime?.state).toBe('paused')
+        expect(reader.getBook()).not.toBeNull()
+        reader.destroy()
+    })
+
     it('publishes stable built-in extension manifests for host catalogs', () => {
         const ids = BUILT_IN_REBOOK_EXTENSION_MANIFESTS.map(manifest => manifest.id)
 

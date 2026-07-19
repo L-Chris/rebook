@@ -1,6 +1,7 @@
 import {
     createRebookExtensionCatalog,
     createRebookExtensionCatalogEntry,
+    defineRebookExtension,
     defineRebookPlugin,
     type RebookExtension,
     type RebookExtensionCatalog,
@@ -9,7 +10,7 @@ import {
 import { withAIChat, type AIChatOptions } from './ai-chat'
 import {
     withProfessionalTranslation,
-    withTranslation,
+    createTranslationRuntimePlugin,
     type BackendProfessionalTranslationOptions,
     type TranslationOptions,
 } from './translation'
@@ -149,7 +150,15 @@ export function createTrialLimitExtension(options: TrialLimitOptions = {}): Rebo
 }
 
 export function createTranslationExtension(options: TranslationOptions): RebookExtension {
-    return defineRebookPlugin(translationExtensionManifest, withTranslation(options))
+    return defineRebookExtension({
+        manifest: translationExtensionManifest,
+        activate(context) {
+            const { plugin, runtime } = createTranslationRuntimePlugin(options)
+            context.runtime.register(runtime)
+            context.subscriptions.push({ dispose: () => runtime.destroy() })
+            return plugin
+        },
+    })
 }
 
 export function createProfessionalTranslationExtension(

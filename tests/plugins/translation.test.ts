@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { withProfessionalTranslation, withTranslation } from '../../src/plugins/translation'
+import { createBrowserTranslationProvider, createTranslationRuntimePlugin, withProfessionalTranslation, withTranslation } from '../../src/plugins/translation'
 import { getBlockWindowConsumers } from '../../src/core/block-window'
 import type { Book, Section, TextBlock } from '../../src/core/types'
 
@@ -63,6 +63,64 @@ const requestBlockWindow = (book: Book, sectionIndex: number, blockIds: readonly
 }
 
 describe('Translation Plugin', () => {
+    it('pauses and resumes translation in place while keeping the translation cache', async () => {
+        const update = waitForUpdate()
+        const translate = vi.fn(async (texts: readonly string[]) => texts.map(text => `[Runtime] ${text}`))
+        const { plugin, runtime } = createTranslationRuntimePlugin({
+            initiallyEnabled: false,
+            provider: { id: 'test', translate },
+            mode: 'replace',
+            onUpdate: update.resolve,
+        })
+        const wrappedBook = await plugin(mockBook)
+        const section = wrappedBook.sections[0]
+
+        expect(runtime.state).toBe('paused')
+        expect((await section.getBlocks!())[0].segments[0].text).toBe('Hello world.')
+
+        await runtime.start()
+        requestBlockWindow(wrappedBook, 0, ['b1'])
+        await update.promise
+        expect((await section.getBlocks!())[0].segments[0].text).toBe('[Runtime] Hello world.')
+
+        runtime.pause()
+        expect((await section.getBlocks!())[0].segments[0].text).toBe('Hello world.')
+
+        await runtime.start()
+        expect((await section.getBlocks!())[0].segments[0].text).toBe('[Runtime] Hello world.')
+        expect(translate).toHaveBeenCalledTimes(1)
+    })
+
+    it('uses book metadata with the browser Translator API', async () => {
+        const translate = vi.fn(async (text: string) => `[Browser] ${text}`)
+        const destroy = vi.fn()
+        const availability = vi.fn(async () => 'available')
+        const create = vi.fn(async (options: { monitor?: (monitor: EventTarget) => void }) => {
+            options.monitor?.(new EventTarget())
+            return { translate, destroy }
+        })
+        vi.stubGlobal('Translator', { availability, create })
+
+        try {
+            const provider = createBrowserTranslationProvider()
+            const controller = new AbortController()
+            const context = {
+                book: { sections: [], metadata: { language: 'en' } } as Book,
+                targetLanguage: 'zh-CN',
+                signal: controller.signal,
+            }
+
+            await provider.prepare?.(context)
+            await expect(provider.translate(['Hello'], context)).resolves.toEqual(['[Browser] Hello'])
+            expect(availability).toHaveBeenCalledWith({ sourceLanguage: 'en', targetLanguage: 'zh-CN' })
+            expect(create).toHaveBeenCalledWith(expect.objectContaining({ sourceLanguage: 'en', targetLanguage: 'zh-CN' }))
+            provider.destroy?.()
+            expect(destroy).toHaveBeenCalledTimes(1)
+        } finally {
+            vi.unstubAllGlobals()
+        }
+    })
+
     beforeEach(() => {
         generateTextMock.mockReset()
         generateTextMock.mockImplementation(createTranslationResponse)
