@@ -19933,6 +19933,7 @@ function extractDocumentBlocks(nodes, baseStyle = {}, options = {}) {
 			const blockType = depth === 1 ? "chapter" : "heading";
 			const blockStyle = resolveBlockTextStyle(blockType, node, depth, inherited);
 			pushBlock(blockType, node, collectInlineSegments(node, blockStyle), depth, blockStyle);
+			for (const image of collectBlockImageNodes(node)) pushImageBlock(image);
 			return;
 		}
 		if (type === "p") {
@@ -22453,6 +22454,7 @@ var EPUBBook = class {
 		_defineProperty(this, "sectionIndexByNormalizedId", /* @__PURE__ */ new Map());
 		_defineProperty(this, "archiveEntries", void 0);
 		_defineProperty(this, "opfPath", "");
+		_defineProperty(this, "coverImageId", void 0);
 		_defineProperty(this, "sections", []);
 		_defineProperty(this, "dir", void 0);
 		_defineProperty(this, "toc", void 0);
@@ -22499,8 +22501,10 @@ var EPUBBook = class {
 		if (!opf) throw new CorruptedFileError("Failed to load OPF", "epub");
 		markTiming("opf", { opfPath: this.opfPath });
 		const { $, $$ } = childGetter(opf, NS.OPF);
+		const $metadata = $(opf.documentElement, "metadata");
 		const $manifest = $(opf.documentElement, "manifest");
 		const $spine = $(opf.documentElement, "spine");
+		this.coverImageId = $metadata ? Array.from($metadata.children).find((el) => el.localName === "meta" && el.getAttribute("name")?.toLowerCase() === "cover")?.getAttribute("content")?.trim() || void 0 : void 0;
 		if ($manifest) {
 			this.manifest = Array.from($manifest.children).filter((el) => el.localName === "item").map((el) => {
 				const href = el.getAttribute("href") ?? "";
@@ -22659,10 +22663,10 @@ var EPUBBook = class {
 	async getCover() {
 		const coverItem = this.getCoverImageItem();
 		if (!coverItem) return null;
-		return await this.loader.loadBlob(coverItem.href);
+		return await this.loader.loadBlob(coverItem.href, coverItem.mediaType);
 	}
 	getCoverImageItem() {
-		return this.manifest.find((m) => m.properties?.includes("cover-image")) ?? this.manifest.find((m) => m.id === "cover" && m.mediaType.startsWith("image")) ?? this.manifest.find((m) => m.href.includes("cover") && m.mediaType.startsWith("image")) ?? this.manifest.find((m) => m.mediaType.startsWith("image"));
+		return this.manifest.find((m) => m.properties?.includes("cover-image")) ?? (this.coverImageId ? this.manifestById.get(this.coverImageId) : void 0) ?? this.manifest.find((m) => m.id === "cover" && m.mediaType.startsWith("image")) ?? this.manifest.find((m) => m.href.includes("cover") && m.mediaType.startsWith("image")) ?? this.manifest.find((m) => m.mediaType.startsWith("image"));
 	}
 	getCoverImageSrcs() {
 		const coverItem = this.getCoverImageItem();

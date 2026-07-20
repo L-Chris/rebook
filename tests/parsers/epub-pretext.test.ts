@@ -496,7 +496,7 @@ describe('EPUB Pretext segments', () => {
             chapters: [{
                 id: 'cover',
                 title: 'Cover',
-                content: '<html xmlns="http://www.w3.org/1999/xhtml"><body><p><img src="images/cover.png" alt="Cover image" width="600" height="900" style="max-width: 320px; object-fit: contain"/></p></body></html>',
+                content: '<html xmlns="http://www.w3.org/1999/xhtml"><body><h1 title="Cover"><img src="images/cover.png" alt="Cover image" width="600" height="900" style="max-width: 320px; object-fit: contain"/></h1></body></html>',
             }],
             resources: [{
                 id: 'cover-image',

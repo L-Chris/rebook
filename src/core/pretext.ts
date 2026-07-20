@@ -496,6 +496,7 @@ export function extractDocumentBlocks(
             const blockType = depth === 1 ? 'chapter' : 'heading'
             const blockStyle = resolveBlockTextStyle(blockType, node, depth, inherited)
             pushBlock(blockType, node, collectInlineSegments(node, blockStyle), depth, blockStyle)
+            for (const image of collectBlockImageNodes(node)) pushImageBlock(image)
             return
         }
 

@@ -12,6 +12,7 @@ export interface MinimalEPUBOptions {
     author?: string
     language?: string
     identifier?: string
+    coverImageId?: string
     chapters?: Array<{
         id: string
         title: string
@@ -64,6 +65,7 @@ const generateOPF = (options: MinimalEPUBOptions): string => {
         <dc:title>${title}</dc:title>
         <dc:creator>${author}</dc:creator>
         <dc:language>${language}</dc:language>
+        ${options.coverImageId ? `<meta name="cover" content="${options.coverImageId}"/>` : ''}
         <meta property="dcterms:modified">2024-01-01T00:00:00Z</meta>
     </metadata>
     <manifest>

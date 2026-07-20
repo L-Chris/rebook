@@ -64,6 +64,53 @@ describe('EPUBParser', () => {
             expect(book.sections.length).toBe(1)
         })
 
+        it('should preserve the manifest MIME type when extracting a cover', async () => {
+            const coverBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46])
+            const epubBuffer = await createTestEPUB({
+                resources: [{
+                    id: 'image_cover',
+                    href: 'images/cover.jpg',
+                    mediaType: 'image/jpeg',
+                    data: coverBytes,
+                }],
+            })
+            const book = await parser.parse(epubBuffer, { domAdapter, urlFactory })
+
+            const cover = await book.getCover?.()
+
+            expect(cover).not.toBeNull()
+            expect(cover?.type).toBe('image/jpeg')
+            expect(new Uint8Array(await cover!.arrayBuffer())).toEqual(coverBytes)
+        })
+
+        it('should honor the OPF cover metadata when the cover item has no cover property or filename', async () => {
+            const unrelatedBytes = new Uint8Array([0xff, 0xd8, 0xff, 0x01])
+            const coverBytes = new Uint8Array([0xff, 0xd8, 0xff, 0x02])
+            const epubBuffer = await createTestEPUB({
+                coverImageId: 'primary-artwork',
+                resources: [
+                    {
+                        id: 'first-illustration',
+                        href: 'images/01.jpg',
+                        mediaType: 'image/jpeg',
+                        data: unrelatedBytes,
+                    },
+                    {
+                        id: 'primary-artwork',
+                        href: 'images/9781603581486.jpg',
+                        mediaType: 'image/jpeg',
+                        data: coverBytes,
+                    },
+                ],
+            })
+            const book = await parser.parse(epubBuffer, { domAdapter, urlFactory })
+
+            const cover = await book.getCover?.()
+
+            expect(cover).not.toBeNull()
+            expect(new Uint8Array(await cover!.arrayBuffer())).toEqual(coverBytes)
+        })
+
         it('should extract metadata correctly', async () => {
             const epubBuffer = await createTestEPUB({
                 title: 'My Test Book',

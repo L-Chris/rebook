@@ -1224,6 +1224,7 @@ class EPUBBook implements Book {
     private sectionIndexByNormalizedId = new Map<string, number>()
     private archiveEntries: ArchiveEntryLookup
     private opfPath = ''
+    private coverImageId?: string
 
     sections: Section[] = []
     dir?: 'ltr' | 'rtl'
@@ -1288,8 +1289,16 @@ class EPUBBook implements Book {
 
         // 3. Parse manifest and spine
         const { $, $$ } = childGetter(opf, NS.OPF)
+        const $metadata = $(opf.documentElement, 'metadata')
         const $manifest = $(opf.documentElement, 'manifest')
         const $spine = $(opf.documentElement, 'spine')
+
+        this.coverImageId = $metadata
+            ? Array.from($metadata.children)
+                .find(el => el.localName === 'meta' && el.getAttribute('name')?.toLowerCase() === 'cover')
+                ?.getAttribute('content')
+                ?.trim() || undefined
+            : undefined
 
         if ($manifest) {
             this.manifest = Array.from($manifest.children)
@@ -1495,12 +1504,13 @@ class EPUBBook implements Book {
         const coverItem = this.getCoverImageItem()
 
         if (!coverItem) return null
-        const blob = await this.loader.loadBlob(coverItem.href)
+        const blob = await this.loader.loadBlob(coverItem.href, coverItem.mediaType)
         return blob
     }
 
     private getCoverImageItem(): ManifestItem | undefined {
         return this.manifest.find(m => m.properties?.includes('cover-image'))
+            ?? (this.coverImageId ? this.manifestById.get(this.coverImageId) : undefined)
             ?? this.manifest.find(m => m.id === 'cover' && m.mediaType.startsWith('image'))
             ?? this.manifest.find(m => m.href.includes('cover') && m.mediaType.startsWith('image'))
             ?? this.manifest.find(m => m.mediaType.startsWith('image'))
