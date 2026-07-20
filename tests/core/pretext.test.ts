@@ -502,6 +502,29 @@ describe('Pretext pipeline', () => {
         expect(tableLines[0].top).toBe(100)
     })
 
+    it('moves text lines to the next page column instead of letting them cross the clipped edge', () => {
+        const block = {
+            id: 'paragraph',
+            type: 'paragraph' as const,
+            blockGapBefore: 0,
+            blockGapAfter: 0,
+            segments: [{ text: 'A line that fits within one wide column.' }],
+        }
+        const prepared = prepareBlocks([block], {
+            baseStyle: { fontFamily: 'serif', fontSize: 10, lineHeight: 2 },
+        })
+        const lines = layout(prepared, {
+            inlineSize: 500,
+            lineHeight: 20,
+            blockStart: 90,
+            maxBlockHeight: 100,
+        })
+
+        expect(lines).toHaveLength(1)
+        expect(lines[0]?.top).toBe(100)
+        expect((lines[0]!.top % 100) + lines[0]!.height).toBeLessThanOrEqual(100)
+    })
+
     it('keeps image blocks with following captions when checking page column overflow', () => {
         const blocks = extractDocumentBlocks([
             elementNode('p', {}, [

@@ -12,6 +12,7 @@ import {
 import {
     getVisibleLines,
     type LineRange,
+    type LineSegmentRange,
     type PreparedText,
     type PreparedTextBlock,
     type TextSegment,
@@ -127,6 +128,7 @@ export const createBrowserReflowableContentRenderer = (): BrowserReflowableConte
 
 interface VisibleSemanticWindow {
     readonly blocks: readonly PreparedTextBlock[]
+    readonly linesByBlock: ReadonlyMap<string, readonly LineRange[]>
     readonly startTop: number
 }
 
@@ -242,7 +244,7 @@ function createSemanticFlow(
                 + (block.block.blockGapBefore ?? 0)
             if (gap > 0) flow.appendChild(createSemanticFlowSpacer(gap))
         }
-        flow.appendChild(createSemanticBlock(block, context))
+        flow.appendChild(createSemanticBlock(block, window.linesByBlock.get(block.block.id) ?? [], context))
         previousBlock = block
     }
 
@@ -263,13 +265,18 @@ function createSemanticFlowSpacer(height: number): HTMLElement {
     return spacer
 }
 
-function createSemanticBlock(block: PreparedTextBlock, context: BrowserReflowableContentRenderContext): HTMLElement {
+function createSemanticBlock(
+    block: PreparedTextBlock,
+    lines: readonly LineRange[],
+    context: BrowserReflowableContentRenderContext,
+): HTMLElement {
     const source = block.block
-    if (source.type === 'image' && source.image) return createSemanticImageBlock(source.image, block, context)
-    if (source.type === 'table' && source.table) return createSemanticTableBlock(source.table, block, context)
-    if (source.type === 'separator') return createSemanticSeparatorBlock(block, context)
-    if (source.type === 'break') return createSemanticBreakBlock(block, context)
-    if (source.type === 'pre') return createSemanticPreBlock(block, context)
+    const firstLine = lines[0]
+    if (source.type === 'image' && source.image) return createSemanticImageBlock(source.image, block, firstLine, context)
+    if (source.type === 'table' && source.table) return createSemanticTableBlock(source.table, block, firstLine, context)
+    if (source.type === 'separator') return createSemanticSeparatorBlock(block, firstLine, context)
+    if (source.type === 'break') return createSemanticBreakBlock(block, firstLine, context)
+    if (source.type === 'pre') return createSemanticPreBlock(block, firstLine, context)
 
     const tagName = getSemanticBlockTagName(source.type, source.depth)
     const element = document.createElement(tagName)
@@ -277,11 +284,71 @@ function createSemanticBlock(block: PreparedTextBlock, context: BrowserReflowabl
     applySemanticBlockStyle(element, block, context)
     const inheritedTextStyle = getSemanticBlockTextStyle(block, context)
 
-    for (const segment of source.segments) {
-        element.appendChild(createSemanticInlineSegment(segment, context, inheritedTextStyle))
+    if (lines.length > 1 && !hasExplicitSemanticLineBreak(source.segments)) {
+        for (const line of lines) {
+            element.appendChild(createSemanticTextLine(line, context, inheritedTextStyle))
+        }
+    } else {
+        for (const segment of source.segments) {
+            element.appendChild(createSemanticInlineSegment(segment, context, inheritedTextStyle))
+        }
     }
 
     return element
+}
+
+function createSemanticTextLine(
+    line: LineRange,
+    context: BrowserReflowableContentRenderContext,
+    inheritedTextStyle: TextStyle,
+): HTMLSpanElement {
+    const element = document.createElement('span')
+    element.style.cssText = `
+        display: block;
+        box-sizing: border-box;
+        height: ${line.height}px;
+        line-height: ${line.height}px;
+        white-space: pre;
+        overflow: visible;
+    `
+
+    if (line.segments.length === 0) {
+        element.textContent = line.text
+        return element
+    }
+
+    for (const fragment of line.segments) {
+        if (fragment.gapBefore > 0) element.appendChild(createSemanticInlineGap(fragment.gapBefore))
+        element.appendChild(createSemanticLineFragment(fragment, context, inheritedTextStyle))
+    }
+    return element
+}
+
+function hasExplicitSemanticLineBreak(segments: readonly TextSegment[]): boolean {
+    return segments.some(segment => segment.source?.nodeType === 'br' || segment.text.includes('\n'))
+}
+
+function createSemanticInlineGap(width: number): HTMLSpanElement {
+    const gap = document.createElement('span')
+    gap.textContent = ' '
+    gap.style.cssText = `
+        display: inline-block;
+        width: ${width}px;
+        font-size: 0;
+    `
+    return gap
+}
+
+function createSemanticLineFragment(
+    fragment: LineSegmentRange,
+    context: BrowserReflowableContentRenderContext,
+    inheritedTextStyle: TextStyle,
+): Node {
+    return createSemanticInlineSegment({
+        text: fragment.text,
+        style: fragment.style,
+        source: fragment.source,
+    }, context, inheritedTextStyle)
 }
 
 function createSemanticInlineSegment(
@@ -346,11 +413,13 @@ function createSemanticTextSpan(text: string, style: TextStyle): HTMLSpanElement
 function createSemanticImageBlock(
     image: TextImage,
     block: PreparedTextBlock,
+    line: LineRange | undefined,
     context: BrowserReflowableContentRenderContext,
 ): HTMLElement {
     const figure = document.createElement('figure')
     applySemanticBlockDataset(figure, block)
     applySemanticBlockStyle(figure, block, context)
+    if (line) figure.style.height = `${line.height}px`
     figure.style.breakInside = 'avoid'
     figure.style.textAlign = getImageTextAlign(image)
 
@@ -371,7 +440,11 @@ function createSemanticImageBlock(
     return figure
 }
 
-function createSemanticPreBlock(block: PreparedTextBlock, context: BrowserReflowableContentRenderContext): HTMLElement {
+function createSemanticPreBlock(
+    block: PreparedTextBlock,
+    line: LineRange | undefined,
+    context: BrowserReflowableContentRenderContext,
+): HTMLElement {
     const pre = document.createElement('pre')
     applySemanticBlockDataset(pre, block)
     applySemanticBlockStyle(pre, block, context)
@@ -383,19 +456,21 @@ function createSemanticPreBlock(block: PreparedTextBlock, context: BrowserReflow
     pre.style.border = '1px solid #e0e0e0'
     pre.style.borderRadius = '6px'
     pre.style.breakInside = 'avoid'
+    if (line) pre.style.height = `${line.height}px`
     pre.textContent = block.block.segments.map(segment => segment.text).join('')
     return pre
 }
 
 function createSemanticSeparatorBlock(
     block: PreparedTextBlock,
+    line: LineRange | undefined,
     context: BrowserReflowableContentRenderContext,
 ): HTMLElement {
     const hr = document.createElement('hr')
     applySemanticBlockDataset(hr, block)
     hr.style.cssText = `
         box-sizing: border-box;
-        height: ${context.lineHeightPixels}px;
+        height: ${line?.height ?? context.lineHeightPixels}px;
         margin: 0;
         padding: 0;
         border: 0;
@@ -406,13 +481,17 @@ function createSemanticSeparatorBlock(
     return hr
 }
 
-function createSemanticBreakBlock(block: PreparedTextBlock, context: BrowserReflowableContentRenderContext): HTMLElement {
+function createSemanticBreakBlock(
+    block: PreparedTextBlock,
+    line: LineRange | undefined,
+    context: BrowserReflowableContentRenderContext,
+): HTMLElement {
     const spacer = document.createElement('div')
     applySemanticBlockDataset(spacer, block)
     spacer.setAttribute('aria-hidden', 'true')
     spacer.style.cssText = `
         box-sizing: border-box;
-        height: ${context.lineHeightPixels}px;
+        height: ${line?.height ?? context.lineHeightPixels}px;
         margin: 0;
         padding: 0;
     `
@@ -422,12 +501,14 @@ function createSemanticBreakBlock(block: PreparedTextBlock, context: BrowserRefl
 function createSemanticTableBlock(
     table: TextTable,
     block: PreparedTextBlock,
+    line: LineRange | undefined,
     context: BrowserReflowableContentRenderContext,
 ): HTMLElement {
     const tableEl = document.createElement('table')
     applySemanticBlockDataset(tableEl, block)
     applySemanticBlockStyle(tableEl, block, context)
     tableEl.style.width = '100%'
+    if (line) tableEl.style.height = `${line.height}px`
     tableEl.style.borderCollapse = 'collapse'
     tableEl.style.breakInside = 'avoid'
     tableEl.style.tableLayout = 'fixed'
@@ -502,6 +583,8 @@ function applySemanticBlockStyle(
     element.style.textAlign = getTextAlign(style.textAlign)
     element.style.whiteSpace = block.block.type === 'pre' ? 'pre-wrap' : 'normal'
     element.style.overflowWrap = 'anywhere'
+    element.style.orphans = '1'
+    element.style.widows = '1'
     element.style.color = inheritedStyle.color ?? 'inherit'
     if (block.block.type === 'blockquote') {
         const inset = parseBlockquoteInset(block.block.attrs?.width, fontSize) ?? fontSize * 1.5
@@ -678,7 +761,7 @@ function getVisibleSemanticWindow(
     for (const block of context.prepared?.blocks ?? []) {
         byId.set(block.block.id, block)
     }
-    const blockStartTops = getBlockStartTops(context.lines)
+    const linesByBlock = getBlockLines(context.lines)
 
     const output: PreparedTextBlock[] = []
     const seen = new Set<string>()
@@ -688,10 +771,11 @@ function getVisibleSemanticWindow(
         if (!block || seen.has(block.id)) continue
         seen.add(block.id)
         output.push(byId.get(block.id) ?? lineToPreparedBlock(line, block))
-        startTop = Math.min(startTop, blockStartTops.get(block.id) ?? line.top)
+        startTop = Math.min(startTop, linesByBlock.get(block.id)?.[0]?.top ?? line.top)
     }
     return {
         blocks: output,
+        linesByBlock,
         startTop: Number.isFinite(startTop) ? Math.max(0, startTop) : 0,
     }
 }
@@ -703,15 +787,16 @@ function lineToPreparedBlock(line: LineRange, block: TextBlock): PreparedTextBlo
     }
 }
 
-function getBlockStartTops(lines: readonly LineRange[]): Map<string, number> {
-    const tops = new Map<string, number>()
+function getBlockLines(lines: readonly LineRange[]): Map<string, LineRange[]> {
+    const output = new Map<string, LineRange[]>()
     for (const line of lines) {
         const blockId = line.block?.id
         if (!blockId) continue
-        const existing = tops.get(blockId)
-        if (existing == null || line.top < existing) tops.set(blockId, line.top)
+        const existing = output.get(blockId)
+        if (existing) existing.push(line)
+        else output.set(blockId, [line])
     }
-    return tops
+    return output
 }
 
 function createEstimatedBlockRects(

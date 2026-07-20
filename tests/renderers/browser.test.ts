@@ -573,6 +573,100 @@ describe('BrowserRenderer', () => {
         partialSurface.destroy?.()
     })
 
+    it('renders text blocks from precomputed non-wrapping lines so virtual windows keep stable pagination', () => {
+        const block = {
+            id: 'stable-paragraph',
+            type: 'paragraph' as const,
+            segments: [{ text: 'First paragraph' }],
+        }
+        const lines: LineRange[] = [
+            {
+                index: 0,
+                kind: 'text',
+                block,
+                start: { segmentIndex: 0, cursor: { segmentIndex: 0, graphemeIndex: 0 } },
+                end: { segmentIndex: 0, cursor: { segmentIndex: 0, graphemeIndex: 5 } },
+                text: 'First',
+                width: 38,
+                top: 0,
+                height: 24,
+                segments: [{
+                    segmentIndex: 0,
+                    start: { segmentIndex: 0, graphemeIndex: 0 },
+                    end: { segmentIndex: 0, graphemeIndex: 5 },
+                    text: 'First',
+                    style: {},
+                    gapBefore: 0,
+                    occupiedWidth: 38,
+                }],
+            },
+            {
+                index: 1,
+                kind: 'text',
+                block,
+                start: { segmentIndex: 0, cursor: { segmentIndex: 0, graphemeIndex: 6 } },
+                end: { segmentIndex: 0, cursor: { segmentIndex: 0, graphemeIndex: 15 } },
+                text: 'paragraph',
+                width: 72,
+                top: 24,
+                height: 24,
+                segments: [{
+                    segmentIndex: 0,
+                    start: { segmentIndex: 0, graphemeIndex: 6 },
+                    end: { segmentIndex: 0, graphemeIndex: 15 },
+                    text: 'paragraph',
+                    style: {},
+                    gapBefore: 4,
+                    occupiedWidth: 72,
+                }],
+            },
+        ]
+        const renderer = new BrowserReflowableContentRenderer()
+        const surface = renderer.renderSurface({
+            sectionIndex: 0,
+            pageIndex: 0,
+            layoutMode: 'paginated',
+            layout: {
+                margin: 0,
+                gap: 0,
+                columnWidth: 260,
+                columns: 1,
+                pageHeight: 48,
+                columnHeight: 48,
+                pagePaddingInline: 0,
+                pagePaddingBlock: 0,
+                totalHeight: 48,
+                pageCount: 1,
+            },
+            lines,
+            prepared: prepareBlocks([block], {
+                baseStyle: { fontFamily: 'serif', fontSize: 16, lineHeight: 1.5 },
+            }),
+            styles: {},
+            baseTextStyle: { fontFamily: 'serif', fontSize: 16, lineHeight: 1.5 },
+            lineHeightPixels: 24,
+            sourceScrollTop: 0,
+            sourceViewportHeight: 48,
+            surfaceWidth: 260,
+            surfaceHeight: 48,
+        })
+
+        const content = surface.layers[0]!.content as HTMLElement
+        const paragraph = content.querySelector('[data-block-id="stable-paragraph"]') as HTMLElement
+        const renderedLines = Array.from(paragraph.children) as HTMLElement[]
+
+        expect(renderedLines).toHaveLength(2)
+        expect(renderedLines.map(line => line.style.height)).toEqual(['24px', '24px'])
+        expect(renderedLines.every(line => line.style.display === 'block')).toBe(true)
+        expect(renderedLines.every(line => line.style.whiteSpace === 'pre')).toBe(true)
+        expect(paragraph.style.orphans).toBe('1')
+        expect(paragraph.style.widows).toBe('1')
+        expect(paragraph.textContent).toBe('First paragraph')
+        expect((renderedLines[1]?.firstElementChild as HTMLElement).style.width).toBe('4px')
+
+        surface.destroy?.()
+    })
+
     it('renders semantic blocks without line metadata DOM', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')

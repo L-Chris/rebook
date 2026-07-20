@@ -643,6 +643,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
         const inlineOffset = getBlockInlineOffset(block.block, prepared.baseStyle.fontSize)
         const blockInlineSize = Math.max(prepared.baseStyle.fontSize * 4, inlineSize - inlineOffset)
         if (block.block.type === 'break') {
+            top = avoidLinePageBreak(top, lineHeight, options.maxBlockHeight)
             lines.push({
                 index: lines.length,
                 kind: 'text',
@@ -661,6 +662,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
             continue
         }
         if (block.block.type === 'separator') {
+            top = avoidLinePageBreak(top, lineHeight, options.maxBlockHeight)
             lines.push({
                 index: lines.length,
                 kind: 'separator',
@@ -807,6 +809,7 @@ export function layout(prepared: PreparedText, options: LayoutOptions): LineRang
         if (!richInline) continue
         const textLineHeight = getBlockLineHeight(block.block, prepared.baseStyle.fontSize, lineHeight)
         walkRichInlineLineRanges(richInline, blockInlineSize, (range) => {
+            top = avoidLinePageBreak(top, textLineHeight, options.maxBlockHeight)
             const materialized = materializeRichInlineLineRange(richInline, range)
             const fragments = materialized.fragments.map((fragment, index): LineSegmentRange => {
                 const rangeFragment = range.fragments[index]!
@@ -1858,6 +1861,17 @@ function avoidAtomicBlockPageBreak(
     return offset + height > maxBlockHeight
         ? top + Math.max(lineHeight, maxBlockHeight - offset)
         : top
+}
+
+function avoidLinePageBreak(
+    top: number,
+    height: number,
+    maxBlockHeight: number | undefined,
+): number {
+    if (!maxBlockHeight) return top
+    const offset = top % maxBlockHeight
+    if (offset === 0 || offset + height <= maxBlockHeight) return top
+    return top + maxBlockHeight - offset
 }
 
 function getFollowingCaptionKeepHeight(
