@@ -37,6 +37,7 @@ describe('rebook extensions', () => {
 
     it('wraps a book transform in installable extension metadata', async () => {
         const extension = defineRebookPlugin({
+            manifestVersion: 1,
             id: 'example.uppercase-title',
             name: 'Uppercase Title',
             version: '1.0.0',
@@ -55,6 +56,7 @@ describe('rebook extensions', () => {
     it('activates extension packages and applies returned plugins in order', async () => {
         const extension = defineRebookExtension({
             manifest: {
+                manifestVersion: 1,
                 id: 'example.activation',
                 name: 'Activation',
                 version: '1.0.0',
@@ -78,11 +80,13 @@ describe('rebook extensions', () => {
 
     it('provides a registry for installed extensions', async () => {
         const first = defineRebookPlugin({
+            manifestVersion: 1,
             id: 'example.first',
             name: 'First',
             version: '1.0.0',
         }, input => ({ ...input, metadata: { title: 'first' } }))
         const second = defineRebookPlugin({
+            manifestVersion: 1,
             id: 'example.second',
             name: 'Second',
             version: '1.0.0',
@@ -101,13 +105,84 @@ describe('rebook extensions', () => {
 
     it('rejects invalid manifests before installation', () => {
         expect(() => defineRebookExtension({
-            manifest: { id: '', name: 'Broken', version: '1.0.0' },
+            manifest: { manifestVersion: 1, id: '', name: 'Broken', version: '1.0.0' },
         })).toThrow(/id/)
+        expect(() => defineRebookExtension({
+            manifest: { manifestVersion: 1, id: 'Example.Uppercase', name: 'Uppercase', version: '1.0.0' },
+        })).toThrow(/id/)
+    })
+
+    it('freezes manifest version, semver, permissions, and runtime declarations', () => {
+        expect(() => defineRebookExtension({
+            manifest: { manifestVersion: 2, id: 'example.future', name: 'Future', version: '1.0.0' } as any,
+        })).toThrow(/manifestVersion/)
+        expect(() => defineRebookExtension({
+            manifest: { manifestVersion: 1, id: 'example.bad-version', name: 'Bad Version', version: 'latest' },
+        })).toThrow(/SemVer/)
+        expect(() => defineRebookExtension({
+            manifest: { manifestVersion: 1, id: 'example.bad-semver', name: 'Bad SemVer', version: '01.0.0' },
+        })).toThrow(/SemVer/)
+        expect(() => defineRebookExtension({
+            manifest: {
+                manifestVersion: 1,
+                id: 'example.future-host',
+                name: 'Future Host API',
+                version: '1.0.0',
+                engines: { hostApi: '2' },
+            },
+        })).toThrow(/unsupported Host API/)
+        expect(() => defineRebookExtension({
+            manifest: {
+                manifestVersion: 1,
+                id: 'example.unsafe-homepage',
+                name: 'Unsafe Homepage',
+                version: '1.0.0',
+                homepage: 'javascript:alert(1)',
+            },
+        })).toThrow(/http or https/)
+        expect(() => defineRebookExtension({
+            manifest: {
+                manifestVersion: 1,
+                id: 'example.bad-permission',
+                name: 'Bad Permission',
+                version: '1.0.0',
+                permissions: ['filesystem'] as any,
+            },
+        })).toThrow(/unsupported permission/)
+        expect(() => defineRebookExtension({
+            manifest: {
+                manifestVersion: 1,
+                id: 'example.network-hosts',
+                name: 'Network Hosts',
+                version: '1.0.0',
+                allowedHosts: ['api.example.com'],
+            },
+        })).toThrow(/network permission/)
+        expect(() => defineRebookExtension({
+            manifest: {
+                manifestVersion: 1,
+                id: 'example.network-without-hosts',
+                name: 'Network without hosts',
+                version: '1.0.0',
+                permissions: ['network'],
+            },
+        })).toThrow(/without allowedHosts/)
+        expect(() => defineRebookExtension({
+            manifest: {
+                manifestVersion: 1,
+                id: 'example.worker-permission',
+                name: 'Worker permission',
+                version: '1.0.0',
+                runtime: { kind: 'worker' },
+                permissions: ['book.read'],
+            },
+        })).toThrow(/commands and settings only/)
     })
 
     it('rejects invalid contribution declarations before installation', () => {
         expect(() => defineRebookExtension({
             manifest: {
+                manifestVersion: 1,
                 id: 'example.invalid-contributes',
                 name: 'Invalid Contributions',
                 version: '1.0.0',
@@ -119,6 +194,7 @@ describe('rebook extensions', () => {
 
         expect(() => defineRebookExtension({
             manifest: {
+                manifestVersion: 1,
                 id: 'example.invalid-setting',
                 name: 'Invalid Setting',
                 version: '1.0.0',
@@ -129,10 +205,40 @@ describe('rebook extensions', () => {
                 },
             } as any,
         })).toThrow(/unsupported type/)
+
+        expect(() => defineRebookExtension({
+            manifest: {
+                manifestVersion: 1,
+                id: 'example.invalid-default',
+                name: 'Invalid Default',
+                version: '1.0.0',
+                contributes: {
+                    settings: {
+                        count: { type: 'integer', default: 1.5 },
+                    },
+                },
+            },
+        })).toThrow(/default does not match/)
+
+        expect(() => defineRebookExtension({
+            manifest: {
+                manifestVersion: 1,
+                id: 'example.duplicate-commands',
+                name: 'Duplicate Commands',
+                version: '1.0.0',
+                contributes: {
+                    commands: [
+                        { id: 'example.duplicate-commands.run', title: 'Run' },
+                        { id: 'example.duplicate-commands.run', title: 'Run again' },
+                    ],
+                },
+            },
+        })).toThrow(/duplicated/)
     })
 
     it('normalizes mixed extension and legacy plugin inputs', async () => {
         const extension = defineRebookPlugin({
+            manifestVersion: 1,
             id: 'example.manifest',
             name: 'Manifest',
             version: '1.0.0',
@@ -147,6 +253,7 @@ describe('rebook extensions', () => {
     it('indexes marketplace catalog entries independently from loaded extension code', () => {
         const catalog = createRebookExtensionCatalog([
             createRebookExtensionCatalogEntry({
+                manifestVersion: 1,
                 id: 'example.chat',
                 name: 'Chat',
                 version: '1.0.0',
@@ -160,6 +267,7 @@ describe('rebook extensions', () => {
                 verified: true,
             }),
             createRebookExtensionCatalogEntry({
+                manifestVersion: 1,
                 id: 'example.theme',
                 name: 'Theme',
                 version: '1.0.0',
@@ -181,6 +289,7 @@ describe('rebook extensions', () => {
             entries: [
                 {
                     manifest: {
+                        manifestVersion: 1,
                         id: 'example.remote-chat',
                         name: 'Remote Chat',
                         version: '1.0.0',
@@ -193,6 +302,7 @@ describe('rebook extensions', () => {
                 },
                 {
                     manifest: {
+                        manifestVersion: 1,
                         id: 'example.local-theme',
                         name: 'Local Theme',
                         version: '1.0.0',
@@ -217,6 +327,31 @@ describe('rebook extensions', () => {
             .toEqual(['https://market.example/remote-chat.mjs'])
     })
 
+    it('parses immutable integrity-pinned marketplace artifacts', () => {
+        const [entry] = parseRebookExtensionCatalogEntries({
+            schemaVersion: 1,
+            entries: [{
+                manifest: {
+                    manifestVersion: 1,
+                    id: 'example.artifact',
+                    name: 'Artifact',
+                    version: '1.0.0',
+                    runtime: { kind: 'trusted' },
+                },
+                artifact: {
+                    url: 'https://extensions.example/example.artifact/1.0.0/index.js',
+                    integrity: 'sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+                    size: 128,
+                    contentType: 'text/javascript',
+                },
+                trust: 'verified',
+            }],
+        })
+
+        expect(entry?.artifact?.size).toBe(128)
+        expect(entry?.trust).toBe('verified')
+    })
+
     it('normalizes marketplace extension module exports into extension packages', async () => {
         const plugin: RebookPlugin = input => ({
             ...input,
@@ -225,6 +360,7 @@ describe('rebook extensions', () => {
         const extension = await normalizeRebookExtensionModule({
             default: {
                 manifest: {
+                    manifestVersion: 1,
                     id: 'example.remote-module',
                     name: 'Remote Module',
                     version: '1.0.0',
@@ -241,6 +377,7 @@ describe('rebook extensions', () => {
 
     it('loads marketplace extension modules with catalog manifest fallback', async () => {
         const catalogEntry = createRebookExtensionCatalogEntry({
+            manifestVersion: 1,
             id: 'example.remote-fallback',
             name: 'Remote Fallback',
             version: '1.0.0',
@@ -277,17 +414,61 @@ describe('rebook extensions', () => {
     it('rejects marketplace modules whose runtime manifest id does not match the catalog', async () => {
         await expect(normalizeRebookExtensionModule({
             manifest: {
+                manifestVersion: 1,
                 id: 'example.actual',
                 name: 'Actual',
                 version: '1.0.0',
             },
         }, {
             manifest: {
+                manifestVersion: 1,
                 id: 'example.expected',
                 name: 'Expected',
                 version: '1.0.0',
             },
         })).rejects.toThrow(/id mismatch/)
+    })
+
+    it('rejects marketplace modules whose runtime version does not match the catalog', async () => {
+        await expect(normalizeRebookExtensionModule({
+            manifest: {
+                manifestVersion: 1,
+                id: 'example.versioned',
+                name: 'Versioned',
+                version: '2.0.0',
+            },
+        }, {
+            manifest: {
+                manifestVersion: 1,
+                id: 'example.versioned',
+                name: 'Versioned',
+                version: '1.0.0',
+            },
+        })).rejects.toThrow(/version mismatch/)
+    })
+
+    it('keeps reviewed catalog permissions authoritative over module metadata', async () => {
+        const extension = await normalizeRebookExtensionModule({
+            manifest: {
+                manifestVersion: 1,
+                id: 'example.permissions',
+                name: 'Runtime metadata',
+                version: '1.0.0',
+                permissions: ['network'],
+                allowedHosts: ['runtime.example'],
+            },
+        }, {
+            manifest: {
+                manifestVersion: 1,
+                id: 'example.permissions',
+                name: 'Reviewed metadata',
+                version: '1.0.0',
+                permissions: ['book.read'],
+            },
+        })
+
+        expect(extension.manifest.name).toBe('Reviewed metadata')
+        expect(extension.manifest.permissions).toEqual(['book.read'])
     })
 
     it('rejects malformed marketplace catalog JSON', () => {
@@ -303,6 +484,7 @@ describe('rebook extensions', () => {
 
         expect(() => parseRebookExtensionCatalogEntries([{
             manifest: {
+                manifestVersion: 1,
                 id: 'example.invalid-url-type',
                 name: 'Invalid URL Type',
                 version: '1.0.0',
@@ -313,6 +495,7 @@ describe('rebook extensions', () => {
 
     it('merges installation state into catalog items for extension manager UIs', () => {
         const manifest = {
+            manifestVersion: 1 as const,
             id: 'example.installed',
             name: 'Installed',
             version: '2.0.0',
@@ -320,6 +503,7 @@ describe('rebook extensions', () => {
         const catalog = createRebookExtensionCatalog([
             createRebookExtensionCatalogEntry(manifest, { source: 'local' }),
             createRebookExtensionCatalogEntry({
+                manifestVersion: 1,
                 id: 'example.available',
                 name: 'Available',
                 version: '1.0.0',
@@ -348,6 +532,7 @@ describe('rebook extensions', () => {
             now: () => '2026-01-01T00:00:00.000Z',
             catalog: [
                 createRebookExtensionCatalogEntry({
+                    manifestVersion: 1,
                     id: 'example.marketplace',
                     name: 'Marketplace Extension',
                     version: '1.2.3',
@@ -389,6 +574,7 @@ describe('rebook extensions', () => {
 
     it('snapshots and restores extension manager installations', () => {
         const manifest = {
+            manifestVersion: 1 as const,
             id: 'example.local-managed',
             name: 'Local Managed',
             version: '3.0.0',
@@ -416,6 +602,7 @@ describe('rebook extensions', () => {
     it('collects typed command, panel, setting, and tool contributions', () => {
         const extension = defineRebookExtension({
             manifest: {
+                manifestVersion: 1,
                 id: 'example.reader-tools',
                 name: 'Reader Tools',
                 version: '1.0.0',
@@ -454,6 +641,7 @@ describe('rebook extensions', () => {
         const host = createRebookExtensionHost()
         const extension = defineRebookExtension({
             manifest: {
+                manifestVersion: 1,
                 id: 'example.commands',
                 name: 'Commands',
                 version: '1.0.0',
@@ -486,6 +674,7 @@ describe('rebook extensions', () => {
         let activationCount = 0
         const extension = defineRebookExtension({
             manifest: {
+                manifestVersion: 1,
                 id: 'example.lifecycle',
                 name: 'Lifecycle',
                 version: '1.0.0',
@@ -514,6 +703,7 @@ describe('rebook extensions', () => {
         const disposed: string[] = []
         const extension = defineRebookExtension({
             manifest: {
+                manifestVersion: 1,
                 id: 'example.failing-lifecycle',
                 name: 'Failing Lifecycle',
                 version: '1.0.0',
@@ -535,6 +725,7 @@ describe('rebook extensions', () => {
     it('provides extension settings defaults, updates, validation, and snapshots', () => {
         const registry = createRebookExtensionSettingsRegistry()
         const manifest = {
+            manifestVersion: 1,
             id: 'example.settings',
             name: 'Settings',
             version: '1.0.0',
@@ -582,6 +773,7 @@ describe('rebook extensions', () => {
         const host = createRebookExtensionHost()
         const extension = defineRebookExtension({
             manifest: {
+                manifestVersion: 1,
                 id: 'example.scoped-settings',
                 name: 'Scoped Settings',
                 version: '1.0.0',
@@ -609,11 +801,13 @@ describe('rebook extensions', () => {
     it('tracks command ownership and prevents cross-extension command id conflicts', () => {
         const registry = createRebookExtensionCommandRegistry()
         const first = {
+            manifestVersion: 1 as const,
             id: 'example.first-command-owner',
             name: 'First Command Owner',
             version: '1.0.0',
         }
         const second = {
+            manifestVersion: 1 as const,
             id: 'example.second-command-owner',
             name: 'Second Command Owner',
             version: '1.0.0',

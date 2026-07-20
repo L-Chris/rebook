@@ -276,6 +276,7 @@ describe('ReaderSession', () => {
 
     it('lists extension manifests installed through reader config', async () => {
         const extension = defineRebookPlugin({
+            manifestVersion: 1,
             id: 'example.config-extension',
             name: 'Config Extension',
             version: '1.0.0',
@@ -297,6 +298,7 @@ describe('ReaderSession', () => {
 
     it('installs and uninstalls extensions for future book opens', async () => {
         const extension = defineRebookPlugin({
+            manifestVersion: 1,
             id: 'example.runtime-extension',
             name: 'Runtime Extension',
             version: '1.0.0',
@@ -318,16 +320,19 @@ describe('ReaderSession', () => {
 
     it('replaces installed extensions without changing plugin order', async () => {
         const first = defineRebookPlugin({
+            manifestVersion: 1,
             id: 'example.replace-extension',
             name: 'Replace Extension',
             version: '1.0.0',
         }, input => ({ ...input, metadata: { title: 'first' } }))
         const second = defineRebookPlugin({
+            manifestVersion: 1,
             id: 'example.replace-extension',
             name: 'Replace Extension',
             version: '2.0.0',
         }, input => ({ ...input, metadata: { title: 'second' } }))
         const suffix = defineRebookPlugin({
+            manifestVersion: 1,
             id: 'example.suffix-extension',
             name: 'Suffix Extension',
             version: '1.0.0',
@@ -351,6 +356,7 @@ describe('ReaderSession', () => {
         const disposed: string[] = []
         const extension = defineRebookExtension({
             manifest: {
+                manifestVersion: 1,
                 id: 'example.reader-command',
                 name: 'Reader Command',
                 version: '1.0.0',
@@ -394,6 +400,7 @@ describe('ReaderSession', () => {
     it('exposes extension settings through the reader host', async () => {
         const extension = defineRebookExtension({
             manifest: {
+                manifestVersion: 1,
                 id: 'example.reader-settings',
                 name: 'Reader Settings',
                 version: '1.0.0',

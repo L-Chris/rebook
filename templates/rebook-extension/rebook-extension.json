@@ -1,0 +1,25 @@
+{
+  "manifestVersion": 1,
+  "id": "com.example.hello",
+  "name": "hello",
+  "displayName": "Hello Rebook",
+  "version": "0.1.0",
+  "publisher": "example",
+  "description": "A minimal Rebook extension.",
+  "license": "MIT",
+  "entry": "dist/index.js",
+  "engines": {
+    "rebook": "^0.8.0",
+    "hostApi": "1"
+  },
+  "runtime": { "kind": "worker" },
+  "permissions": [],
+  "contributes": {
+    "commands": [
+      { "id": "com.example.hello.sayHello", "title": "Say hello" }
+    ],
+    "settings": {
+      "greeting": { "type": "string", "title": "Greeting", "default": "Hello from Rebook" }
+    }
+  }
+}

@@ -145,6 +145,7 @@ Built-in tools include chapter listing, chapter text reading, metadata lookup, a
 ## Documentation
 
 - [**API Reference**](./docs/API.md) - API details for readers, parsers, renderers, plugins, exporters, adapters, search, MCP, and document APIs.
+- [**Extension Development**](./docs/extensions/README.md) - Manifest v1, Host API, permissions, packaging, examples, and publishing.
 - [**Architecture**](./docs/ARCHITECTURE.md) - Parser/renderer separation, adapter design, rendering pipeline, and project layout.
 - [**Experience & Lessons**](./docs/EXPERIENCE.md) - Design rationale, performance notes, AI workflow ideas, and implementation lessons.
 

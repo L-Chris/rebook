@@ -1,0 +1,11 @@
+{
+  "manifestVersion": 1,
+  "id": "rebook.example.book-metadata",
+  "name": "book-metadata",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "engines": { "rebook": "^0.8.0", "hostApi": "1" },
+  "runtime": { "kind": "trusted" },
+  "capabilities": ["book.transform"],
+  "permissions": ["book.read", "book.write"]
+}

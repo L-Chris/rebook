@@ -1,0 +1,13 @@
+{
+  "manifestVersion": 1,
+  "id": "rebook.example.iframe-panel",
+  "name": "iframe-panel",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "engines": { "rebook": "^0.8.0", "hostApi": "1" },
+  "runtime": { "kind": "iframe" },
+  "permissions": ["ui.panel"],
+  "contributes": {
+    "panels": [{ "id": "rebook.example.iframe-panel.about", "title": "Example panel", "location": "settings" }]
+  }
+}

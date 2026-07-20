@@ -26675,8 +26675,7 @@ function getTableColumns(table) {
 function clamp01$1(value) {
 	return Math.max(0, Math.min(1, value));
 }
-//#endregion
-//#region src/core/extensions.ts
+var REBOOK_EXTENSION_SEMVER_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 var RebookExtensionRuntimeRegistry = class {
 	constructor() {
 		_defineProperty(this, "runtimes", /* @__PURE__ */ new Map());
@@ -27008,14 +27007,29 @@ function createRebookExtensionRegistry(extensions = []) {
 }
 function assertRebookExtensionManifest(manifest) {
 	if (!manifest || typeof manifest !== "object") throw new Error("Rebook extension manifest must be an object.");
+	if (manifest.manifestVersion !== 1) throw new Error(`Rebook extension manifestVersion must be 1.`);
 	assertNonEmptyString(manifest.id, "id");
+	if (!/^[a-z0-9][a-z0-9._-]*$/.test(manifest.id)) throw new Error("Rebook extension manifest field \"id\" is invalid.");
 	assertNonEmptyString(manifest.name, "name");
 	assertNonEmptyString(manifest.version, "version");
+	if (!REBOOK_EXTENSION_SEMVER_PATTERN.test(manifest.version)) throw new Error(`Rebook extension "${manifest.id}" version must be valid SemVer.`);
+	if (manifest.engines?.hostApi !== void 0 && manifest.engines.hostApi !== String(1)) throw new Error(`Rebook extension "${manifest.id}" requires unsupported Host API "${manifest.engines.hostApi}".`);
+	assertOptionalHTTPURL(manifest.homepage, "homepage", manifest.id);
+	assertOptionalHTTPURL(manifest.repository, "repository", manifest.id);
+	assertRebookExtensionPermissions(manifest);
 	assertRebookExtensionContributions(manifest);
 	return manifest;
 }
 function assertNonEmptyString(value, field) {
 	if (typeof value !== "string" || value.trim().length === 0) throw new Error(`Rebook extension manifest field "${field}" must be a non-empty string.`);
+}
+function assertOptionalHTTPURL(value, field, extensionId) {
+	if (value === void 0) return;
+	try {
+		const protocol = new URL(value).protocol;
+		if (protocol === "http:" || protocol === "https:") return;
+	} catch {}
+	throw new Error(`Rebook extension "${extensionId}" field "${field}" must be an http or https URL.`);
 }
 var validSettingTypes = /* @__PURE__ */ new Set([
 	"string",
@@ -27025,6 +27039,46 @@ var validSettingTypes = /* @__PURE__ */ new Set([
 	"array",
 	"object"
 ]);
+var validPermissions = /* @__PURE__ */ new Set([
+	"book.read",
+	"book.write",
+	"reader.read",
+	"reader.navigate",
+	"storage",
+	"network",
+	"clipboard.read",
+	"clipboard.write",
+	"audio.playback",
+	"ui.panel"
+]);
+var validRuntimeKinds = /* @__PURE__ */ new Set([
+	"trusted",
+	"worker",
+	"iframe"
+]);
+function assertRebookExtensionPermissions(manifest) {
+	const permissions = manifest.permissions ?? [];
+	if (!Array.isArray(permissions)) throw new Error(`Rebook extension "${manifest.id}" permissions must be an array.`);
+	const seen = /* @__PURE__ */ new Set();
+	for (const permission of permissions) {
+		if (!validPermissions.has(permission)) throw new Error(`Rebook extension "${manifest.id}" requests unsupported permission "${String(permission)}".`);
+		if (seen.has(permission)) throw new Error(`Rebook extension "${manifest.id}" requests duplicate permission "${permission}".`);
+		seen.add(permission);
+	}
+	if (manifest.allowedHosts !== void 0) {
+		if (!permissions.includes("network")) throw new Error(`Rebook extension "${manifest.id}" defines allowedHosts without the network permission.`);
+		if (!Array.isArray(manifest.allowedHosts) || manifest.allowedHosts.length === 0) throw new Error(`Rebook extension "${manifest.id}" allowedHosts must be a non-empty array.`);
+		for (const host of manifest.allowedHosts) assertNonEmptyString(host, `allowedHosts entry for ${manifest.id}`);
+	}
+	if (permissions.includes("network") && !manifest.allowedHosts?.length) throw new Error(`Rebook extension "${manifest.id}" requests the network permission without allowedHosts.`);
+	if (manifest.runtime && !validRuntimeKinds.has(manifest.runtime.kind)) throw new Error(`Rebook extension "${manifest.id}" runtime kind "${String(manifest.runtime.kind)}" is unsupported.`);
+	if (manifest.runtime?.kind === "worker" && permissions.length > 0) throw new Error(`Rebook extension "${manifest.id}" Worker runtime Host API exposes commands and settings only.`);
+	if (manifest.runtime?.kind === "iframe") {
+		const unsupported = permissions.filter((permission) => permission !== "ui.panel");
+		if (unsupported.length > 0) throw new Error(`Rebook extension "${manifest.id}" iframe runtime requests unsupported permissions: ${unsupported.join(", ")}.`);
+		if (!permissions.includes("ui.panel") || !manifest.contributes?.panels?.length) throw new Error(`Rebook extension "${manifest.id}" iframe runtime requires ui.panel and a panel contribution.`);
+	}
+}
 function assertRebookExtensionContributions(manifest) {
 	const contributes = manifest.contributes;
 	if (contributes === void 0) return;
@@ -27038,16 +27092,34 @@ function assertRebookExtensionContributions(manifest) {
 			assertNonEmptyString(key, `contributes.settings key for ${manifest.id}`);
 			if (!setting || typeof setting !== "object") throw new Error(`Rebook extension "${manifest.id}" setting "${key}" must be an object.`);
 			if (!validSettingTypes.has(setting.type)) throw new Error(`Rebook extension "${manifest.id}" setting "${key}" has unsupported type "${String(setting.type)}".`);
+			if (setting.default !== void 0 && !extensionSettingValueMatchesType(setting.default, setting.type)) throw new Error(`Rebook extension "${manifest.id}" setting "${key}" default does not match type "${setting.type}".`);
+			if (setting.enum !== void 0) {
+				if (!Array.isArray(setting.enum) || setting.enum.length === 0) throw new Error(`Rebook extension "${manifest.id}" setting "${key}" enum must be a non-empty array.`);
+				if (setting.default !== void 0 && !setting.enum.some((value) => JSON.stringify(value) === JSON.stringify(setting.default))) throw new Error(`Rebook extension "${manifest.id}" setting "${key}" default must be one of its enum values.`);
+			}
 		}
+	}
+}
+function extensionSettingValueMatchesType(value, type) {
+	switch (type) {
+		case "string": return typeof value === "string";
+		case "number": return typeof value === "number" && Number.isFinite(value);
+		case "integer": return typeof value === "number" && Number.isInteger(value);
+		case "boolean": return typeof value === "boolean";
+		case "array": return Array.isArray(value);
+		case "object": return Boolean(value && typeof value === "object" && !Array.isArray(value));
 	}
 }
 function assertNamedContributionArray(extensionId, field, contributions) {
 	if (contributions === void 0) return;
 	if (!Array.isArray(contributions)) throw new Error(`Rebook extension "${extensionId}" ${field} contribution must be an array.`);
+	const seen = /* @__PURE__ */ new Set();
 	for (const [index, contribution] of contributions.entries()) {
 		if (!contribution || typeof contribution !== "object") throw new Error(`Rebook extension "${extensionId}" ${field}[${index}] must be an object.`);
 		assertNonEmptyString(contribution.id, `contributes.${field}[${index}].id`);
 		assertNonEmptyString(contribution.title, `contributes.${field}[${index}].title`);
+		if (seen.has(contribution.id)) throw new Error(`Rebook extension "${extensionId}" ${field} contribution id "${contribution.id}" is duplicated.`);
+		seen.add(contribution.id);
 	}
 }
 function createScopedCommandService(registry, manifest, subscriptions) {

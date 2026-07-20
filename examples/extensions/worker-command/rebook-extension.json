@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "id": "rebook.example.worker-command",
+  "name": "worker-command",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "engines": { "rebook": "^0.8.0", "hostApi": "1" },
+  "runtime": { "kind": "worker" },
+  "permissions": [],
+  "contributes": {
+    "commands": [{ "id": "rebook.example.worker-command.count", "title": "Count characters" }],
+    "settings": { "sample": { "type": "string", "title": "Sample text", "default": "Rebook" } }
+  }
+}

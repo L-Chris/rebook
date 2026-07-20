@@ -1,5 +1,11 @@
 import type { Book, RebookPlugin } from './types'
 
+/** Frozen manifest schema understood by the current extension toolchain. */
+export const REBOOK_EXTENSION_MANIFEST_VERSION = 1 as const
+/** Frozen host API exposed to extension activation contexts. */
+export const REBOOK_EXTENSION_HOST_API_VERSION = 1 as const
+const REBOOK_EXTENSION_SEMVER_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+
 export type RebookExtensionCategory =
     | 'ai'
     | 'annotation'
@@ -24,6 +30,29 @@ export type RebookExtensionCapability =
     | 'translation'
     | 'tts.playback'
     | 'ui.panel'
+
+/**
+ * Privileges requested by an extension. Capabilities describe what an
+ * extension provides; permissions describe what it may access.
+ */
+export type RebookExtensionPermission =
+    | 'book.read'
+    | 'book.write'
+    | 'reader.read'
+    | 'reader.navigate'
+    | 'storage'
+    | 'network'
+    | 'clipboard.read'
+    | 'clipboard.write'
+    | 'audio.playback'
+    | 'ui.panel'
+
+export type RebookExtensionRuntimeKind = 'trusted' | 'worker' | 'iframe'
+
+export interface RebookExtensionRuntimeDeclaration {
+    /** Requested execution environment. The host always makes the final trust decision. */
+    readonly kind: RebookExtensionRuntimeKind
+}
 
 export type RebookExtensionSettingType = 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object'
 export type RebookExtensionPanelLocation = 'sidebar' | 'bottom' | 'reader' | 'settings'
@@ -181,6 +210,8 @@ export interface RebookExtensionHost {
 }
 
 export interface RebookExtensionManifest {
+    /** Version of the rebook-extension.json schema. */
+    readonly manifestVersion: typeof REBOOK_EXTENSION_MANIFEST_VERSION
     /** Stable marketplace/package id, for example "rebook.ai-chat". */
     readonly id: string
     /** Human-readable extension name. */
@@ -198,17 +229,24 @@ export interface RebookExtensionManifest {
     readonly categories?: readonly RebookExtensionCategory[]
     /** Capability declarations let hosts and future marketplaces filter extensions before loading code. */
     readonly capabilities?: readonly RebookExtensionCapability[]
+    /** Privileges requested from the host before any extension code executes. */
+    readonly permissions?: readonly RebookExtensionPermission[]
+    /** Allowed network hosts when the network permission is requested. Use "*" only for trusted built-ins. */
+    readonly allowedHosts?: readonly string[]
+    /** Requested runtime. Marketplace trust policy may force a stricter runtime. */
+    readonly runtime?: RebookExtensionRuntimeDeclaration
     /** Package entry path for marketplace/distribution metadata. Runtime hosts may ignore it. */
     readonly entry?: string
     readonly engines?: {
         readonly rebook?: string
+        readonly hostApi?: string
     }
     /** Future extension-point contributions such as commands, panels, tools, or settings schemas. */
     readonly contributes?: RebookExtensionContributions
 }
 
 export interface RebookExtensionContext {
-    readonly apiVersion: 1
+    readonly apiVersion: typeof REBOOK_EXTENSION_HOST_API_VERSION
     readonly extensionId: string
     readonly manifest: RebookExtensionManifest
     readonly subscriptions: RebookDisposable[]
@@ -245,12 +283,28 @@ export interface ResolvedRebookExtension {
 
 export type RebookExtensionCatalogSource = 'builtin' | 'marketplace' | 'local' | 'remote' | string
 
+export type RebookExtensionIntegrity = `sha256-${string}`
+export type RebookExtensionTrustLevel = 'builtin' | 'verified' | 'unverified'
+
+export interface RebookExtensionArtifact {
+    /** Immutable ESM entry URL for this exact extension version. */
+    readonly url: string
+    /** SHA-256 digest of the artifact bytes, encoded as base64. */
+    readonly integrity: RebookExtensionIntegrity
+    readonly size: number
+    readonly contentType?: string
+}
+
 export interface RebookExtensionCatalogEntry {
     readonly manifest: RebookExtensionManifest
     /** Where this listing came from. Hosts can use this to distinguish built-ins from marketplace results. */
     readonly source?: RebookExtensionCatalogSource
     /** Optional URL or package locator used by an installer to fetch the extension bundle. */
     readonly installUrl?: string
+    /** Immutable, integrity-pinned artifact. Required for marketplace execution. */
+    readonly artifact?: RebookExtensionArtifact
+    /** Catalog-assigned trust; a manifest cannot grant trust to itself. */
+    readonly trust?: RebookExtensionTrustLevel
     readonly verified?: boolean
     readonly publishedAt?: string
     readonly updatedAt?: string
@@ -621,7 +675,15 @@ export async function normalizeRebookExtensionModule(
     if (manifest && extension.manifest.id !== manifest.id) {
         throw new Error(`Rebook extension module id mismatch: expected "${manifest.id}", received "${extension.manifest.id}".`)
     }
-    return extension
+    if (manifest && extension.manifest.version !== manifest.version) {
+        throw new Error(`Rebook extension module version mismatch: expected "${manifest.version}", received "${extension.manifest.version}".`)
+    }
+    // Catalog metadata was reviewed and integrity-pinned; module-provided
+    // metadata must never be able to widen permissions or contributions after
+    // the artifact has passed review.
+    return manifest
+        ? defineRebookExtension({ ...extension, manifest })
+        : extension
 }
 
 export async function loadRebookExtensionModule(
@@ -1032,9 +1094,25 @@ export function assertRebookExtensionManifest(manifest: RebookExtensionManifest)
     if (!manifest || typeof manifest !== 'object') {
         throw new Error('Rebook extension manifest must be an object.')
     }
+    if (manifest.manifestVersion !== REBOOK_EXTENSION_MANIFEST_VERSION) {
+        throw new Error(`Rebook extension manifestVersion must be ${REBOOK_EXTENSION_MANIFEST_VERSION}.`)
+    }
     assertNonEmptyString(manifest.id, 'id')
+    if (!/^[a-z0-9][a-z0-9._-]*$/.test(manifest.id)) {
+        throw new Error('Rebook extension manifest field "id" is invalid.')
+    }
     assertNonEmptyString(manifest.name, 'name')
     assertNonEmptyString(manifest.version, 'version')
+    if (!REBOOK_EXTENSION_SEMVER_PATTERN.test(manifest.version)) {
+        throw new Error(`Rebook extension "${manifest.id}" version must be valid SemVer.`)
+    }
+    if (manifest.engines?.hostApi !== undefined
+        && manifest.engines.hostApi !== String(REBOOK_EXTENSION_HOST_API_VERSION)) {
+        throw new Error(`Rebook extension "${manifest.id}" requires unsupported Host API "${manifest.engines.hostApi}".`)
+    }
+    assertOptionalHTTPURL(manifest.homepage, 'homepage', manifest.id)
+    assertOptionalHTTPURL(manifest.repository, 'repository', manifest.id)
+    assertRebookExtensionPermissions(manifest)
     assertRebookExtensionContributions(manifest)
     return manifest
 }
@@ -1043,6 +1121,15 @@ function assertNonEmptyString(value: unknown, field: string): asserts value is s
     if (typeof value !== 'string' || value.trim().length === 0) {
         throw new Error(`Rebook extension manifest field "${field}" must be a non-empty string.`)
     }
+}
+
+function assertOptionalHTTPURL(value: string | undefined, field: string, extensionId: string): void {
+    if (value === undefined) return
+    try {
+        const protocol = new URL(value).protocol
+        if (protocol === 'http:' || protocol === 'https:') return
+    } catch {}
+    throw new Error(`Rebook extension "${extensionId}" field "${field}" must be an http or https URL.`)
 }
 
 function assertMissingExtensionManifest(): never {
@@ -1057,6 +1144,65 @@ const validSettingTypes = new Set<RebookExtensionSettingType>([
     'array',
     'object',
 ])
+
+const validPermissions = new Set<RebookExtensionPermission>([
+    'book.read',
+    'book.write',
+    'reader.read',
+    'reader.navigate',
+    'storage',
+    'network',
+    'clipboard.read',
+    'clipboard.write',
+    'audio.playback',
+    'ui.panel',
+])
+
+const validRuntimeKinds = new Set<RebookExtensionRuntimeKind>(['trusted', 'worker', 'iframe'])
+
+function assertRebookExtensionPermissions(manifest: RebookExtensionManifest): void {
+    const permissions = manifest.permissions ?? []
+    if (!Array.isArray(permissions)) {
+        throw new Error(`Rebook extension "${manifest.id}" permissions must be an array.`)
+    }
+    const seen = new Set<string>()
+    for (const permission of permissions) {
+        if (!validPermissions.has(permission)) {
+            throw new Error(`Rebook extension "${manifest.id}" requests unsupported permission "${String(permission)}".`)
+        }
+        if (seen.has(permission)) {
+            throw new Error(`Rebook extension "${manifest.id}" requests duplicate permission "${permission}".`)
+        }
+        seen.add(permission)
+    }
+    if (manifest.allowedHosts !== undefined) {
+        if (!permissions.includes('network')) {
+            throw new Error(`Rebook extension "${manifest.id}" defines allowedHosts without the network permission.`)
+        }
+        if (!Array.isArray(manifest.allowedHosts) || manifest.allowedHosts.length === 0) {
+            throw new Error(`Rebook extension "${manifest.id}" allowedHosts must be a non-empty array.`)
+        }
+        for (const host of manifest.allowedHosts) assertNonEmptyString(host, `allowedHosts entry for ${manifest.id}`)
+    }
+    if (permissions.includes('network') && !manifest.allowedHosts?.length) {
+        throw new Error(`Rebook extension "${manifest.id}" requests the network permission without allowedHosts.`)
+    }
+    if (manifest.runtime && !validRuntimeKinds.has(manifest.runtime.kind)) {
+        throw new Error(`Rebook extension "${manifest.id}" runtime kind "${String(manifest.runtime.kind)}" is unsupported.`)
+    }
+    if (manifest.runtime?.kind === 'worker' && permissions.length > 0) {
+        throw new Error(`Rebook extension "${manifest.id}" Worker runtime Host API exposes commands and settings only.`)
+    }
+    if (manifest.runtime?.kind === 'iframe') {
+        const unsupported = permissions.filter(permission => permission !== 'ui.panel')
+        if (unsupported.length > 0) {
+            throw new Error(`Rebook extension "${manifest.id}" iframe runtime requests unsupported permissions: ${unsupported.join(', ')}.`)
+        }
+        if (!permissions.includes('ui.panel') || !manifest.contributes?.panels?.length) {
+            throw new Error(`Rebook extension "${manifest.id}" iframe runtime requires ui.panel and a panel contribution.`)
+        }
+    }
+}
 
 function assertRebookExtensionContributions(manifest: RebookExtensionManifest): void {
     const contributes = manifest.contributes
@@ -1079,7 +1225,30 @@ function assertRebookExtensionContributions(manifest: RebookExtensionManifest): 
             if (!validSettingTypes.has(setting.type)) {
                 throw new Error(`Rebook extension "${manifest.id}" setting "${key}" has unsupported type "${String(setting.type)}".`)
             }
+            if (setting.default !== undefined && !extensionSettingValueMatchesType(setting.default, setting.type)) {
+                throw new Error(`Rebook extension "${manifest.id}" setting "${key}" default does not match type "${setting.type}".`)
+            }
+            if (setting.enum !== undefined) {
+                if (!Array.isArray(setting.enum) || setting.enum.length === 0) {
+                    throw new Error(`Rebook extension "${manifest.id}" setting "${key}" enum must be a non-empty array.`)
+                }
+                if (setting.default !== undefined
+                    && !setting.enum.some(value => JSON.stringify(value) === JSON.stringify(setting.default))) {
+                    throw new Error(`Rebook extension "${manifest.id}" setting "${key}" default must be one of its enum values.`)
+                }
+            }
         }
+    }
+}
+
+function extensionSettingValueMatchesType(value: unknown, type: RebookExtensionSettingType): boolean {
+    switch (type) {
+        case 'string': return typeof value === 'string'
+        case 'number': return typeof value === 'number' && Number.isFinite(value)
+        case 'integer': return typeof value === 'number' && Number.isInteger(value)
+        case 'boolean': return typeof value === 'boolean'
+        case 'array': return Array.isArray(value)
+        case 'object': return Boolean(value && typeof value === 'object' && !Array.isArray(value))
     }
 }
 
@@ -1092,12 +1261,17 @@ function assertNamedContributionArray(
     if (!Array.isArray(contributions)) {
         throw new Error(`Rebook extension "${extensionId}" ${field} contribution must be an array.`)
     }
+    const seen = new Set<string>()
     for (const [index, contribution] of contributions.entries()) {
         if (!contribution || typeof contribution !== 'object') {
             throw new Error(`Rebook extension "${extensionId}" ${field}[${index}] must be an object.`)
         }
         assertNonEmptyString(contribution.id, `contributes.${field}[${index}].id`)
         assertNonEmptyString(contribution.title, `contributes.${field}[${index}].title`)
+        if (seen.has(contribution.id)) {
+            throw new Error(`Rebook extension "${extensionId}" ${field} contribution id "${contribution.id}" is duplicated.`)
+        }
+        seen.add(contribution.id)
     }
 }
 
@@ -1138,11 +1312,45 @@ function normalizeCatalogEntry(
         manifest: assertRebookExtensionManifest(entry.manifest as RebookExtensionManifest),
         source: typeof entry.source === 'string' ? entry.source : documentSource,
         installUrl: readOptionalString(entry.installUrl, `entries[${index}].installUrl`),
+        artifact: normalizeExtensionArtifact(entry.artifact, index),
+        trust: readOptionalTrustLevel(entry.trust, `entries[${index}].trust`),
         verified: readOptionalBoolean(entry.verified, `entries[${index}].verified`),
         publishedAt: readOptionalString(entry.publishedAt, `entries[${index}].publishedAt`),
         updatedAt: readOptionalString(entry.updatedAt, `entries[${index}].updatedAt`),
     }
     return normalized
+}
+
+function normalizeExtensionArtifact(value: unknown, index: number): RebookExtensionArtifact | undefined {
+    if (value === undefined) return undefined
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error(`Rebook extension catalog field "entries[${index}].artifact" must be an object.`)
+    }
+    const artifact = value as Record<string, unknown>
+    const url = readOptionalString(artifact.url, `entries[${index}].artifact.url`)
+    const integrity = readOptionalString(artifact.integrity, `entries[${index}].artifact.integrity`)
+    const size = artifact.size
+    if (!url?.trim()) throw new Error(`Rebook extension catalog field "entries[${index}].artifact.url" is required.`)
+    if (!integrity || !/^sha256-[A-Za-z0-9+/]{43}=$/.test(integrity)) {
+        throw new Error(`Rebook extension catalog field "entries[${index}].artifact.integrity" must be a SHA-256 SRI value.`)
+    }
+    if (!Number.isSafeInteger(size) || Number(size) <= 0) {
+        throw new Error(`Rebook extension catalog field "entries[${index}].artifact.size" must be a positive integer.`)
+    }
+    return {
+        url,
+        integrity: integrity as RebookExtensionIntegrity,
+        size: Number(size),
+        contentType: readOptionalString(artifact.contentType, `entries[${index}].artifact.contentType`),
+    }
+}
+
+function readOptionalTrustLevel(value: unknown, field: string): RebookExtensionTrustLevel | undefined {
+    if (value === undefined) return undefined
+    if (value !== 'builtin' && value !== 'verified' && value !== 'unverified') {
+        throw new Error(`Rebook extension catalog field "${field}" has an unsupported trust level.`)
+    }
+    return value
 }
 
 function readOptionalString(value: unknown, field: string): string | undefined {

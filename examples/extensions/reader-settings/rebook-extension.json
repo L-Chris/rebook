@@ -1,0 +1,19 @@
+{
+  "manifestVersion": 1,
+  "id": "rebook.example.reader-settings",
+  "name": "reader-settings",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "engines": { "rebook": "^0.8.0", "hostApi": "1" },
+  "runtime": { "kind": "trusted" },
+  "permissions": [],
+  "contributes": {
+    "commands": [
+      { "id": "rebook.example.reader-settings.inspect", "title": "Inspect extension settings" }
+    ],
+    "settings": {
+      "label": { "type": "string", "title": "Label", "default": "Reader tools" },
+      "enabled": { "type": "boolean", "title": "Enabled", "default": true }
+    }
+  }
+}

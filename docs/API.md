@@ -351,6 +351,8 @@ reader.destroy() // Release all resources
 
 ## Plugins
 
+> `RebookPlugin` is the low-level `Book -> Book` middleware API. For installable packages, manifests, permissions, commands, settings, marketplace distribution, and lifecycle, see [Rebook extensions](./extensions/README.md).
+
 Plugins are `Book` middleware. They run after parsing or `openBook()` and before rendering in the shared reader session used by browser and Mini Program readers.
 
 ```typescript

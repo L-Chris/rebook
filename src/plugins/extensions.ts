@@ -39,6 +39,7 @@ export interface BuiltInRebookExtensionOptions {
 }
 
 export const trialLimitExtensionManifest = {
+    manifestVersion: 1,
     id: TRIAL_LIMIT_EXTENSION_ID,
     name: 'Trial Limit',
     displayName: 'Trial Limit',
@@ -47,6 +48,9 @@ export const trialLimitExtensionManifest = {
     description: 'Restrict reader navigation to a configurable preview range.',
     categories: ['reader', 'utility'],
     capabilities: ['book.transform', 'reader.access'],
+    permissions: ['book.read', 'reader.navigate'],
+    runtime: { kind: 'trusted' },
+    engines: { rebook: '^0.8.0', hostApi: '1' },
     contributes: {
         settings: {
             maxPages: { type: 'number', default: 0 },
@@ -55,6 +59,7 @@ export const trialLimitExtensionManifest = {
 } satisfies RebookExtensionManifest
 
 export const translationExtensionManifest = {
+    manifestVersion: 1,
     id: TRANSLATION_EXTENSION_ID,
     name: 'Translation',
     displayName: 'Translation',
@@ -63,6 +68,10 @@ export const translationExtensionManifest = {
     description: 'Translate book blocks with a configured language model.',
     categories: ['translation', 'ai'],
     capabilities: ['book.transform', 'translation'],
+    permissions: ['book.read', 'book.write', 'network'],
+    allowedHosts: ['*'],
+    runtime: { kind: 'trusted' },
+    engines: { rebook: '^0.8.0', hostApi: '1' },
     contributes: {
         settings: {
             targetLanguage: { type: 'string', default: 'zh-CN' },
@@ -73,6 +82,7 @@ export const translationExtensionManifest = {
 } satisfies RebookExtensionManifest
 
 export const professionalTranslationExtensionManifest = {
+    manifestVersion: 1,
     id: PROFESSIONAL_TRANSLATION_EXTENSION_ID,
     name: 'Professional Translation',
     displayName: 'Professional Translation',
@@ -81,6 +91,10 @@ export const professionalTranslationExtensionManifest = {
     description: 'Use rebook-service professional translation workflow and cached chunk results.',
     categories: ['translation', 'ai'],
     capabilities: ['book.transform', 'translation'],
+    permissions: ['book.read', 'book.write', 'network'],
+    allowedHosts: ['*'],
+    runtime: { kind: 'trusted' },
+    engines: { rebook: '^0.8.0', hostApi: '1' },
     contributes: {
         settings: {
             serviceBaseUrl: { type: 'string' },
@@ -91,6 +105,7 @@ export const professionalTranslationExtensionManifest = {
 } satisfies RebookExtensionManifest
 
 export const ttsExtensionManifest = {
+    manifestVersion: 1,
     id: TTS_EXTENSION_ID,
     name: 'Text To Speech',
     displayName: 'Text To Speech',
@@ -99,6 +114,10 @@ export const ttsExtensionManifest = {
     description: 'Attach text-to-speech playback and prefetching to books.',
     categories: ['tts', 'ai'],
     capabilities: ['book.transform', 'tts.playback'],
+    permissions: ['book.read', 'network', 'audio.playback'],
+    allowedHosts: ['*'],
+    runtime: { kind: 'trusted' },
+    engines: { rebook: '^0.8.0', hostApi: '1' },
     contributes: {
         settings: {
             endpoint: { type: 'string', default: 'http://127.0.0.1:4177' },
@@ -109,6 +128,7 @@ export const ttsExtensionManifest = {
 } satisfies RebookExtensionManifest
 
 export const aiChatExtensionManifest = {
+    manifestVersion: 1,
     id: AI_CHAT_EXTENSION_ID,
     name: 'AI Chat',
     displayName: 'AI Chat',
@@ -117,6 +137,10 @@ export const aiChatExtensionManifest = {
     description: 'Chat with the current book using search, content-reading, and rewrite tools.',
     categories: ['ai', 'reader'],
     capabilities: ['ai.chat', 'content.read', 'content.rewrite', 'search', 'book.transform'],
+    permissions: ['book.read', 'book.write', 'network', 'ui.panel'],
+    allowedHosts: ['*'],
+    runtime: { kind: 'trusted' },
+    engines: { rebook: '^0.8.0', hostApi: '1' },
     contributes: {
         commands: [
             { id: 'rebook.aiChat.open', title: 'Open AI Chat' },
@@ -141,7 +165,7 @@ export const BUILT_IN_REBOOK_EXTENSION_MANIFESTS = [
 
 export function createBuiltInRebookExtensionCatalog(): RebookExtensionCatalog {
     return createRebookExtensionCatalog(BUILT_IN_REBOOK_EXTENSION_MANIFESTS.map(manifest =>
-        createRebookExtensionCatalogEntry(manifest, { source: 'builtin', verified: true }),
+        createRebookExtensionCatalogEntry(manifest, { source: 'builtin', trust: 'builtin', verified: true }),
     ))
 }
 

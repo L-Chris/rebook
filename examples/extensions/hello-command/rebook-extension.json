@@ -1,0 +1,13 @@
+{
+  "manifestVersion": 1,
+  "id": "rebook.example.hello-command",
+  "name": "hello-command",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "engines": { "rebook": "^0.8.0", "hostApi": "1" },
+  "runtime": { "kind": "trusted" },
+  "permissions": [],
+  "contributes": {
+    "commands": [{ "id": "rebook.example.hello-command.hello", "title": "Hello" }]
+  }
+}

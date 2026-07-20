@@ -145,6 +145,7 @@ await reader.next()
 ## 文档
 
 - [**API 参考**](./docs/API.md) - readers、parsers、renderers、plugins、exporters、adapters、search、MCP 和文档 API。
+- [**扩展开发**](./docs/extensions/README.md) - Manifest v1、Host API、权限、打包、示例和发布流程。
 - [**架构设计**](./docs/ARCHITECTURE.md) - 解析器/渲染器分离、adapter 设计、渲染管线和项目结构。
 - [**经验总结**](./docs/EXPERIENCE.md) - 设计取舍、性能说明、AI 工作流想法和实现经验。
 
