@@ -477,6 +477,102 @@ describe('BrowserRenderer', () => {
         surface.destroy?.()
     })
 
+    it('renders block gaps as non-collapsing flow geometry without double-counting the leading gap', () => {
+        const firstBlock = {
+            id: 'first',
+            type: 'paragraph' as const,
+            blockGapAfter: 10,
+            segments: [{ text: 'First paragraph' }],
+        }
+        const secondBlock = {
+            id: 'second',
+            type: 'paragraph' as const,
+            blockGapBefore: 6,
+            blockGapAfter: 0,
+            segments: [{ text: 'Second paragraph' }],
+        }
+        const lines: LineRange[] = [
+            {
+                index: 0,
+                kind: 'text',
+                block: firstBlock,
+                start: { segmentIndex: 0, cursor: { segmentIndex: 0, graphemeIndex: 0 } },
+                end: { segmentIndex: 0, cursor: { segmentIndex: 0, graphemeIndex: 15 } },
+                text: 'First paragraph',
+                width: 120,
+                top: 0,
+                height: 24,
+                segments: [],
+            },
+            {
+                index: 1,
+                kind: 'text',
+                block: secondBlock,
+                start: { segmentIndex: 1, cursor: { segmentIndex: 1, graphemeIndex: 0 } },
+                end: { segmentIndex: 1, cursor: { segmentIndex: 1, graphemeIndex: 16 } },
+                text: 'Second paragraph',
+                width: 128,
+                top: 40,
+                height: 24,
+                segments: [],
+            },
+        ]
+        const prepared = prepareBlocks([firstBlock, secondBlock], {
+            baseStyle: { fontFamily: 'serif', fontSize: 16, lineHeight: 1.5 },
+        })
+        const renderer = new BrowserReflowableContentRenderer()
+        const render = (visibleLines: readonly LineRange[]) => renderer.renderSurface({
+            sectionIndex: 0,
+            pageIndex: 0,
+            layoutMode: 'paginated',
+            layout: {
+                margin: 0,
+                gap: 0,
+                columnWidth: 260,
+                columns: 1,
+                pageHeight: 120,
+                columnHeight: 120,
+                pagePaddingInline: 0,
+                pagePaddingBlock: 0,
+                totalHeight: 120,
+                pageCount: 1,
+            },
+            lines: visibleLines,
+            prepared,
+            styles: {},
+            baseTextStyle: { fontFamily: 'serif', fontSize: 16, lineHeight: 1.5 },
+            lineHeightPixels: 24,
+            sourceScrollTop: 0,
+            sourceViewportHeight: 120,
+            surfaceWidth: 260,
+            surfaceHeight: 120,
+        })
+
+        const fullSurface = render(lines)
+        const fullContent = fullSurface.layers[0]!.content as HTMLElement
+        const fullFlow = fullContent.querySelector('[data-rebook-semantic-flow="true"]') as HTMLElement
+        const first = fullFlow.querySelector('[data-block-id="first"]') as HTMLElement
+        const second = fullFlow.querySelector('[data-block-id="second"]') as HTMLElement
+        const gaps = fullFlow.querySelectorAll<HTMLElement>('[data-rebook-semantic-spacer="true"]')
+
+        expect(first.style.margin).toBe('0')
+        expect(second.style.margin).toBe('0')
+        expect(gaps).toHaveLength(1)
+        expect(gaps[0]?.style.height).toBe('16px')
+
+        const partialSurface = render([lines[1]!])
+        const partialContent = partialSurface.layers[0]!.content as HTMLElement
+        const partialFlow = partialContent.querySelector('[data-rebook-semantic-flow="true"]') as HTMLElement
+        const partialSpacers = partialFlow.querySelectorAll<HTMLElement>('[data-rebook-semantic-spacer="true"]')
+
+        expect(partialSpacers).toHaveLength(1)
+        expect(partialSpacers[0]?.style.height).toBe('40px')
+        expect((partialFlow.querySelector('[data-block-id="second"]') as HTMLElement).style.margin).toBe('0')
+
+        fullSurface.destroy?.()
+        partialSurface.destroy?.()
+    })
+
     it('renders semantic blocks without line metadata DOM', async () => {
         const container = document.createElement('div')
         container.setAttribute('data-width', '360')
@@ -738,7 +834,7 @@ describe('BrowserRenderer', () => {
         expect(quote?.style.textAlign).toBe('right')
         expect(quote?.style.paddingInlineStart).toBe('32px')
         expect(quote?.style.paddingInlineEnd).toBe('0px')
-        expect(quote?.style.margin).toBe('0px 0 0px')
+        expect(quote?.style.margin).toBe('0')
         expect(quote?.style.backgroundColor).toContain('148')
         expect(quote?.style.borderInlineStart).toBeUndefined()
         expect(quote?.style.borderRadius).toBeUndefined()

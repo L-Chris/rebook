@@ -231,8 +231,19 @@ function createSemanticFlow(
         flow.appendChild(createSemanticFlowSpacer(window.startTop))
     }
 
+    // startTop already points at the first block's content box, including any
+    // preceding source gaps. Only materialize gaps between rendered blocks.
+    // Explicit spacers keep browser flow geometry aligned with pretext because
+    // adjacent CSS margins would otherwise collapse.
+    let previousBlock: PreparedTextBlock | undefined
     for (const block of window.blocks) {
+        if (previousBlock) {
+            const gap = getSemanticBlockGapAfter(previousBlock, context)
+                + (block.block.blockGapBefore ?? 0)
+            if (gap > 0) flow.appendChild(createSemanticFlowSpacer(gap))
+        }
         flow.appendChild(createSemanticBlock(block, context))
+        previousBlock = block
     }
 
     return flow
@@ -256,7 +267,7 @@ function createSemanticBlock(block: PreparedTextBlock, context: BrowserReflowabl
     const source = block.block
     if (source.type === 'image' && source.image) return createSemanticImageBlock(source.image, block, context)
     if (source.type === 'table' && source.table) return createSemanticTableBlock(source.table, block, context)
-    if (source.type === 'separator') return createSemanticSeparatorBlock(block)
+    if (source.type === 'separator') return createSemanticSeparatorBlock(block, context)
     if (source.type === 'break') return createSemanticBreakBlock(block, context)
     if (source.type === 'pre') return createSemanticPreBlock(block, context)
 
@@ -376,11 +387,17 @@ function createSemanticPreBlock(block: PreparedTextBlock, context: BrowserReflow
     return pre
 }
 
-function createSemanticSeparatorBlock(block: PreparedTextBlock): HTMLElement {
+function createSemanticSeparatorBlock(
+    block: PreparedTextBlock,
+    context: BrowserReflowableContentRenderContext,
+): HTMLElement {
     const hr = document.createElement('hr')
     applySemanticBlockDataset(hr, block)
     hr.style.cssText = `
-        margin: ${block.block.blockGapBefore ?? 0}px 0 ${block.block.blockGapAfter ?? 0}px;
+        box-sizing: border-box;
+        height: ${context.lineHeightPixels}px;
+        margin: 0;
+        padding: 0;
         border: 0;
         border-top: 1px solid currentColor;
         opacity: 0.35;
@@ -394,8 +411,10 @@ function createSemanticBreakBlock(block: PreparedTextBlock, context: BrowserRefl
     applySemanticBlockDataset(spacer, block)
     spacer.setAttribute('aria-hidden', 'true')
     spacer.style.cssText = `
+        box-sizing: border-box;
         height: ${context.lineHeightPixels}px;
-        margin: ${block.block.blockGapBefore ?? 0}px 0 ${block.block.blockGapAfter ?? 0}px;
+        margin: 0;
+        padding: 0;
     `
     return spacer
 }
@@ -474,9 +493,8 @@ function applySemanticBlockStyle(
     const inheritedStyle = getSemanticBlockTextStyle(block, context)
     const fontSize = inheritedStyle.fontSize ?? getBaseFontSize(context)
     const lineHeight = getCSSLineHeight(style.lineHeight, fontSize, context.lineHeightPixels)
-    const fallbackGapAfter = getSemanticBlockFallbackGapAfter(block.block.type, context.lineHeightPixels)
     element.style.boxSizing = 'border-box'
-    element.style.margin = `${block.block.blockGapBefore ?? 0}px 0 ${block.block.blockGapAfter ?? fallbackGapAfter}px`
+    element.style.margin = '0'
     element.style.padding = '0'
     element.style.fontFamily = inheritedStyle.fontFamily ?? 'system-ui, -apple-system, Georgia, serif'
     element.style.fontSize = `${fontSize}px`
@@ -526,11 +544,11 @@ function getBaseFontSize(context: BrowserReflowableContentRenderContext): number
     return context.baseTextStyle.fontSize ?? parseCSSPixels(context.styles.fontSize, 16)
 }
 
-function getSemanticBlockFallbackGapAfter(type: TextBlock['type'], lineHeightPixels: number): number {
-    if (type === 'paragraph' || type === 'heading' || type === 'chapter' || type === 'listItem') {
-        return lineHeightPixels * 0.5
-    }
-    return 0
+function getSemanticBlockGapAfter(
+    block: PreparedTextBlock,
+    context: BrowserReflowableContentRenderContext,
+): number {
+    return block.block.blockGapAfter ?? context.lineHeightPixels * 0.5
 }
 
 function getSemanticBlockTagName(type: PreparedTextBlock['block']['type'], depth: number | undefined): keyof HTMLElementTagNameMap {
