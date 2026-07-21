@@ -7,6 +7,7 @@ import type { LayoutMode, ReaderMark, Renderer, RendererStyles } from '../../src
 import type { PageSurface } from '../../src/core/page-surface'
 import { defineRebookExtension, defineRebookPlugin } from '../../src/core/extensions'
 import { createStaticTextProvider } from '../../src/core/text-provider'
+import type { BookSelection } from '../../src/core/location'
 import { EPUBParser } from '../../src/parsers/epub'
 import { NodeDOMAdapter, NodeURLFactory } from '../../src/adapters/node'
 
@@ -14,6 +15,7 @@ class FakeRenderer implements Renderer {
     private book: Book | null = null
     private location: RelocateEvent | null = null
     private surface: PageSurface | null = null
+    private selection: BookSelection | null = null
     private readonly listeners = new Map<string, Set<(event: any) => void>>()
 
     async open(book: Book): Promise<void> {
@@ -32,6 +34,8 @@ class FakeRenderer implements Renderer {
     removeMark(_id: string): void {}
     clearMarks(_kind?: string): void {}
     getMarks(): ReaderMark[] { return [] }
+    getSelection(): BookSelection | null { return this.selection }
+    clearSelection(): void { this.selection = null }
     getLocation(): RelocateEvent | null { return this.location }
     getCurrentSurface(): PageSurface | null { return this.surface }
     getSectionFractions(): number[] {
@@ -60,6 +64,10 @@ class FakeRenderer implements Renderer {
         this.surface = surface
     }
 
+    setSelection(selection: BookSelection | null): void {
+        this.selection = selection
+    }
+
     emit(event: 'block-window', payload: BlockWindowEvent): void
     emit(event: string, payload: unknown): void {
         for (const listener of this.listeners.get(event) ?? []) {
@@ -69,6 +77,24 @@ class FakeRenderer implements Renderer {
 }
 
 describe('ReaderSession', () => {
+    it('exposes and clears the active renderer selection', () => {
+        const renderer = new FakeRenderer()
+        const reader = new ReaderSession({ createRenderer: () => renderer })
+        const selection: BookSelection = {
+            range: {
+                start: { type: 'reflowable', sectionIndex: 2, blockId: 'p1', offset: 3 },
+                end: { type: 'reflowable', sectionIndex: 2, blockId: 'p1', offset: 8 },
+            },
+            text: 'hello',
+            blockIds: ['p1'],
+        }
+        renderer.setSelection(selection)
+
+        expect(reader.getSelection()).toEqual(selection)
+        reader.clearSelection()
+        expect(reader.getSelection()).toBeNull()
+    })
+
     it('dispatches renderer block windows to book consumers', async () => {
         const renderer = new FakeRenderer()
         const receivedByConsumer: BlockWindowEvent[] = []

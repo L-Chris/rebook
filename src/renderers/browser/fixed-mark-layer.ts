@@ -41,7 +41,7 @@ function createMarkLayer(surface: BrowserPageSurface, marks: readonly ReaderMark
 
     const layer = document.createElement('div')
     layer.dataset.rebookAnnotationLayer = 'true'
-    layer.style.pointerEvents = 'none'
+        layer.style.pointerEvents = 'none'
     layer.style.userSelect = 'none'
 
     for (const item of rects) {
@@ -57,11 +57,13 @@ function createMarkLayer(surface: BrowserPageSurface, marks: readonly ReaderMark
             top: ${item.rect.y}px;
             width: ${item.rect.width}px;
             height: ${item.rect.height}px;
-            background: ${getBrowserMarkColor(item.mark)};
+            background: transparent;
             border-radius: 2px;
-            pointer-events: none;
+            pointer-events: auto;
+            cursor: pointer;
             box-sizing: border-box;
         `
+        element.style.backgroundColor = getBrowserMarkColor(item.mark)
         layer.append(element)
     }
 

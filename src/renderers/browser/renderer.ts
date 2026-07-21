@@ -5,7 +5,8 @@
  */
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
-import type { LayoutMode, NavigationDirection, ReaderMark, RendererConfig, RendererStyles } from '../../core/renderer'
+import type { LayoutMode, NavigationDirection, ReaderMark, ReaderMarkActivateEvent, ReaderSelectionEvent, RendererConfig, RendererStyles } from '../../core/renderer'
+import type { BookSelection } from '../../core/location'
 import { mergeRendererStyles, resolveRendererStyles, type ReaderThemeInput } from '../../core/theme'
 import { debugRebook } from '../../core/debug'
 import { getBlockWindowPrefetchPageCount } from '../../core/block-window'
@@ -56,12 +57,19 @@ import { BrowserReflowableMarkLayerDecorator } from './reflowable-mark-layer'
 import { BrowserSurfacePipeline } from './surface-pipeline'
 import { BrowserSurfaceHost } from './surface-host'
 import type { BrowserContentEngine } from './content-engine'
+import {
+    clearBrowserSelection,
+    getActivatedReaderMark,
+    getBrowserReflowableSelection,
+} from './browser-selection'
 
 interface RendererEventMap {
     load: LoadEvent
     relocate: RelocateEvent
     link: LinkEvent
     'block-window': BlockWindowEvent
+    'selection-change': ReaderSelectionEvent
+    'mark-activate': ReaderMarkActivateEvent
 }
 
 type Listener<T> = (event: T) => void
@@ -74,6 +82,7 @@ export interface BrowserRendererConfig extends RendererConfig {
 }
 
 const RESIZE_DEBOUNCE_MS = 100
+const SELECTION_SETTLE_MS = 140
 const DEFAULT_MARGIN = 32
 const DEFAULT_COLUMN_GAP = 0
 const DEFAULT_PAGE_PADDING_INLINE = 24
@@ -139,6 +148,9 @@ export class BrowserRenderer implements BrowserContentEngine {
     private suppressNextScrollRelocate = false
     private prefetchPageCount = 0
     private beforeNavigate: RendererConfig['beforeNavigate']
+    private selection: BookSelection | null = null
+    private selectionPointerActive = false
+    private selectionSettleTimer: ReturnType<typeof setTimeout> | null = null
 
     constructor(config: BrowserRendererConfig) {
         this.styles = resolveRendererStyles(config.styles ?? {})
@@ -185,6 +197,11 @@ export class BrowserRenderer implements BrowserContentEngine {
             if (Math.abs(event.deltaY) < 2) return
             void (event.deltaY > 0 ? this.next() : this.prev())
         }, { passive: false })
+        config.container.ownerDocument.addEventListener('selectionchange', this.handleSelectionChange)
+        this.content.addEventListener('pointerdown', this.handleSelectionPointerDown)
+        config.container.ownerDocument.addEventListener('pointerup', this.handleSelectionPointerUp)
+        config.container.ownerDocument.addEventListener('pointercancel', this.handleSelectionPointerUp)
+        this.content.addEventListener('click', this.handleMarkClick)
 
         this.resizeObserver = new ResizeObserver(debounce(() => {
             const fraction = this.getSectionFraction()
@@ -360,6 +377,19 @@ export class BrowserRenderer implements BrowserContentEngine {
         return this.surfacePipeline.getMarks()
     }
 
+    getSelection(): BookSelection | null {
+        if (this.currentIndex < 0) return null
+        return getBrowserReflowableSelection(this.content, this.currentIndex)
+    }
+
+    clearSelection(): void {
+        this.selectionPointerActive = false
+        this.cancelSelectionSettle()
+        clearBrowserSelection(this.content)
+        this.selection = null
+        this.emit('selection-change', { selection: null, clientRects: [] })
+    }
+
     getLocation(): RelocateEvent | null {
         return this.lastLocation
     }
@@ -393,10 +423,58 @@ export class BrowserRenderer implements BrowserContentEngine {
     destroy(): void {
         this.activeLoadId++
         this.resizeObserver.disconnect()
+        this.content.ownerDocument.removeEventListener('selectionchange', this.handleSelectionChange)
+        this.content.removeEventListener('pointerdown', this.handleSelectionPointerDown)
+        this.content.ownerDocument.removeEventListener('pointerup', this.handleSelectionPointerUp)
+        this.content.ownerDocument.removeEventListener('pointercancel', this.handleSelectionPointerUp)
+        this.content.removeEventListener('click', this.handleMarkClick)
+        this.cancelSelectionSettle()
         this.surfacePipeline.destroy()
         this.host.destroy({ compositor: false })
         this.events.clear()
         this.book = null
+    }
+
+    private readonly handleSelectionChange = (): void => {
+        if (this.selectionPointerActive) return
+        this.cancelSelectionSettle()
+        this.selectionSettleTimer = setTimeout(this.commitSelection, SELECTION_SETTLE_MS)
+    }
+
+    private readonly handleSelectionPointerDown = (event: PointerEvent): void => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return
+        this.selectionPointerActive = true
+        this.cancelSelectionSettle()
+    }
+
+    private readonly handleSelectionPointerUp = (): void => {
+        if (!this.selectionPointerActive) return
+        this.selectionPointerActive = false
+        this.cancelSelectionSettle()
+        queueMicrotask(this.commitSelection)
+    }
+
+    private readonly commitSelection = (): void => {
+        this.selectionSettleTimer = null
+        const selection = this.getSelection()
+        if (!selection && !this.selection) return
+        this.selection = selection
+        this.emit('selection-change', {
+            selection,
+            clientRects: selection?.rects ?? [],
+        })
+    }
+
+    private cancelSelectionSettle(): void {
+        if (this.selectionSettleTimer == null) return
+        clearTimeout(this.selectionSettleTimer)
+        this.selectionSettleTimer = null
+    }
+
+    private readonly handleMarkClick = (event: MouseEvent): void => {
+        const mark = getActivatedReaderMark(event.target, this.getMarks())
+        if (!mark) return
+        this.emit('mark-activate', { mark, clientX: event.clientX, clientY: event.clientY })
     }
 
     private async loadSection(

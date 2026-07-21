@@ -188,6 +188,8 @@ export type {
     RendererDefaultFontFamily,
     RendererFontFamilies,
     ReaderMark,
+    ReaderSelectionEvent,
+    ReaderMarkActivateEvent,
     LayoutMode,
     RendererFactory,
 } from './core/renderer'

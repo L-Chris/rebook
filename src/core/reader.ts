@@ -8,9 +8,9 @@
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, TOCItem } from './types'
 import type { ParserInput, ParserOptions } from './parser'
-import type { BookRange, TextChunk, TextProvider, TextSearchResult } from './location'
+import type { BookRange, BookSelection, TextChunk, TextProvider, TextSearchResult } from './location'
 import type { PageSurface } from './page-surface'
-import type { EventListener, LayoutMode, NavigationDirection, ReaderMark, Renderer, RendererNavigationHooks, RendererStyles } from './renderer'
+import type { EventListener, LayoutMode, NavigationDirection, ReaderMark, ReaderMarkActivateEvent, ReaderSelectionEvent, Renderer, RendererNavigationHooks, RendererStyles } from './renderer'
 import type { ReaderThemeInput } from './theme'
 import { getBlockWindowConsumers } from './block-window'
 import {
@@ -594,6 +594,16 @@ export class ReaderSession {
         return this.renderer.getMarks()
     }
 
+    /** Get the active selection from the current renderer. */
+    getSelection(): BookSelection | null {
+        return this.renderer.getSelection?.() ?? null
+    }
+
+    /** Clear the active native selection. */
+    clearSelection(): void {
+        this.renderer.clearSelection?.()
+    }
+
     /**
      * Register an event listener.
      */
@@ -601,6 +611,8 @@ export class ReaderSession {
     on(event: 'relocate', listener: (e: RelocateEvent) => void): void
     on(event: 'link', listener: (e: LinkEvent) => void): void
     on(event: 'block-window', listener: (e: BlockWindowEvent) => void): void
+    on(event: 'selection-change', listener: (e: ReaderSelectionEvent) => void): void
+    on(event: 'mark-activate', listener: (e: ReaderMarkActivateEvent) => void): void
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     on(event: string, listener: (e: any) => void): void {
         let wrappedListener = listener

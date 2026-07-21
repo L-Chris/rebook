@@ -20,6 +20,8 @@ export type BookLocation =
         readonly format?: string
         readonly pageIndex: number
         readonly rect?: Rect
+        /** One or more page-coordinate rectangles for multi-line selections. */
+        readonly rects?: readonly Rect[]
     }
     | {
         readonly type: 'reflowable'
@@ -33,6 +35,8 @@ export type BookLocation =
         readonly type: 'image'
         readonly pageIndex: number
         readonly rect?: Rect
+        /** One or more page-coordinate rectangles for region selections. */
+        readonly rects?: readonly Rect[]
     }
     | {
         readonly type: 'text'
@@ -58,7 +62,10 @@ export interface ReflowableTextRange {
 export interface BookSelection {
     readonly range: BookRange
     readonly text?: string
+    /** Browser renderers expose viewport-coordinate rectangles for selection UI placement. */
     readonly rects?: readonly Rect[]
+    /** Reflowable block ids crossed by the selection, in document order. */
+    readonly blockIds?: readonly string[]
 }
 
 export interface TextChunk {
@@ -111,7 +118,8 @@ export function getFixedPositionRects(position: BookPosition, options: {
         if (location.type !== 'fixed' && location.type !== 'image') continue
         if (location.pageIndex !== options.pageIndex) continue
         if ('format' in location && location.format && location.format !== options.format) continue
-        if (location.rect) rects.push(location.rect)
+        if (location.rects?.length) rects.push(...location.rects)
+        else if (location.rect) rects.push(location.rect)
     }
     return rects
 }

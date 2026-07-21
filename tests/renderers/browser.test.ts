@@ -842,11 +842,63 @@ describe('BrowserRenderer', () => {
         expect(markedLine?.classList.contains('is-current')).toBe(true)
         expect(markedLine?.classList.contains('rebook-mark-tts')).toBe(true)
         expect(markedLine?.dataset.markSegmentId).toBe('s1')
+        expect(markedLine?.textContent).toBe('Marked text ')
 
         renderer.removeMark('current')
         expect(container.querySelector('.is-current')).toBeNull()
 
         renderer.destroy()
+    })
+
+    it('emits a stable selection only after pointer selection finishes', async () => {
+        vi.useFakeTimers()
+        const container = document.createElement('div')
+        container.setAttribute('data-width', '360')
+        container.setAttribute('data-height', '120')
+        document.body.appendChild(container)
+        const book: Book = {
+            sections: [{
+                id: 'chapter.xhtml',
+                size: 48,
+                format: 'xhtml',
+                load: () => '',
+                getBlocks: () => [{
+                    id: 'p1',
+                    type: 'paragraph',
+                    segments: [{ text: 'Selection toolbar should wait until pointer up.' }],
+                }],
+            }],
+        }
+        const renderer = new BrowserRenderer({ container })
+        await renderer.open(book)
+        await renderer.goTo(0)
+        const selection = {
+            range: {
+                start: { type: 'reflowable' as const, sectionIndex: 0, blockId: 'p1', offset: 0 },
+                end: { type: 'reflowable' as const, sectionIndex: 0, blockId: 'p1', offset: 9 },
+            },
+            text: 'Selection',
+            rects: [{ x: 40, y: 32, width: 72, height: 20 }],
+            blockIds: ['p1'],
+        }
+        vi.spyOn(renderer, 'getSelection').mockReturnValue(selection)
+        const events: unknown[] = []
+        renderer.on('selection-change', event => events.push(event))
+
+        const paragraph = container.querySelector('[data-block-id="p1"]') as HTMLElement
+        const pointerDown = new window.Event('pointerdown', { bubbles: true })
+        Object.assign(pointerDown, { pointerType: 'mouse', button: 0 })
+        paragraph.dispatchEvent(pointerDown)
+        document.dispatchEvent(new window.Event('selectionchange'))
+        await vi.advanceTimersByTimeAsync(200)
+        expect(events).toHaveLength(0)
+
+        document.dispatchEvent(new window.Event('pointerup'))
+        await Promise.resolve()
+        expect(events).toEqual([{ selection, clientRects: selection.rects }])
+
+        renderer.destroy()
+        vi.useRealTimers()
     })
 
     it('renders reflowable marks with a default visible background', async () => {
@@ -889,6 +941,7 @@ describe('BrowserRenderer', () => {
         expect(markedBlock?.dataset.blockId).toBe('p1')
         expect(markedBlock?.style.backgroundColor).toContain('255')
         expect(markedBlock?.style.borderRadius).toBe('4px')
+        expect(markedBlock?.textContent).toBe('Marked text ')
 
         renderer.destroy()
     })

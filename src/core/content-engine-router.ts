@@ -10,6 +10,7 @@
 import { UnsupportedFormatError } from './errors'
 import { isFixedDocument } from './fixed-document'
 import type { PageSurface } from './page-surface'
+import type { BookSelection } from './location'
 import type {
     EventListener,
     LayoutMode,
@@ -124,6 +125,14 @@ export class ContentEngineRouter<TEngine extends ContentEngine = ContentEngine> 
 
     getMarks(): ReaderMark[] {
         return this.active?.getMarks() ?? this.marks.getAll()
+    }
+
+    getSelection(): BookSelection | null {
+        return this.active?.getSelection?.() ?? null
+    }
+
+    clearSelection(): void {
+        this.active?.clearSelection?.()
     }
 
     getLocation() {

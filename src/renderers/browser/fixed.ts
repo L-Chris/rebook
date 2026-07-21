@@ -19,7 +19,8 @@ import {
 } from '../../core/fixed-page-model'
 import type { FixedPageInfo } from '../../core/fixed-document'
 import type { Book, LinkEvent, LoadEvent, RelocateEvent } from '../../core/types'
-import type { EventListener, LayoutMode, ReaderMark, RendererConfig, RendererStyles } from '../../core/renderer'
+import type { EventListener, LayoutMode, ReaderMark, ReaderMarkActivateEvent, ReaderSelectionEvent, RendererConfig, RendererStyles } from '../../core/renderer'
+import type { BookSelection } from '../../core/location'
 import { mergeRendererStyles, resolveRendererStyles, type ReaderThemeInput } from '../../core/theme'
 import { UnsupportedFormatError } from '../../core/errors'
 import { RendererEventDispatcher } from '../../core/renderer-state'
@@ -37,11 +38,18 @@ import { BrowserFixedMarkLayerDecorator } from './fixed-mark-layer'
 import { BrowserSurfacePipeline } from './surface-pipeline'
 import { BrowserSurfaceHost } from './surface-host'
 import type { BrowserContentEngine } from './content-engine'
+import {
+    clearBrowserSelection,
+    getActivatedReaderMark,
+    getBrowserFixedSelection,
+} from './browser-selection'
 
 interface RendererEventMap {
     load: LoadEvent
     relocate: RelocateEvent
     link: LinkEvent
+    'selection-change': ReaderSelectionEvent
+    'mark-activate': ReaderMarkActivateEvent
 }
 
 type Listener<T> = (event: T) => void
@@ -69,6 +77,7 @@ const DEFAULT_MARGIN = 32
 const DEFAULT_TEXT_COLOR = '#111111'
 const DEFAULT_PAGE_GAP = 0
 const DEFAULT_MIN_COLUMN_WIDTH = 320
+const SELECTION_SETTLE_MS = 140
 
 export class BrowserFixedRenderer implements BrowserContentEngine {
     private readonly host: BrowserSurfaceHost
@@ -91,6 +100,9 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
     private resizeObserver: ResizeObserver | null = null
     private resizeRenderScheduled = false
     private destroyed = false
+    private selection: BookSelection | null = null
+    private selectionPointerActive = false
+    private selectionSettleTimer: ReturnType<typeof setTimeout> | null = null
 
     constructor(config: BrowserFixedRendererConfig) {
         this.styles = resolveRendererStyles(config.styles ?? {})
@@ -125,6 +137,11 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
             ],
         })
         this.scroller.addEventListener('wheel', this.handleWheel, { passive: false })
+        config.container.ownerDocument.addEventListener('selectionchange', this.handleSelectionChange)
+        this.pageHost.addEventListener('pointerdown', this.handleSelectionPointerDown)
+        config.container.ownerDocument.addEventListener('pointerup', this.handleSelectionPointerUp)
+        config.container.ownerDocument.addEventListener('pointercancel', this.handleSelectionPointerUp)
+        this.pageHost.addEventListener('click', this.handleMarkClick)
         if (typeof ResizeObserver !== 'undefined') {
             this.resizeObserver = new ResizeObserver(() => this.scheduleResizeRender())
             this.resizeObserver.observe(config.container)
@@ -206,6 +223,18 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         return this.surfacePipeline.getMarks()
     }
 
+    getSelection(): BookSelection | null {
+        return getBrowserFixedSelection(this.pageHost, this.surfacePipeline.getCurrentSurface())
+    }
+
+    clearSelection(): void {
+        this.selectionPointerActive = false
+        this.cancelSelectionSettle()
+        clearBrowserSelection(this.pageHost)
+        this.selection = null
+        this.emit('selection-change', { selection: null, clientRects: [] })
+    }
+
     getLocation(): RelocateEvent | null {
         return this.lastLocation
     }
@@ -239,11 +268,59 @@ export class BrowserFixedRenderer implements BrowserContentEngine {
         this.resizeObserver?.disconnect()
         this.resizeObserver = null
         this.scroller.removeEventListener('wheel', this.handleWheel)
+        this.pageHost.ownerDocument.removeEventListener('selectionchange', this.handleSelectionChange)
+        this.pageHost.removeEventListener('pointerdown', this.handleSelectionPointerDown)
+        this.pageHost.ownerDocument.removeEventListener('pointerup', this.handleSelectionPointerUp)
+        this.pageHost.ownerDocument.removeEventListener('pointercancel', this.handleSelectionPointerUp)
+        this.pageHost.removeEventListener('click', this.handleMarkClick)
+        this.cancelSelectionSettle()
         this.cancelScheduledPrewarm()
         this.surfacePipeline.destroy()
         this.host.destroy({ compositor: false })
         this.events.clear()
         this.sequence = null
+    }
+
+    private readonly handleSelectionChange = (): void => {
+        if (this.selectionPointerActive) return
+        this.cancelSelectionSettle()
+        this.selectionSettleTimer = setTimeout(this.commitSelection, SELECTION_SETTLE_MS)
+    }
+
+    private readonly handleSelectionPointerDown = (event: PointerEvent): void => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return
+        this.selectionPointerActive = true
+        this.cancelSelectionSettle()
+    }
+
+    private readonly handleSelectionPointerUp = (): void => {
+        if (!this.selectionPointerActive) return
+        this.selectionPointerActive = false
+        this.cancelSelectionSettle()
+        queueMicrotask(this.commitSelection)
+    }
+
+    private readonly commitSelection = (): void => {
+        this.selectionSettleTimer = null
+        const selection = this.getSelection()
+        if (!selection && !this.selection) return
+        this.selection = selection
+        this.emit('selection-change', {
+            selection,
+            clientRects: selection?.rects ?? [],
+        })
+    }
+
+    private cancelSelectionSettle(): void {
+        if (this.selectionSettleTimer == null) return
+        clearTimeout(this.selectionSettleTimer)
+        this.selectionSettleTimer = null
+    }
+
+    private readonly handleMarkClick = (event: MouseEvent): void => {
+        const mark = getActivatedReaderMark(event.target, this.getMarks())
+        if (!mark) return
+        this.emit('mark-activate', { mark, clientX: event.clientX, clientY: event.clientY })
     }
 
     private scheduleResizeRender(): void {

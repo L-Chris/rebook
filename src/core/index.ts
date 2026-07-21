@@ -24,6 +24,9 @@ export {
     type RendererStyles,
     type RendererDefaultFontFamily,
     type RendererFontFamilies,
+    type ReaderMark,
+    type ReaderSelectionEvent,
+    type ReaderMarkActivateEvent,
     type LayoutMode,
     type RendererFactory,
 } from './renderer'

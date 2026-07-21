@@ -1,4 +1,5 @@
 import { resolveReflowableBlockMarks } from '../../core/mark-resolver'
+import { isBookRange } from '../../core/location'
 import type { PageSurfaceDecorator } from '../../core/page-surface'
 import type { ReaderMark } from '../../core/renderer'
 import type { TextBlock } from '../../core/pretext'
@@ -55,14 +56,80 @@ function applyBlockMarks(
     marks: readonly ReaderMark[],
 ): void {
     const matching = resolveReflowableBlockMarks(marks, block, sectionIndex)
-    if (!matching.length) return
-    element.dataset.markIds = matching.map(mark => mark.id).join(' ')
-    element.dataset.markKinds = matching.map(mark => mark.kind).filter(Boolean).join(' ')
-    element.style.backgroundColor = getBrowserMarkColor(matching[0]!)
-    element.style.borderRadius = '4px'
-    for (const mark of matching) {
-        element.classList.add(...getBrowserMarkClassNames(mark))
-        applyBrowserMarkDataset(element, mark)
+    const explicit = marks.filter(mark => getMarkBlockIds(mark).includes(block.id))
+    const allMatching = Array.from(new Map([...matching, ...explicit].map(mark => [mark.id, mark])).values())
+    if (!allMatching.length) return
+    element.dataset.markIds = allMatching.map(mark => mark.id).join(' ')
+    element.dataset.markKinds = allMatching.map(mark => mark.kind).filter(Boolean).join(' ')
+    const textLength = Array.from(element.textContent ?? '').length
+    for (const mark of allMatching) {
+        const range = getMarkOffsets(mark, block.id, textLength)
+        wrapTextRange(element, range.start, range.end, mark)
+    }
+}
+
+function getMarkOffsets(mark: ReaderMark, blockId: string, textLength: number): { start: number; end: number } {
+    const position = mark.location
+    if (!isBookRange(position)) return { start: 0, end: textLength }
+    const start = position.start.type === 'reflowable' ? position.start : null
+    const end = position.end?.type === 'reflowable' ? position.end : start
+    if (!start || !end) return { start: 0, end: textLength }
+    if (start.blockId === blockId && end.blockId === blockId) {
+        return normalizeOffsets(start.offset ?? 0, end.offset ?? textLength, textLength)
+    }
+    if (start.blockId === blockId) return normalizeOffsets(start.offset ?? 0, textLength, textLength)
+    if (end.blockId === blockId) return normalizeOffsets(0, end.offset ?? textLength, textLength)
+    return { start: 0, end: textLength }
+}
+
+function normalizeOffsets(start: number, end: number, textLength: number): { start: number; end: number } {
+    const lower = Math.max(0, Math.min(textLength, Math.min(start, end)))
+    const upper = Math.max(lower, Math.min(textLength, Math.max(start, end)))
+    return { start: lower, end: upper }
+}
+
+function getMarkBlockIds(mark: ReaderMark): string[] {
+    const value = mark.data?.blockIds
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function wrapTextRange(element: HTMLElement, start: number, end: number, mark: ReaderMark): void {
+    if (end <= start) return
+    const walker = element.ownerDocument.createTreeWalker(element, 4)
+    const nodes: Text[] = []
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (node.nodeType === 3 && node.nodeValue) nodes.push(node as Text)
+    }
+
+    let cursor = 0
+    for (const node of nodes) {
+        const characters = Array.from(node.data)
+        const nodeStart = cursor
+        const nodeEnd = cursor + characters.length
+        cursor = nodeEnd
+        const overlapStart = Math.max(start, nodeStart)
+        const overlapEnd = Math.min(end, nodeEnd)
+        if (overlapEnd <= overlapStart) continue
+
+        const before = characters.slice(0, overlapStart - nodeStart).join('')
+        const selected = characters.slice(overlapStart - nodeStart, overlapEnd - nodeStart).join('')
+        const after = characters.slice(overlapEnd - nodeStart).join('')
+        const wrapper = element.ownerDocument.createElement('mark')
+        wrapper.textContent = selected
+        wrapper.dataset.markId = mark.id
+        if (element.dataset.blockId) wrapper.dataset.blockId = element.dataset.blockId
+        if (mark.kind) wrapper.dataset.markKind = mark.kind
+        wrapper.classList.add(...getBrowserMarkClassNames(mark))
+        applyBrowserMarkDataset(wrapper, mark)
+        wrapper.style.backgroundColor = getBrowserMarkColor(mark)
+        wrapper.style.color = 'inherit'
+        wrapper.style.borderRadius = '4px'
+        wrapper.style.cursor = 'pointer'
+        const replacement = element.ownerDocument.createDocumentFragment()
+        if (before) replacement.append(element.ownerDocument.createTextNode(before))
+        replacement.append(wrapper)
+        if (after) replacement.append(element.ownerDocument.createTextNode(after))
+        node.replaceWith(replacement)
     }
 }
 

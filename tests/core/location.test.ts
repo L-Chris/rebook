@@ -25,6 +25,16 @@ describe('location model', () => {
             pageIndex: 0,
             rect: { x: 0, y: 0, width: 1, height: 1 },
         }, { format: 'cbz', pageIndex: 0 })).toEqual([{ x: 0, y: 0, width: 1, height: 1 }])
+
+        expect(getFixedPositionRects({
+            type: 'fixed',
+            format: 'pdf',
+            pageIndex: 2,
+            rects: [
+                { x: 1, y: 2, width: 30, height: 8 },
+                { x: 1, y: 12, width: 20, height: 8 },
+            ],
+        }, { format: 'pdf', pageIndex: 2 })).toHaveLength(2)
     })
 
     it('matches reflowable block locations and offset ranges', () => {

@@ -6,7 +6,7 @@
  */
 
 import type { Book, RelocateEvent, LoadEvent } from './types'
-import type { BookPosition } from './location'
+import type { BookPosition, BookSelection, Rect } from './location'
 import type { FixedPageVisualAppearance } from './fixed-document'
 import type { ReaderThemeInput } from './theme'
 import type { PageSurface } from './page-surface'
@@ -97,6 +97,18 @@ export interface ReaderMark {
     location: BookPosition
     className?: string
     data?: Record<string, unknown>
+}
+
+export interface ReaderSelectionEvent {
+    selection: BookSelection | null
+    /** Viewport-coordinate rectangles used to anchor browser selection toolbars. */
+    clientRects: readonly Rect[]
+}
+
+export interface ReaderMarkActivateEvent {
+    mark: ReaderMark
+    clientX: number
+    clientY: number
 }
 
 /**
@@ -192,6 +204,12 @@ export interface Renderer {
      * Get current render marks.
      */
     getMarks(): ReaderMark[]
+
+    /** Return the active user selection when the renderer supports text selection. */
+    getSelection?(): BookSelection | null
+
+    /** Clear the native user selection when supported. */
+    clearSelection?(): void
 
     /**
      * Get the current reading location.
