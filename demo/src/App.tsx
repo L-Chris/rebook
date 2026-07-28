@@ -709,8 +709,8 @@ function App() {
     const entries = getEnabledDemoMarketplaceExtensionItems(config)
     let cancelled = false
     if (!entries.length) {
-      setMarketplaceRuntimeExtensions([])
-      setExtensionRuntimeStatus({})
+      setMarketplaceRuntimeExtensions(current => current.length ? [] : current)
+      setExtensionRuntimeStatus(current => Object.keys(current).length ? {} : current)
       return
     }
 
@@ -1188,8 +1188,8 @@ function App() {
     return false
   }
 
-  const openURLWithReader = async (url: string, targetReader = readerRef.current) => {
-    if (!targetReader) return
+  const openURLWithReader = async (url: string) => {
+    if (!readerRef.current) return
     setBusy(true)
     setStatus(`Fetching ${url}...`)
     try {
@@ -1199,7 +1199,10 @@ function App() {
       const file = new File([blob], getFileNameFromURL(url), {
         type: blob.type || 'application/octet-stream',
       })
-      await openFileWithReader(file, targetReader)
+      // Startup settings/extension effects can replace the reader while the URL
+      // is being fetched. Resolve the implicit target after the fetch so the
+      // book is never opened on a reader that has already been destroyed.
+      await openFileWithReader(file, readerRef.current)
     } catch (error) {
       setStatus(`Failed to open URL: ${formatError(error)}`)
       appendDebug('open url failed', { url, error: formatError(error) })
