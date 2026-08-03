@@ -12,6 +12,12 @@ export {
     type BrowserContentEngineRoute,
 } from './content-engine'
 export { BrowserRenderer, createBrowserRenderer, type BrowserRendererConfig } from './renderer'
+export {
+    expandRangeToGranularity,
+    isCollapsibleTrailingPunctuation,
+    isSentenceTerminal,
+    type SelectionGranularity,
+} from './semantic-selection'
 export { BrowserFixedRenderer, createBrowserFixedRenderer, type BrowserFixedRendererConfig } from './fixed'
 export {
     BrowserFixedContentRenderer,

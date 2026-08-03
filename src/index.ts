@@ -192,6 +192,7 @@ export type {
     ReaderMarkActivateEvent,
     LayoutMode,
     RendererFactory,
+    SelectionGranularity,
 } from './core/renderer'
 export {
     BUILT_IN_READER_THEMES,

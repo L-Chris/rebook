@@ -27927,6 +27927,13 @@ var ReaderSession = class {
 		this.renderer.setSpread(maxColumns);
 	}
 	/**
+	* Set the semantic granularity applied to committed selections.
+	* Renderers without selection support ignore it.
+	*/
+	setSelectionGranularity(granularity) {
+		this.renderer.setSelectionGranularity?.(granularity);
+	}
+	/**
 	* Add or replace a transient render mark such as the current TTS segment,
 	* search hit, translation state, or annotation preview.
 	*/
@@ -27950,6 +27957,14 @@ var ReaderSession = class {
 	*/
 	getMarks() {
 		return this.renderer.getMarks();
+	}
+	/** Get the active selection from the current renderer. */
+	getSelection() {
+		return this.renderer.getSelection?.() ?? null;
+	}
+	/** Clear the active native selection. */
+	clearSelection() {
+		this.renderer.clearSelection?.();
 	}
 	on(event, listener) {
 		let wrappedListener = listener;
@@ -28764,7 +28779,7 @@ var require_grammar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var NCName = reg(chars_without(NameStartChar, ":"), chars_without(NameChar, ":"), "*");
 	/**
 	https://www.w3.org/TR/xml-names/#ns-qualnames
-
+	
 	```
 	[7] QName ::= PrefixedName | UnprefixedName
 	=== (NCName ':' NCName) | NCName

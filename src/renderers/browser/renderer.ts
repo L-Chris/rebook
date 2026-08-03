@@ -5,7 +5,7 @@
  */
 
 import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, ResolvedNavigation, Section, TOCItem } from '../../core/types'
-import type { LayoutMode, NavigationDirection, ReaderMark, ReaderMarkActivateEvent, ReaderSelectionEvent, RendererConfig, RendererStyles } from '../../core/renderer'
+import type { LayoutMode, NavigationDirection, ReaderMark, ReaderMarkActivateEvent, ReaderSelectionEvent, RendererConfig, RendererStyles, SelectionGranularity } from '../../core/renderer'
 import type { BookSelection } from '../../core/location'
 import { mergeRendererStyles, resolveRendererStyles, type ReaderThemeInput } from '../../core/theme'
 import { debugRebook } from '../../core/debug'
@@ -62,6 +62,7 @@ import {
     getActivatedReaderMark,
     getBrowserReflowableSelection,
 } from './browser-selection'
+import { expandRangeToGranularity } from './semantic-selection'
 
 interface RendererEventMap {
     load: LoadEvent
@@ -83,6 +84,7 @@ export interface BrowserRendererConfig extends RendererConfig {
 
 const RESIZE_DEBOUNCE_MS = 100
 const SELECTION_SETTLE_MS = 140
+const SELECTION_TAP_TOLERANCE_PX = 5
 const DEFAULT_MARGIN = 32
 const DEFAULT_COLUMN_GAP = 0
 const DEFAULT_PAGE_PADDING_INLINE = 24
@@ -102,6 +104,19 @@ const debounce = <T extends (...args: unknown[]) => void>(fn: T, wait: number): 
         clearTimeout(timeout)
         timeout = setTimeout(() => fn(...args), wait)
     }) as T
+}
+
+/** caretRangeFromPoint with the Firefox caretPositionFromPoint fallback. */
+function caretRangeFromPoint(doc: Document, x: number, y: number): Range | null {
+    if (typeof doc.caretRangeFromPoint === 'function') {
+        return doc.caretRangeFromPoint(x, y)
+    }
+    const position = doc.caretPositionFromPoint?.(x, y)
+    if (!position?.offsetNode) return null
+    const range = doc.createRange()
+    range.setStart(position.offsetNode, position.offset)
+    range.collapse(true)
+    return range
 }
 
 export class BrowserRenderer implements BrowserContentEngine {
@@ -151,12 +166,16 @@ export class BrowserRenderer implements BrowserContentEngine {
     private selection: BookSelection | null = null
     private selectionPointerActive = false
     private selectionSettleTimer: ReturnType<typeof setTimeout> | null = null
+    private selectionGranularity: SelectionGranularity
+    private selectionPointerDownPoint: { x: number, y: number } | null = null
+    private selectionTapPoint: { x: number, y: number } | null = null
 
     constructor(config: BrowserRendererConfig) {
         this.styles = resolveRendererStyles(config.styles ?? {})
         this.maxColumnCount = config.maxColumnCount ?? 2
         this.layoutMode = config.layout ?? 'paginated'
         this.beforeNavigate = config.beforeNavigate
+        this.selectionGranularity = config.selectionGranularity ?? 'free'
 
         this.host = new BrowserSurfaceHost({
             container: config.container,
@@ -363,6 +382,10 @@ export class BrowserRenderer implements BrowserContentEngine {
         this.renderVisibleContent()
     }
 
+    setSelectionGranularity(granularity: SelectionGranularity): void {
+        this.selectionGranularity = granularity
+    }
+
     removeMark(id: string): void {
         this.surfacePipeline.removeMark(id)
         this.renderVisibleContent()
@@ -444,18 +467,29 @@ export class BrowserRenderer implements BrowserContentEngine {
     private readonly handleSelectionPointerDown = (event: PointerEvent): void => {
         if (event.pointerType === 'mouse' && event.button !== 0) return
         this.selectionPointerActive = true
+        this.selectionPointerDownPoint = { x: event.clientX, y: event.clientY }
         this.cancelSelectionSettle()
     }
 
-    private readonly handleSelectionPointerUp = (): void => {
+    private readonly handleSelectionPointerUp = (event: PointerEvent): void => {
         if (!this.selectionPointerActive) return
         this.selectionPointerActive = false
         this.cancelSelectionSettle()
+        const downPoint = this.selectionPointerDownPoint
+        this.selectionPointerDownPoint = null
+        this.selectionTapPoint = event.type === 'pointerup'
+            && downPoint
+            && Math.hypot(event.clientX - downPoint.x, event.clientY - downPoint.y) < SELECTION_TAP_TOLERANCE_PX
+            ? { x: event.clientX, y: event.clientY }
+            : null
         queueMicrotask(this.commitSelection)
     }
 
     private readonly commitSelection = (): void => {
         this.selectionSettleTimer = null
+        if (this.selectionGranularity !== 'free') {
+            this.applySemanticSelection()
+        }
         const selection = this.getSelection()
         if (!selection && !this.selection) return
         this.selection = selection
@@ -463,6 +497,41 @@ export class BrowserRenderer implements BrowserContentEngine {
             selection,
             clientRects: selection?.rects ?? [],
         })
+    }
+
+    /**
+     * Expand the live selection to the configured granularity. A drag leaves a
+     * non-collapsed native selection to expand; a tap (pointerup with no
+     * movement and a collapsed or empty selection) instead expands a caret
+     * range synthesized from the tap point.
+     */
+    private applySemanticSelection(): void {
+        const doc = this.content.ownerDocument
+        const native = doc.getSelection?.()
+        const tapPoint = this.selectionTapPoint
+        this.selectionTapPoint = null
+
+        let range: Range | null = null
+        if (native && native.rangeCount > 0 && !native.isCollapsed) {
+            range = native.getRangeAt(0)
+        } else if (tapPoint) {
+            range = caretRangeFromPoint(doc, tapPoint.x, tapPoint.y)
+        }
+        if (!range) return
+
+        const expanded = expandRangeToGranularity(range, this.selectionGranularity, this.content)
+        if (!expanded || expanded.collapsed) return
+        // Skip the DOM write when the selection is already expanded: replacing
+        // the range fires selectionchange, which would otherwise re-enter this
+        // path on every settle.
+        if (expanded.startContainer === range.startContainer
+            && expanded.startOffset === range.startOffset
+            && expanded.endContainer === range.endContainer
+            && expanded.endOffset === range.endOffset) {
+            return
+        }
+        native?.removeAllRanges()
+        native?.addRange(expanded)
     }
 
     private cancelSelectionSettle(): void {

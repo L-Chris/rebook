@@ -10,7 +10,7 @@ import type { BlockWindowEvent, Book, LinkEvent, LoadEvent, RelocateEvent, TOCIt
 import type { ParserInput, ParserOptions } from './parser'
 import type { BookRange, BookSelection, TextChunk, TextProvider, TextSearchResult } from './location'
 import type { PageSurface } from './page-surface'
-import type { EventListener, LayoutMode, NavigationDirection, ReaderMark, ReaderMarkActivateEvent, ReaderSelectionEvent, Renderer, RendererNavigationHooks, RendererStyles } from './renderer'
+import type { EventListener, LayoutMode, NavigationDirection, ReaderMark, ReaderMarkActivateEvent, ReaderSelectionEvent, Renderer, RendererNavigationHooks, RendererStyles, SelectionGranularity } from './renderer'
 import type { ReaderThemeInput } from './theme'
 import { getBlockWindowConsumers } from './block-window'
 import {
@@ -563,6 +563,14 @@ export class ReaderSession {
      */
     setSpread(maxColumns: number): void {
         this.renderer.setSpread(maxColumns)
+    }
+
+    /**
+     * Set the semantic granularity applied to committed selections.
+     * Renderers without selection support ignore it.
+     */
+    setSelectionGranularity(granularity: SelectionGranularity): void {
+        this.renderer.setSelectionGranularity?.(granularity)
     }
 
     /**

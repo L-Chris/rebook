@@ -85,6 +85,13 @@ export interface RendererStyles {
  */
 export type LayoutMode = 'paginated' | 'scrolled'
 
+/**
+ * Semantic granularity applied when committing text selections:
+ * 'free' keeps the raw user selection; 'word' / 'sentence' / 'paragraph'
+ * expand it to the nearest semantic boundaries.
+ */
+export type SelectionGranularity = 'free' | 'word' | 'sentence' | 'paragraph'
+
 export type NavigationDirection = 'next' | 'prev'
 
 export interface RendererNavigationHooks {
@@ -124,6 +131,8 @@ export interface RendererConfig extends RendererNavigationHooks {
     animated?: boolean
     /** Maximum number of columns in paginated mode */
     maxColumnCount?: number
+    /** Semantic granularity applied to committed selections. Defaults to 'free'. */
+    selectionGranularity?: SelectionGranularity
 }
 
 /**
@@ -210,6 +219,9 @@ export interface Renderer {
 
     /** Clear the native user selection when supported. */
     clearSelection?(): void
+
+    /** Update the semantic granularity applied to committed selections. */
+    setSelectionGranularity?(granularity: SelectionGranularity): void
 
     /**
      * Get the current reading location.

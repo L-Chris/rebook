@@ -17,6 +17,7 @@ import type {
     ReaderMark,
     Renderer,
     RendererStyles,
+    SelectionGranularity,
 } from './renderer'
 import { ReaderMarkStore, RendererEventDispatcher } from './renderer-state'
 import type { ReaderThemeInput } from './theme'
@@ -49,6 +50,7 @@ export class ContentEngineRouter<TEngine extends ContentEngine = ContentEngine> 
     private styles: RendererStyles | null = null
     private layout: LayoutMode | null = null
     private spread: number | null = null
+    private selectionGranularity: SelectionGranularity | null = null
 
     constructor(config: ContentEngineRouterConfig<TEngine>) {
         this.routes = config.routes
@@ -106,6 +108,11 @@ export class ContentEngineRouter<TEngine extends ContentEngine = ContentEngine> 
     setSpread(maxColumns: number): void {
         this.spread = maxColumns
         this.active?.setSpread(maxColumns)
+    }
+
+    setSelectionGranularity(granularity: SelectionGranularity): void {
+        this.selectionGranularity = granularity
+        this.active?.setSelectionGranularity?.(granularity)
     }
 
     setMark(mark: ReaderMark): void {
@@ -170,6 +177,7 @@ export class ContentEngineRouter<TEngine extends ContentEngine = ContentEngine> 
         this.styles = null
         this.layout = null
         this.spread = null
+        this.selectionGranularity = null
     }
 
     getActiveEngine(): TEngine | null {
@@ -191,6 +199,7 @@ export class ContentEngineRouter<TEngine extends ContentEngine = ContentEngine> 
         if (this.styles) engine.setStyles(this.styles)
         if (this.layout) engine.setLayout(this.layout)
         if (this.spread !== null) engine.setSpread(this.spread)
+        if (this.selectionGranularity !== null) engine.setSelectionGranularity?.(this.selectionGranularity)
         for (const mark of this.marks.values()) {
             engine.setMark(mark)
         }
