@@ -42,7 +42,10 @@ interface TextRange {
 /**
  * Expand `range` to the given granularity. Both endpoints must live inside
  * `data-rebook-block="true"` elements under `rootEl`, otherwise `null` is
- * returned. `free` returns the original range untouched.
+ * returned. `free` returns the original range untouched. Also returns `null`
+ * when the selection touches no word/sentence unit, so taps on blank areas
+ * (whitespace runs, paragraph gaps) select nothing instead of magnetically
+ * snapping to the nearest unit.
  */
 export function expandRangeToGranularity(
     range: Range,
@@ -66,24 +69,32 @@ export function expandRangeToGranularity(
     let endOffset = getBlockTextOffset(endNodes, range.endContainer, range.endOffset)
     if (startOffset === null || endOffset === null) return null
 
+    const sameBlock = startBlock === endBlock
+    const collapsed = range.collapsed
     if (granularity === 'paragraph') {
         startOffset = 0
         endOffset = endText.length
     } else if (granularity === 'sentence') {
-        const startSentence = nearestRange(sentenceRanges(startText), startOffset)
-        const endSentence = nearestRange(sentenceRanges(endText), endOffset)
-        if (!startSentence || !endSentence) return null
-        startOffset = startSentence.start
-        endOffset = endSentence.end
+        const startRanges = sentenceRanges(startText)
+        const endRanges = sameBlock ? startRanges : sentenceRanges(endText)
+        const expanded = expandToSemanticRanges(
+            startRanges, endRanges, startOffset, endOffset,
+            { sameBlock, collapsed, startTextLength: startText.length },
+        )
+        if (!expanded) return null
+        startOffset = expanded.start
+        endOffset = expanded.end
     } else {
-        const startWord = nearestRange(wordRanges(startText), startOffset)
-        const endWord = nearestRange(wordRanges(endText), endOffset)
-        if (!startWord || !endWord) return null
-        const sameWord = startBlock === endBlock
-            && startWord.start === endWord.start
-            && startWord.end === endWord.end
-        startOffset = startWord.start
-        endOffset = sameWord ? endWord.end : extendWordEnd(endText, endWord).end
+        const startRanges = wordRanges(startText)
+        const endRanges = sameBlock ? startRanges : wordRanges(endText)
+        const expanded = expandToSemanticRanges(
+            startRanges, endRanges, startOffset, endOffset,
+            { sameBlock, collapsed, startTextLength: startText.length },
+            word => extendWordEnd(endText, word),
+        )
+        if (!expanded) return null
+        startOffset = expanded.start
+        endOffset = expanded.end
     }
 
     const startPosition = locateTextPosition(startNodes, startOffset)
@@ -199,25 +210,65 @@ function trimWhitespaceRange(text: string, start: number, end: number): TextRang
     return start < end ? { start, end } : null
 }
 
+interface SemanticExpandContext {
+    /** Whether both range endpoints live in the same block. */
+    sameBlock: boolean
+    /** Collapsed caret (tap-to-select) vs. an actual drag selection. */
+    collapsed: boolean
+    /** Text length of the start block, used when no unit is touched there. */
+    startTextLength: number
+}
+
 /**
- * Nearest range to a caret offset; ranges containing the offset win, ties go
- * to the earliest range (mirrors `nearest_semantic_range` in the Rust reader).
+ * Expand to semantic units the selection actually touches — no magnetic snap.
+ * A collapsed caret must land on a unit itself (whitespace or gaps select
+ * nothing); a drag snaps outward to the first/last intersecting unit. Returns
+ * null when a same-block selection touches no unit at all.
  */
-function nearestRange(ranges: readonly TextRange[], offset: number): TextRange | null {
-    let best: TextRange | null = null
-    let bestDistance = Infinity
-    for (const range of ranges) {
-        const distance = offset < range.start
-            ? range.start - offset
-            : offset > range.end
-                ? offset - range.end
-                : 0
-        if (distance < bestDistance) {
-            best = range
-            bestDistance = distance
-        }
+function expandToSemanticRanges(
+    startRanges: readonly TextRange[],
+    endRanges: readonly TextRange[],
+    startOffset: number,
+    endOffset: number,
+    context: SemanticExpandContext,
+    extendEnd: (range: TextRange) => TextRange = range => range,
+): TextRange | null {
+    if (context.collapsed) {
+        const hit = containingRange(startRanges, startOffset)
+        return hit ? { start: hit.start, end: hit.end } : null
     }
-    return best
+    const first = firstIntersectingRange(startRanges, startOffset)
+    const last = lastIntersectingRange(endRanges, endOffset)
+    const start = first ? first.start : context.startTextLength
+    const sameRange = context.sameBlock && first !== null && first === last
+    const end = last ? (sameRange ? last.end : extendEnd(last).end) : 0
+    if (context.sameBlock && start >= end) return null
+    return { start, end }
+}
+
+/** Unit containing `offset` (boundary-inclusive); used for tap carets. */
+function containingRange(ranges: readonly TextRange[], offset: number): TextRange | null {
+    for (const range of ranges) {
+        if (offset >= range.start && offset <= range.end) return range
+    }
+    return null
+}
+
+/** First unit touching `[offset, ∞)` (boundary-inclusive); the drag start expands forward to it. */
+function firstIntersectingRange(ranges: readonly TextRange[], offset: number): TextRange | null {
+    for (const range of ranges) {
+        if (range.end >= offset) return range
+    }
+    return null
+}
+
+/** Last unit touching `(-∞, offset]` (boundary-inclusive); the drag end expands back to it. */
+function lastIntersectingRange(ranges: readonly TextRange[], offset: number): TextRange | null {
+    for (let index = ranges.length - 1; index >= 0; index -= 1) {
+        const range = ranges[index]!
+        if (range.start <= offset) return range
+    }
+    return null
 }
 
 /**

@@ -21,6 +21,10 @@ class StubRange {
         this.endOffset = endOffset
     }
 
+    get collapsed(): boolean {
+        return this.startContainer === this.endContainer && this.startOffset === this.endOffset
+    }
+
     cloneRange(): StubRange {
         return new StubRange(this.startContainer, this.startOffset, this.endContainer, this.endOffset)
     }
@@ -240,6 +244,20 @@ describe('expandRangeToGranularity', () => {
         expect(expandOffsets(fixture, b1, 3, b2, 5, 'paragraph')).toEqual([0, b2.textContent!.length])
     })
 
+    it('returns null when a drag touches only whitespace', () => {
+        const fixture = createFixture('<p data-rebook-block="true" data-block-id="b1">Hello   world.</p>')
+        const block = fixture.block('b1')
+        const range = makeRange(fixture.document, block, 6, block, 7)
+        expect(expandRangeToGranularity(range, 'word', fixture.root)).toBeNull()
+    })
+
+    it('snaps a drag start in whitespace forward, not back', () => {
+        const fixture = createFixture('<p data-rebook-block="true" data-block-id="b1">Hello   brave world.</p>')
+        const block = fixture.block('b1')
+        // start on a middle space (offset 6), end inside "brave" (8..13)
+        expect(expandOffsets(fixture, block, 6, block, 9, 'word')).toEqual([8, 13])
+    })
+
     it('uses code-unit offsets around surrogate pairs', () => {
         const fixture = createFixture('<p data-rebook-block="true" data-block-id="b1">a😀b test.</p>')
         const block = fixture.block('b1')
@@ -258,11 +276,34 @@ describe('expandRangeToGranularity', () => {
             expect(expandOffsets(fixture, block, 8, block, 8, 'word')).toEqual([6, 11])
         })
 
-        it('expands a caret on whitespace to the nearest word', () => {
+        it('expands a caret at a word boundary to the touching word', () => {
             const fixture = createFixture('<p data-rebook-block="true" data-block-id="b1">Hello brave world.</p>')
             const block = fixture.block('b1')
-            // caret sits on the space between "Hello" and "brave"
+            // caret at offset 5 touches the end boundary of "Hello"
             expect(expandOffsets(fixture, block, 5, block, 5, 'word')).toEqual([0, 5])
+        })
+
+        it('returns null for a caret in a whitespace run', () => {
+            const fixture = createFixture('<p data-rebook-block="true" data-block-id="b1">Hello   world.</p>')
+            const block = fixture.block('b1')
+            // caret on the middle space between "Hello" and "world"
+            const range = makeRange(fixture.document, block, 6, block, 6)
+            expect(expandRangeToGranularity(range, 'word', fixture.root)).toBeNull()
+        })
+
+        it('returns null for a caret in trailing whitespace', () => {
+            const fixture = createFixture('<p data-rebook-block="true" data-block-id="b1">Hello world.   </p>')
+            const block = fixture.block('b1')
+            const range = makeRange(fixture.document, block, 13, block, 13)
+            expect(expandRangeToGranularity(range, 'word', fixture.root)).toBeNull()
+        })
+
+        it('returns null for a caret between trimmed sentences', () => {
+            const fixture = createFixture('<p data-rebook-block="true" data-block-id="b1">One.   Two.</p>')
+            const block = fixture.block('b1')
+            // caret on a space between the two sentences
+            const range = makeRange(fixture.document, block, 5, block, 5)
+            expect(expandRangeToGranularity(range, 'sentence', fixture.root)).toBeNull()
         })
 
         it('expands a caret to the containing sentence', () => {
