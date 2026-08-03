@@ -322,6 +322,26 @@ describe('createAIChatTools', () => {
             unitKind: 'section',
             title: 'Two: Examples',
         })
+        expect(content).not.toHaveProperty('unitId')
+        expect(content.blocks[0].citation).not.toHaveProperty('unitId')
+
+        const currentContext = await tools.getCurrentContext.execute?.({}, {
+            toolCallId: 'call-context',
+            messages: [],
+            abortSignal: new AbortController().signal,
+        })
+        expect(currentContext.units[0]).not.toHaveProperty('unitId')
+        expect(currentContext.units[0].blocks[0].citation).not.toHaveProperty('unitId')
+
+        const search = await tools.searchBook.execute?.({ query: 'feedback' }, {
+            toolCallId: 'call-search',
+            messages: [],
+            abortSignal: new AbortController().signal,
+        })
+        expect(search.results[0]).not.toHaveProperty('unitId')
+        expect(search.results[0].citation).not.toHaveProperty('unitId')
+
+        await expect(controller.getContent(1, { includeBlocks: true })).resolves.toHaveProperty('unitId', 'section-2.xhtml')
     })
 
     it('uses a 20000 character default for current-context tools', async () => {

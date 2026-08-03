@@ -590,9 +590,13 @@ export function createAIChatTools(book: Book, options: AIChatOptions, context: A
             }),
             execute: async ({ unitIndex, maxChars }) => {
                 const index = typeof unitIndex === 'number' ? unitIndex : context.currentUnitIndex ?? 0
-                return getContent(book, index, maxChars ?? readNumberOption(options.maxContentChars, DEFAULT_MAX_CONTENT_CHARS), {
-                    includeBlocks: true,
-                })
+                const content = await getContent(
+                    book,
+                    index,
+                    maxChars ?? readNumberOption(options.maxContentChars, DEFAULT_MAX_CONTENT_CHARS),
+                    { includeBlocks: true },
+                )
+                return compactContentToolResult(content)
             },
         }),
         getCurrentContext: tool({
@@ -606,12 +610,12 @@ export function createAIChatTools(book: Book, options: AIChatOptions, context: A
                 },
                 additionalProperties: false,
             }),
-            execute: async ({ before, after, maxChars }) => getCurrentContext(book, {
+            execute: async ({ before, after, maxChars }) => compactContextToolResult(await getCurrentContext(book, {
                 currentUnitIndex: context.currentUnitIndex ?? 0,
                 before,
                 after,
                 maxChars: maxChars ?? readNumberOption(options.maxContextChars, DEFAULT_MAX_CONTEXT_CHARS),
-            }),
+            })),
         }),
         rewriteBlocks: tool({
             description: `非持久改写当前渲染文本。用于用户明确要求把某章/某段改得更通俗、精简、改写风格或替换正文时。必须先用 getContent 或 getCurrentContext 获取 blockId，再按 blockId 提交改写文本。rewrites 必须是 JSON 数组，不要把数组序列化成字符串。为降低模型生成耗时，建议每次约 ${DEFAULT_REWRITE_MAX_BLOCKS_PER_CALL} 个 block；但工具会直接应用收到的全部 rewrites，不需要为超出的 block 重新生成。`,
@@ -881,7 +885,6 @@ function compactCitationSearchResult(book: Book, result: SearchResult) {
     } satisfies ReadableContentBlock : undefined
     return {
         unitIndex: result.unitIndex,
-        unitId: result.unitId,
         unitKind: result.unitKind,
         unitTitle: result.unitTitle,
         sectionIndex: result.sectionIndex,
@@ -890,8 +893,31 @@ function compactCitationSearchResult(book: Book, result: SearchResult) {
         blockId: result.blockId,
         blockType: result.blockType,
         excerpt: result.excerpt,
-        citation: unit ? createReadableContentCitation(unit, block) : undefined,
+        citation: unit ? compactCitationToolResult(createReadableContentCitation(unit, block)) : undefined,
     }
+}
+
+function compactContextToolResult(context: AIChatContextResult) {
+    return {
+        currentUnitIndex: context.currentUnitIndex,
+        units: context.units.map(compactContentToolResult),
+    }
+}
+
+function compactContentToolResult(content: AIChatContent) {
+    const { unitId: _unitId, blocks, ...result } = content
+    return {
+        ...result,
+        blocks: blocks?.map(block => ({
+            ...block,
+            citation: compactCitationToolResult(block.citation),
+        })),
+    }
+}
+
+function compactCitationToolResult(citation: AIChatCitation) {
+    const { unitId: _unitId, ...result } = citation
+    return result
 }
 
 function getTOCItems(book: Book, maxItems = 80): AIChatTOCItem[] {
@@ -1005,7 +1031,6 @@ function formatReadingContext(current?: AIChatReadingContext): string {
     if (!current || typeof current.unitIndex !== 'number') return ''
     const rows = [
         `unitIndex: ${current.unitIndex}`,
-        current.unitId !== undefined ? `unitId: ${current.unitId}` : '',
         current.unitKind ? `unitKind: ${current.unitKind}` : '',
         current.unitTitle ? `unitTitle: ${current.unitTitle}` : '',
         typeof current.sectionIndex === 'number' ? `sectionIndex: ${current.sectionIndex}` : '',
